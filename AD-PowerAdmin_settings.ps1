@@ -13,7 +13,7 @@
     Do not use this script directly. This script is called by the main script.
 
 .LINK
-	https://github.com/Brets0150/CG_BlueTeamTools/blob/main/AD-PowerAdmin.ps1
+	https://github.com/Brets0150/AD-PowerAdmin
 
 .NOTES
 	Author: Bret.s AKA: CyberGladius / License: MIT
@@ -144,7 +144,7 @@
 # The email message will automattically add "Hello <User Name>," to the beginning of the message. The user name will be taken from the user account in AD. So you do not need to add an opening greeting to the message.
 [string]$global:PwAuditAlertEmailMessage  = "Your password has been identified in a breached or is weak. You have $global:PwAuditPwChangeGracePeriod days to change it."
 [string]$global:PwAuditAlertEmailMessage += "If you do not change your password, your account will be disabled." + "`r`n"
-[string]$global:PwAuditAlertEmailMessage += "Contact the WowSec department if you have any questions." + "`r`n" + "`r`n" + "Thank you," + "`r`n" + "WowSec Team"
+[string]$global:PwAuditAlertEmailMessage += "Contact the IT Security department if you have any questions." + "`r`n" + "`r`n" + "Thank you," + "`r`n" + "Security Team"
 
 # -------------------[Mandatory]------------------- #
 # Email Allert Message Subject.

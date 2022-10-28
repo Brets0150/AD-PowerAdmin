@@ -10,12 +10,12 @@
     This is a collection of functions to help manage, and harden Windows Active Directory. This tool is
 
 .EXAMPLE
-	PS> Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
-	PS> Invoke-WebRequest https://github.com/Brets0150/CG_BlueTeamTools/blob/main/AD-PowerAdmin.ps1 -O ./AD-PowerAdmin.ps1
-	PS> ./AD-PowerAdmin.ps1
-
+	PS> git clone https://github.com/Brets0150/AD-PowerAdmin.git
+    # Edit the config file "AD-PowerAdmin_settings.ps1" to your liking.
+    PS> cd AD-PowerAdmin
+    PS> .\AD-PowerAdmin.ps1
 .LINK
-	https://github.com/Brets0150/CG_BlueTeamTools/blob/main/AD-PowerAdmin.ps1
+	https://github.com/Brets0150/AD-PowerAdmin
 
 .NOTES
 	Author: Bret.s AKA: CyberGladius / License: MIT
@@ -742,7 +742,9 @@ Function Get-PasswordAuditAdminReport {
     # Parameters for this function.
     Param(
         [Parameter(Mandatory=$false,Position=0)]
-        [object]$AdPwTestData
+        [object]$AdPwTestData,
+        [Parameter(Mandatory=$false,Position=1)]
+        [switch]$EmailReport
     )
 
     # If the $AdPwTestData is empty, then use the Get-PasswordAudit function to get the $AdPwTestData.
@@ -755,18 +757,31 @@ Function Get-PasswordAuditAdminReport {
     # Output the $ADPasswordTestDataString to the screen.
     Write-Host $ADPasswordTestDataString -ForegroundColor Green
 
-    #try to email the $global:AdminReportEmail with the Subject "ADPowerAdmin Password Audit Report" and the email Body will contains $AdPwTestData data.
-    try {
-        Send-Email -ToEmail "$global:ReportAdminEmailTo" -FromEmail "$global:ReportsEmailFrom" -Subject "ADPowerAdmin Password Audit Report" -Body $ADPasswordTestDataString
-    } catch {
-        # If the email fails, then output an error and exit the function.
-        Write-Host "Error: The Admin Report email failed to send to $global:ReportAdminEmailTo." -ForegroundColor Red
-        write-host "    Please check the 'AD-PowerAdmin_settings.ps1' file and make sure the email settings are correct." -ForegroundColor Red
-        # if debug is enabled, then output the error.
-        if ($global:Debug) {
-            Write-Host "Debug: $_" -ForegroundColor Red
+    # If the $EmailReport switch is used, then send the $ADPasswordTestDataString to the $global:PasswordQualityTestEmailTo email address.
+    if ($EmailReport) {
+        # Confirm the $global:ReportAdminEmailTo is not empty. If it is, then output an error and exit the function.
+        if ($null -eq $global:ReportAdminEmailTo) {
+            Write-Host "Error: The '`$global:ReportAdminEmailTo' variable is empty. Please update your 'AD-PowerAdmin_settings.ps1' file with the details that match your environment." -ForegroundColor Red
+            return
         }
-        return
+        # Confirm the "$global:ReportsEmailFrom" is not empty. If it is, then output an error and exit the function.
+        if ($null -eq $global:ReportsEmailFrom) {
+            Write-Host "Error: The '`$global:ReportsEmailFrom' variable is empty. Please update your 'AD-PowerAdmin_settings.ps1' file with the details that match your environment." -ForegroundColor Red
+            return
+        }
+        #try to email the $global:AdminReportEmail with the Subject "ADPowerAdmin Password Audit Report" and the email Body will contains $AdPwTestData data.
+        try {
+            Send-Email -ToEmail "$global:ReportAdminEmailTo" -FromEmail "$global:ReportsEmailFrom" -Subject "ADPowerAdmin Password Audit Report" -Body $ADPasswordTestDataString
+        } catch {
+            # If the email fails, then output an error and exit the function.
+            Write-Host "Error: The Admin Report email failed to send to $global:ReportAdminEmailTo." -ForegroundColor Red
+            write-host "    Please check the 'AD-PowerAdmin_settings.ps1' file and make sure the email settings are correct." -ForegroundColor Red
+            # if debug is enabled, then output the error.
+            if ($global:Debug) {
+                Write-Host "Debug: $_" -ForegroundColor Red
+            }
+            return
+        }
     }
 }
 # End of Get-PasswordAuditAdminReport function
@@ -1105,7 +1120,7 @@ function Install-ADPowerAdmin {
     # Try to set up a new schedule task to run the AD-PowerAdmin script daily.
     try {
         # Create a new schedule task to run the AD-PowerAdmin script daily.
-        New-ScheduledTask -ActionString "$ThisScriptsFullName" -ActionArguments "-Unattended -JobName 'Daily'" -ScheduleRunTime $ScheduleRunTime -Recurring Once -TaskName $TaskName -TaskDiscription $TaskDiscription | Out-Null
+        New-ScheduledTask -ActionString "$ThisScriptsFullName" -ActionArguments "-Unattended -JobName 'Daily'" -ScheduleRunTime $ScheduleRunTime -Recurring "Daliy" -TaskName $TaskName -TaskDiscription $TaskDiscription | Out-Null
     } catch {
         # If the schedule task was not created successfully, then display an error message to the user.
         Write-Host "Error: The AD-PowerAdmin schedule task was not created successfully." -ForegroundColor Red
@@ -1145,7 +1160,7 @@ function Start-DailyADTasks {
         Invoke-WeakPwdProcess -AdPwTestData $AdPwdAuditData
         # If it is the first day of the month, then run Get-PasswordAuditAdminReport.
         if ((Get-Date).Day -eq 1) {
-            Get-PasswordAuditAdminReport -AdPwTestData $AdPwdAuditData
+            Get-PasswordAuditAdminReport -AdPwTestData $AdPwdAuditData -EmailReport
         }
     }
 }
@@ -1174,15 +1189,16 @@ function Show-Menu {
     Clear-Host
     Show-Logo
     Write-Host "================ AD-PowerAdmin Tools ================"
-    Write-Host "1: Press '1' Audit AD Admin account Report."
-    Write-Host "2: Press '2' Run a security audit."
-    Write-Host "3: Press '3' Force KRBTGT password Update."
-    Write-Host "4: Press '4' Search for inactive computers report only."
-    Write-Host "5: Press '5' Search for inactive computers and disable them."
-    Write-Host "6: Press '6' Search for inactive users accounts."
-    Write-Host "7: Press '7' Search for inactive users accounts and disable them."
-    Write-Host "8: Press '8' Run a password audit WITHOUT sending emails to users or scheduling a forced password changes."
-    Write-Host "9: Press '9' Run a password audit AND send emails to users and schedule forced password changes."
+    Write-Host " 1:  Press  '1' Audit AD Admin account Report."
+    Write-Host " 2:  Press  '2' Run a security audit."
+    Write-Host " 3:  Press  '3' Force KRBTGT password Update."
+    Write-Host " 4:  Press  '4' Search for inactive computers report only."
+    Write-Host " 5:  Press  '5' Search for inactive computers and disable them."
+    Write-Host " 6:  Press  '6' Search for inactive users accounts."
+    Write-Host " 7:  Press  '7' Search for inactive users accounts and disable them."
+    Write-Host " 8:  Press  '8' Run a password audit WITHOUT sending emails to users or scheduling a forced password changes."
+    Write-Host " 9:  Press  '9' Same as option 8, but send the password audit report to the Admins."
+    Write-Host " 10: Press  '10' Run a password audit AND send emails to users and schedule forced password changes."
     Write-Host "D: Press 'D' Run all daily tasks."
     Write-Host "I: Press 'I' To install this script as a scheduled task to run the daily test, checks, and clean-up."
     Write-Host "E: Press 'E' To send a test email."
@@ -1362,6 +1378,11 @@ do {
     }
 
     '9' {
+        # Run a password audit with NO Breached or weak password checks, and Email the report.
+        Get-PasswordAuditAdminReport -EmailReport
+    }
+
+    '10' {
         # Run a password audit with Breached or weak password checks, emails, and scheduled tasks.
         # Set the $AdPwdAuditData variable to the output of the Get-ADPasswordAudit function.
         $AdPwdAuditData = Get-PasswordAudit -SearchOUbase $global:PasswordQualityTestSearchOUbase -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile
