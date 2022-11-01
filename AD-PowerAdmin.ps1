@@ -4,7 +4,7 @@
 	A collection of functions to help manage, and harden Windows Active Directory.
 
 .VERSION
-    0.5.0
+    0.5.0 beta
 
 .DESCRIPTION
     This is a collection of functions to help manage, and harden Windows Active Directory. This tool is
@@ -39,6 +39,9 @@ Param (
 
 # Rename the terminal window, cuz it looks cool. =P
 $host.UI.RawUI.WindowTitle = "AD PowerAdmin - CyberGladius.com"
+
+# Version of this script.
+[string]$global:Version = "0.5.0 beta"
 
 #=======================================================================================
 # Base checks.
@@ -231,7 +234,7 @@ Function Get-ADUserPasswordAge {
 
 ### FUNCTION: Confirm Generated Password Meets Complexity Requirements
 # Source: https://docs.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/password-must-meet-complexity-requirements
-Function Test-PasswordIsComplex() {
+Function Test-PasswordIsComplex {
 
     Param(
         [Parameter(Mandatory=$True,Position=1)]
@@ -482,6 +485,9 @@ Function Search-InactiveComputers {
 
             # Move the computer to the Disabled.Desktop OU.
             Move-ADObject $CurrentComputerObject -targetpath $DisabledOULocal
+
+            # Output the Samname of the user that was disabled.
+            Write-Host "Disabled Computer: $CurrentComputerObject.SamAccountName" -ForegroundColor Green
         }
     }
 
@@ -831,7 +837,7 @@ Function Invoke-WeakPwdProcess {
 
             #try to email the $User.
             try {
-                Send-Email -ToEmail "$global:ReportAdminEmailTo" -FromEmail "$global:ReportsEmailFrom" -CcEmail $CC -Subject "$Subject" -Body "$Message"
+                Send-Email -ToEmail "$UserEmail" -FromEmail "$global:ReportsEmailFrom" -CcEmail $CC -Subject "$Subject" -Body "$Message"
             } catch {
                 # If the email fails, then output an error and exit the function.
                 Write-Host "Error: A breached user email failed to send to $UserEmail" -ForegroundColor Red
@@ -1109,6 +1115,9 @@ function Install-ADPowerAdmin {
             Write-Host "The AD-PowerAdmin schedule task was not overwritten." -ForegroundColor Yellow
             return
         }
+        # If the user wants to overwrite the existing schedule task, then delete the existing schedule task.
+        Write-Host "Deleting the existing AD-PowerAdmin schedule task." -ForegroundColor Yellow
+        Unregister-ScheduledTask -TaskName "AD-PowerAdmin_Daily" -Confirm:$false
     }
 
     [string] $TaskName = "AD-PowerAdmin_Daily"
@@ -1129,7 +1138,7 @@ function Install-ADPowerAdmin {
         Write-Host "The AD-PowerAdmin schedule task was created successfully." -ForegroundColor Green
     }
 }
-
+# End of the Install-ADPowerAdmin function.
 
 # Function that runs a collection of function that nned to be performed daily on Active Directory.
 function Start-DailyADTasks {
@@ -1155,7 +1164,7 @@ function Start-DailyADTasks {
     # Check if the $global:WeakPasswordAudit is set to $true. If it is, then run weak password process.
     if ($global:WeakPasswordAudit -eq $true) {
         # Set the $AdPwdAuditData variable to the output of the Get-ADPasswordAudit function.
-        $AdPwdAuditData = Get-ADPasswordAudit -SearchOUbase $global:PasswordQualityTestSearchOUbase -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile
+        $AdPwdAuditData = Get-PasswordAudit -SearchOUbase $global:PasswordQualityTestSearchOUbase -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile
         # With the $AdPwdAuditData variable, run the Invoke-WeakPwdProcess function.
         Invoke-WeakPwdProcess -AdPwTestData $AdPwdAuditData
         # If it is the first day of the month, then run Get-PasswordAuditAdminReport.
@@ -1168,7 +1177,7 @@ function Start-DailyADTasks {
 
 # Function that will output this scripts logo.
 function Show-Logo {
-    Write-Host '
+    Write-Host "
     ______      __                 ________          ___
    / ____/_  __/ /_  ___  _____   / ____/ /___ _____/ (_)_  _______
   / /   / / / / __ \/ _ \/ ___/  / / __/ / __ `/ __  / / / / / ___/
@@ -1180,7 +1189,8 @@ function Show-Logo {
   / /| | / / / /_____/ /_/ / __ \ | /| / / _ \/ ___/ /| |/ __  / __ `__ \/ / __ \
  / ___ |/ /_/ /_____/ ____/ /_/ / |/ |/ /  __/ /  / ___ / /_/ / / / / / / / / / /
 /_/  |_/_____/     /_/    \____/|__/|__/\___/_/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/
-'
+Version: $global:Version
+"
 }
 # End of the Show-Logo function.
 
@@ -1398,7 +1408,7 @@ do {
 
     'i' {
         # Install the scheduled tasks for the daily tasks.
-        Install-DailyADTasks
+        Install-ADPowerAdmin
     }
 
     'e' {

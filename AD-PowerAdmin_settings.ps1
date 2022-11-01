@@ -4,7 +4,7 @@
 	Only variables and configurations for AD-PowerAdmin.
 
 .VERSION
-    0.5.0
+    0.5.0 beta
 
 .DESCRIPTION
     Only variables and configurations for AD-PowerAdmin.
@@ -38,10 +38,10 @@
 ##############################################################################################
 # -------------------[Optional]------------------- #
 # Enable or disable the Daily tasks that will be run.
-[boon]$global:KerberosKRBTGTAudit      = $true
-[boon]$global:InactiveComputerAudit    = $true
-[boon]$global:InactiveUserAudit        = $true
-[boon]$global:WeakPasswordAudit        = $true
+[bool]$global:KerberosKRBTGTAudit      = $true
+[bool]$global:InactiveComputerAudit    = $true
+[bool]$global:InactiveUserAudit        = $true
+[bool]$global:WeakPasswordAudit        = $true
 
 ##############################################################################################
 # -------------------[Mandatory]------------------- #
