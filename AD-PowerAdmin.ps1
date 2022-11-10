@@ -920,7 +920,7 @@ function Test-UserUpdatedPassword {
     }
     # Use the Get-ADUserPasswordAge function to get the password age of the user.
     $PasswordAge = Get-ADUserPasswordAge -Username $Username
-    # Check if the $PasswordAge is greater than the $global:PwAuditPwChangeGracePeriod. If it is, then enable the user attribue "User must change password at next logon" fro the users AD account.
+    # Check if the $PasswordAge is greater than the $global:PwAuditPwChangeGracePeriod. If it is, then enable the user attribue "User must change password at next logon" for the users AD account.
     if ($PasswordAge -gt $UpdateGracePeriod) {
         # Enable the user attribue "User must change password at next logon" fro the users AD account.
         Set-ADUser -Identity $Username -ChangePasswordAtLogon $true
@@ -1432,6 +1432,7 @@ function Show-Help {
 }
 # End of the Show-Help function.
 
+# End of the functions.
 #=======================================================================================
 # Main
 
@@ -1574,5 +1575,6 @@ if ($global:Debug) {
     Stop-Transcript -ErrorAction:SilentlyContinue | Out-Null
 }
 
+#=======================================================================================
 # End of script.
 Exit 0
