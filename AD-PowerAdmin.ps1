@@ -41,7 +41,7 @@ Param (
 $host.UI.RawUI.WindowTitle = "AD PowerAdmin - CyberGladius.com"
 
 # Version of this script.
-[string]$global:Version = "0.5.0 beta"
+[string]$global:Version = "0.6.0 beta"
 
 #=======================================================================================
 # Base checks.
@@ -80,6 +80,12 @@ try {
     Please ensure that the script is being run from a PowerShell prompt (i.e. not from a script or batch file).
     The AD-PowerAdmin_settings.ps1 file needs to be located in the same directory as the main AD-PowerAdmin.ps1 file." -ForegroundColor Red
     exit 1
+}
+
+# If debug, $global:Debug, is true, Start-Transcript will be called.
+if ($global:Debug) {
+    Stop-Transcript -ErrorAction:SilentlyContinue | Out-Null
+    Start-Transcript -Path "$global:ThisScriptDir\\AD-PowerAdmin_Debug.log" -Append -Force | Out-Null
 }
 
 #=======================================================================================
@@ -202,18 +208,27 @@ Function New-ScheduledTask {
     }
 
     try {
-        $Action    = (New-ScheduledTaskAction -Execute $ActionString -Argument $ActionArguments)
-        $Principal = New-ScheduledTaskPrincipal -UserId $UserName -RunLevel Highest
-        $Settings  = New-ScheduledTaskSettingsSet -RunOnlyIfNetworkAvailable -WakeToRun
-        Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Description $TaskDiscription
+        $Action          = New-ScheduledTaskAction -Execute $ActionString -Argument $ActionArguments -WorkingDirectory "$global:ThisScriptDir"
+        $Settings        = New-ScheduledTaskSettingsSet -RunOnlyIfNetworkAvailable -WakeToRun
+        $DomainNameShort = Get-ADDomain | Select-Object Name | Select-Object -ExpandProperty Name | Select-Object -First 1
+        $UserId          = "$DomainNameShort`\$global:MsaAccountName`$"
+        $Principal       = New-ScheduledTaskPrincipal -UserID "$UserId" -LogonType Password -RunLevel Highest
+
+        Register-ScheduledTask -TaskName "$TaskName" -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Description "$TaskDiscription" | Out-Null
+
+        # Confirm the task was created
+        if (Get-ScheduledTask -TaskName "$TaskName") {
+            Write-Host "Task created successfully." -ForegroundColor Green
+        }
+        else {
+            throw "Task creation failed."
+        }
     }
     catch {
         Write-Host "Unable to create schedule task."
         Write-Output $_
-        return $false
+        break
     }
-
-    return $true
 }
 #End of New-ScheduledTask function
 
@@ -374,7 +389,7 @@ Function Update-KRBTGTPassword {
                     [string]$ThisScriptsFullName = $global:ThisScript
 
                     # Create a schedule task to run the Update-KRBTGTPassword function X number of hours after first password update.
-                    New-ScheduledTask -ActionString "$ThisScriptsFullName" -ActionArguments '-Unattended $true -JobName "krbtgt-RotateKey"' -ScheduleRunTime $NextUpdateTime `
+                    New-ScheduledTask -ActionString 'PowerShell' -ActionArguments "$ThisScriptsFullName -Unattended $true -JobName `"krbtgt-RotateKey`"" -ScheduleRunTime $NextUpdateTime `
                     -Recurring Once -TaskName "KRBTGT-Final-Update" -TaskDiscription "KRBTGT second password update, to run once."
 
                     # Check if the scheduled task named "KRBTGT-Final-Update" was created successfully.
@@ -866,7 +881,7 @@ Function Invoke-WeakPwdProcess {
                     The create with the TaskDiscription with the value of $TaskDiscription.
                     Do not output anything to the console.
                 #>
-                New-ScheduledTask -ActionString "$ThisScriptsFullName" -ActionArguments "-Unattended -JobName 'PwUserFollowup' -JobVar1 '$UserOnly'" -ScheduleRunTime $PwFollowUpTime -Recurring Once -TaskName $TaskName -TaskDiscription $TaskDiscription | Out-Null
+                New-ScheduledTask -ActionString 'PowerShell' -ActionArguments "$ThisScriptsFullName -Unattended -JobName `'PwUserFollowup`' -JobVar1 `'$UserOnly`'" -ScheduleRunTime $PwFollowUpTime -Recurring Once -TaskName $TaskName -TaskDiscription $TaskDiscription | Out-Null
 
             } catch {
                 # If the task fails, then output an error and exit the function.
@@ -1104,9 +1119,140 @@ Function Send-EmailTest {
 
 # A function to install the AD-PowerAdmin script to run daily as a scheduled task.
 function Install-ADPowerAdmin {
+    # Create a ADPowerAdmMSA account with domain admin rights.
+    New-ADPowerAdminSmsaAccount
+    # Create a new GPO to give the sMSA account the "Log on as a service" right.
+    New-ADPowerAdminGPO
+    # Create a new scheduled task to run the AD-PowerAdmin script daily.
+    New-ADPowerAdminScheduledTask
+    # Install the DSInternals PowerShell module.
+    Install-DSInternals
+}
+# End of the Install-ADPowerAdmin function.
 
+# function to create a AD-PowerAdmin sMSA account.
+function New-ADPowerAdminSmsaAccount {
+    #---------Create the AD-PowerAdmin sMSA account needed for the Scheduled Task----------------
+    # Create a new Managed Service Account (MSA) for the AD-PowerAdmin schedule task. The MSA will be named "AD-PowerAdmin_MSA".
+    # The MSA will be created in the "Users" container and will be a member of the "Domain Admins" group.
+    # The MSA will be created with a random password and change ever 30-days.
+    [string]$MsaAccountDescription = "AD-PowerAdmin sMSA Account"
+    # Check if the AD-PowerAdmin_MSA account already exists.
+    $MsaIdentity = Get-ADServiceAccount -Filter "Name -eq '$global:MsaAccountName'"
+    # Check if the "$global:MsaAccountName" sMSA account already exists. If it does not exist, then create the sMSA account.
+    if ($null -eq $MsaIdentity) {
+        # Try to run the New-ADServiceAccount command. If the command fails, then display an error and exit the function.
+        try {
+            New-ADServiceAccount -SamAccountName "$global:MsaAccountName" -Name "$global:MsaAccountName" -Description "$MsaAccountDescription" -RestrictToSingleComputer -Enabled $true
+        } catch {
+            Write-Host "Error: The AD-PowerAdmin sMSA account was not created." -ForegroundColor Red
+            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+            break
+        }
+        $AdServerIdentity = Get-ADComputer -identity "$env:COMPUTERNAME"
+        $MsaIdentity      = Get-ADServiceAccount -Filter "Name -eq '$global:MsaAccountName'" -Properties * -ErrorAction SilentlyContinue
+        Add-ADComputerServiceAccount -Identity $AdServerIdentity -ServiceAccount $MsaIdentity.sAMAccountName
+        Install-ADServiceAccount -Identity $MsaIdentity.sAMAccountName
+        # Test that the sMSA account was created and this compluter is a member of the sMSA group.
+        if ($null -eq $MsaIdentity) {
+            Write-Host "Error: The AD-PowerAdmin sMSA account was not created." -ForegroundColor Red
+            break
+        }
+        # Test that the sMSA account was created and this compluter is a member of the sMSA group.
+        $TestAdServiceAccount = Test-ADServiceAccount -Identity $MsaIdentity.sAMAccountName
+        if (-Not $TestAdServiceAccount) {
+            Write-Host "Error: The AD-PowerAdmin sMSA group was not created." -ForegroundColor Red
+            break
+        }
+        # Add the sMSA account to the "Domain Admins" group.
+        Add-ADGroupMember -Identity "Domain Admins" -Members $MsaIdentity.SamAccountName
+    } else {
+        # If the sMSA account already exists, then display a warning and continue.
+        Write-Host "The sMSA account '$global:MsaAccountName' already exists." -ForegroundColor Yellow
+    }
+}
+# End of the New-ADPowerAdminSmsaAccount function.
+
+# A Function that will create a new GPO to give the AD-PowerAdmin sMSA account the "Log on as a service" right.
+Function New-ADPowerAdminGPO {
+    # Create a new GPO to give the AD-PowerAdmin sMSA account the "Log on as a service" right.
+    [string]$GpoName = "AD-PowerAdminGPO"
+    [string]$GpoComment = "AD-PowerAdmin GPO Settings"
+    # Get domain controller to run all commands against
+    [object]$DomainContollerServer = Get-ADDomainController
+    # Check is a GPO with the same name,$GpoName, already exists. If it does not exist, then create a new GPO.
+    if (-Not $null -eq (Get-GPO -Name $GpoName -Server $DomainContollerServer -ErrorAction SilentlyContinue) ) {
+        Write-Host "The GPO '$GpoName' already exists." -ForegroundColor Red
+        break
+    }
+    # Get the $global:MsaAccountName object.
+    [object]$MsaUser = Get-ADServiceAccount -Filter "Name -eq '$global:MsaAccountName'" -Properties * -ErrorAction SilentlyContinue
+    # Get domain distinguished name. E.i. "DC=contoso,DC=com"
+    [object]$DomainDistinguishedName = (Get-ADDomain).DistinguishedName
+    # Get the OU distinguished name for the computer this script is running on.
+    [object]$ComputerDistinguishedName = (Get-ADComputer -Identity "$env:COMPUTERNAME" -Properties DistinguishedName).DistinguishedName
+    # Remove the computer name from the distinguished name.
+    [string]$ComputerDistinguishedName = $ComputerDistinguishedName -replace "CN=$env:COMPUTERNAME,", ''
+    #Create text required for GptTmpl.inf file for the GPO, inserting the SIDs of the user(s) found previously
+    [string]$GpoContent = "[Unicode]
+    Unicode=yes
+    [Version]
+    signature=`"`$CHICAGO$`"
+    Revision=1
+    [Privilege Rights]
+    SeServiceLogonRight = *$($MsaUser.SID.Value)"
+    # Get the Active Directory root DNS domain name.
+    [object]$DnsRootDomainName = Get-ADDomain -Identity $DomainContollerServer.Domain | Select-Object -Property DNSRoot
+    #Create new GPO object
+    [object]$NewGPO = New-GPO -Name $GpoName -Server $DomainContollerServer -Comment $GpoComment
+    # \\localhost\SYSVOL\tdcme.loc\Policies\{D13F994F-C0E6-449B-82D5-3467D614C99D}\Machine\Microsoft\Windows NT\SecEdit
+    [string]$GpoFileRootDir = "\\$($DnsRootDomainName.DNSRoot)\SYSVOL\$($DnsRootDomainName.DNSRoot)\Policies\{$($NewGPO.Id)}\Machine\Microsoft\Windows NT\SecEdit"
+    [string]$GpoFile = "$GpoFileRootDir\GptTmpl.inf"
+    #Create new SecEdit directory in the GPO folder in SYSVOL
+    New-Item $GpoFileRootDir -ItemType Directory
+    #Create GptTmpl.inf file in SecEdit folder
+    $GpoContent | Out-File "$GpoFile"
+    # Confirm the GptTmpl.inf file was created.
+    if (-Not (Test-Path $GpoFile)) {
+        Write-Host "Error: The GptTmpl.inf file was not created." -ForegroundColor Red
+        break
+    }
+    # Set CSEs for new GPO - NB! otherwise settings won't be picked up by either the Group Policy Management console or the client
+    # GPO is created, but the settings are not visible in the 'Settings' tab of GPMC. The GPO does not apply correctly when linked.
+    # This condiition is due to a missing gPCMachineExtensionNames value within AD for the GPO. It needs to be set to [{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}].
+    Set-ADObject "CN={$($NewGPO.Id)},CN=Policies,CN=System,$DomainDistinguishedName" -Replace @{gPCMachineExtensionNames="[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]"} -Server $DomainContollerServer
+    #Force AD to process new GPO
+    $NewGPO | Set-GPRegistryValue -Key HKLM\SOFTWARE -ValueName "Default" -Value "" -Type String -Server $DomainContollerServer
+    $NewGPO | Remove-GPRegistryValue -Key HKLM\SOFTWARE -ValueName "Default" -Server $DomainContollerServer
+
+    # Link the GPO to the OU where the computer this script is running on is located.
+    # Get the OU distinguished name for the computer this script is running on.
+    [string]$ComputerDistinguishedName = (Get-ADComputer -Identity "$env:COMPUTERNAME" -Properties DistinguishedName).DistinguishedName
+    # Remove the computer name from the distinguished name.
+    [string]$ComputerOuDistinguishedName = $ComputerDistinguishedName -replace "CN=$env:COMPUTERNAME,", ''
+    # Try to link the GPO to the OU where the computer this script is running on is located.
+    try {
+        # Link the GPO to the OU where the computer this script is running on is located.
+        New-GPLink -Guid $([string]$NewGPO.Id) -Target "$ComputerOuDistinguishedName" -LinkEnabled Yes -Server $DomainContollerServer
+    } catch {
+        # If the GPO could not be linked to the OU where the computer this script is running on is located, then display error message and exit.
+        Write-Host "The GPO '$GpoName' could not be linked to the OU '$ComputerOuDistinguishedName'." -ForegroundColor Red
+        Exit 1
+    }
+
+}
+# End of the New-ADPowerAdminGPO function.
+
+# function to create a AD-PowerAdmin Schduled daily task.
+function New-ADPowerAdminScheduledTask {
+    # ---------- Create the AD-PowerAdmin schedule task ----------
+    [string]$TaskName = "AD-PowerAdmin_Daily"
+    # Set ScheduleRunTime to be tomorrow at 9:00 AM.
+    [datetime]$ScheduleRunTime = (Get-Date).AddDays(1).Date + "09:00:00"
+    [string]$TaskDiscription = "AD-PowerAdmin Daily Tasks"
+    [string]$ThisScriptsFullName = "$global:ThisScript"
     # Check if the AD-PowerAdmin_Daily schedule task already exists.
-    if (Get-ScheduledTask -TaskName "AD-PowerAdmin_Daily" -ErrorAction SilentlyContinue) {
+    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
         # If the AD-PowerAdmin schedule task already exists, then ask the user if they want to overwrite the existing schedule task.
         Write-Host "The AD-PowerAdmin schedule task already exists." -ForegroundColor Yellow
         $OverwriteScheduleTask = Read-Host "Do you want to overwrite the existing schedule task? (Y/N)"
@@ -1117,28 +1263,19 @@ function Install-ADPowerAdmin {
         }
         # If the user wants to overwrite the existing schedule task, then delete the existing schedule task.
         Write-Host "Deleting the existing AD-PowerAdmin schedule task." -ForegroundColor Yellow
-        Unregister-ScheduledTask -TaskName "AD-PowerAdmin_Daily" -Confirm:$false
+        Unregister-ScheduledTask -TaskName "$TaskName" -Confirm:$false
     }
-
-    [string] $TaskName = "AD-PowerAdmin_Daily"
-    # Set ScheduleRunTime to be tomorrow at 9:00 AM.
-    [datetime]$ScheduleRunTime = (Get-Date).AddDays(1).Date + "09:00:00"
-    [string]$TaskDiscription = "AD-PowerAdmin Daily Tasks"
-    [string]$ThisScriptsFullName = $global:ThisScript
-
     # Try to set up a new schedule task to run the AD-PowerAdmin script daily.
     try {
         # Create a new schedule task to run the AD-PowerAdmin script daily.
-        New-ScheduledTask -ActionString "$ThisScriptsFullName" -ActionArguments "-Unattended -JobName 'Daily'" -ScheduleRunTime $ScheduleRunTime -Recurring "Daliy" -TaskName $TaskName -TaskDiscription $TaskDiscription | Out-Null
+        New-ScheduledTask -ActionString 'PowerShell.exe' -ActionArguments "$ThisScriptsFullName -Unattended -JobName 'Daily'" -ScheduleRunTime $ScheduleRunTime -Recurring "Daliy" -TaskName $TaskName -TaskDiscription $TaskDiscription
     } catch {
         # If the schedule task was not created successfully, then display an error message to the user.
         Write-Host "Error: The AD-PowerAdmin schedule task was not created successfully." -ForegroundColor Red
-    } finally {
-        # If the schedule task was created successfully, then display a message to the user.
-        Write-Host "The AD-PowerAdmin schedule task was created successfully." -ForegroundColor Green
+        return
     }
 }
-# End of the Install-ADPowerAdmin function.
+# End of the New-ADPowerAdminScheduledTask function.
 
 # Function that runs a collection of function that nned to be performed daily on Active Directory.
 function Start-DailyADTasks {
@@ -1180,13 +1317,13 @@ function Show-Logo {
     Write-Host "
     ______      __                 ________          ___
    / ____/_  __/ /_  ___  _____   / ____/ /___ _____/ (_)_  _______
-  / /   / / / / __ \/ _ \/ ___/  / / __/ / __ `/ __  / / / / / ___/
+  / /   / / / / __ \/ _ \/ ___/  / / __/ / __ ``/ __  / / / / / ___/
  / /___/ /_/ / /_/ /  __/ /     / /_/ / / /_/ / /_/ / / /_/ (__  )
  \____/\__, /_.___/\___/_/      \____/_/\__,_/\__,_/_/\__,_/____/
       /____/   Presents
     ___    ____        ____                          ___       __          _
    /   |  / __ \      / __ \____ _      _____  _____/   | ____/ /___ ___  (_)___
-  / /| | / / / /_____/ /_/ / __ \ | /| / / _ \/ ___/ /| |/ __  / __ `__ \/ / __ \
+  / /| | / / / /_____/ /_/ / __ \ | /| / / _ \/ ___/ /| |/ __  / __ ``__ \/ / __ \
  / ___ |/ /_/ /_____/ ____/ /_/ / |/ |/ /  __/ /  / ___ / /_/ / / / / / / / / / /
 /_/  |_/_____/     /_/    \____/|__/|__/\___/_/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/
 Version: $global:Version
@@ -1329,7 +1466,7 @@ if ($Unattended) {
         # Run the function to test if the user has updated their password.
         Test-UserUpdatedPassword -UserName "$JobVar1" -UpdateGracePeriod $global:PwAuditPwChangeGracePeriod
         # Unregister the scheduled task with the name "PwUserFollowup-$JobVar1
-        Unregister-ScheduledTask -TaskName "PwUserFollowup-$JobVar1" -Confirm:$false
+        Unregister-ScheduledTask -TaskName "PwFollowUp-$JobVar1" -Confirm:$false
     }
 
     # If the jobname is "BreachedUserFollowup" then run the Test-UserUpdatedPassword function.
@@ -1418,6 +1555,10 @@ do {
 
     't' {
         Write-Host $global:ThisScript
+        #Remove-Item -Path '\\localhost\SYSVOL\wowlan.com\Policies\{}' -Recurse -Force
+        # Get the datetime 5 minutes from now.
+        # $DateTime = (Get-Date).AddMinutes(5)
+        # New-ScheduledTask -ActionString 'PowerShell' -ActionArguments "$global:ThisScript -Unattended -JobName `'Test`' -JobVar1 `'$UserOnly`'" -ScheduleRunTime $DateTime -Recurring Once -TaskName "Test" -TaskDiscription "Just a Test" | Out-Null
     }
 
     'h' {
@@ -1427,6 +1568,11 @@ do {
     }
     pause
 } until ($Selection -eq 'q')
+
+# If debug, $global:Debug, is true, Stop-Transcript will be called.
+if ($global:Debug) {
+    Stop-Transcript -ErrorAction:SilentlyContinue | Out-Null
+}
 
 # End of script.
 Exit 0
