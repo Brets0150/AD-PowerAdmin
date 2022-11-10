@@ -4,7 +4,7 @@
 	Only variables and configurations for AD-PowerAdmin.
 
 .VERSION
-    0.5.0 beta
+    0.6.0 beta
 
 .DESCRIPTION
     Only variables and configurations for AD-PowerAdmin.
@@ -34,6 +34,12 @@
 # Set the default email address this scruit will send email from.
 # Example: $global:FromEmail = "AdPowerAdmin@example.com"
 [string]$global:FromEmail = ""
+
+# -------------------[Mandatory]------------------- #
+# Set the sMSA account name that AD-PowerAdmin will create and use.
+# This name can be no longer than 14 characters!
+# You do NOT need to alter the default value, nor do I recommend it.
+[string]$global:MsaAccountName = "ADPowerAdmMSA"
 
 ##############################################################################################
 # -------------------[Optional]------------------- #
@@ -137,27 +143,27 @@
 # EXAMPLE: [string]$global:ReportAdminEmailTo = 'SecurityTeamDistroGroup@example.com
 [string]$global:ReportAdminEmailTo = $global:ADAdminEmail
 
-# -------------------[Mandatory]------------------- #
-# Message to send to the user.
-# Users who are discovered with a breached or weak password will receive an email with the following message.
-# To make the settings cleaner looking, I increment the message variable over multiple lines. This is not required. However, it is easier to read. You can put the message on one line if you want, or you can add more lines.
-# The email message will automattically add "Hello <User Name>," to the beginning of the message. The user name will be taken from the user account in AD. So you do not need to add an opening greeting to the message.
-[string]$global:PwAuditAlertEmailMessage  = "Your password has been identified in a breached or is weak. You have $global:PwAuditPwChangeGracePeriod days to change it."
-[string]$global:PwAuditAlertEmailMessage += "If you do not change your password, your account will be disabled." + "`r`n"
-[string]$global:PwAuditAlertEmailMessage += "Contact the IT Security department if you have any questions." + "`r`n" + "`r`n" + "Thank you," + "`r`n" + "Security Team"
-
-# -------------------[Mandatory]------------------- #
-# Email Allert Message Subject.
-[string]$global:PwAuditAlertEmailSubject   = "ADPowerAdmin: Password Breached or Weak - ACTION REQUIRED"
+# Enable CC the AD Admins on the password audit alert email. When a user is found with a breached or weak password, the user will receive an email with the message above. The AD Admins will also receive a copy of the email.
+# EXAMPLE: [bool]$global:PwAuditAlertEmailCCAdmins = $true
+[bool]$global:PwAuditAlertEmailCCAdmins = $false
 
 # -------------------[Mandatory]------------------- #
 # The number of DAYS before the user is forced to update there password.
 # EXAMPLE: [int]$global:PwAuditPwChangeGracePeriod = 3
 [int]$global:PwAuditPwChangeGracePeriod = 3
 
-# Enable CC the AD Admins on the password audit alert email. When a user is found with a breached or weak password, the user will receive an email with the message above. The AD Admins will also receive a copy of the email.
-# EXAMPLE: [bool]$global:PwAuditAlertEmailCCAdmins = $true
-[bool]$global:PwAuditAlertEmailCCAdmins = $false
+# -------------------[Mandatory]------------------- #
+# Message to send to the user.
+# Users who are discovered with a breached or weak password will receive an email with the following message.
+# To make the settings cleaner looking, I increment the message variable over multiple lines. This is not required. However, it is easier to read. You can put the message on one line if you want, or you can add more lines.
+# The email message will automattically add "Hello <User Name>," to the beginning of the message. The user name will be taken from the user account in AD. So you do not need to add an opening greeting to the message.
+[string]$global:PwAuditAlertEmailMessage  = "Your password has been identified in a breached or is weak. You have $global:PwAuditPwChangeGracePeriod days to change it."
+[string]$global:PwAuditAlertEmailMessage += " If you do not change your password, your account will be forced to update your password on next login." + "`r`n"
+[string]$global:PwAuditAlertEmailMessage += "Contact the IT Security department if you have any questions." + "`r`n" + "`r`n" + "Thank you," + "`r`n" + "Security Team"
+
+# -------------------[Mandatory]------------------- #
+# Email Allert Message Subject.
+[string]$global:PwAuditAlertEmailSubject   = "ADPowerAdmin: Password Breached or Weak - ACTION REQUIRED"
 
 ##############################################################################################
 # Email Settings.
