@@ -7,6 +7,8 @@ Here is a quick list of features
 -   Disable and decommission Computer accounts that have not been used within X days.
 -   Audit Accounts within a high-privilege group. A complete view of users with or the ability to escalate to Domain Admin group rights.
 -   Breached or weak User password checks. Users with breached or weak passwords will automatically be emailed telling them to update their password within a grace period. Users who do not update their password then have the attribute "User must change password at next logon" set.
+- Monthly email report of weak passwords and settings. The report can be run on-demand as well.
+- Rotate the Kerberos KRBTGT Active Directory user password. Golden Ticket attack defense.
 
 ## Installing AD-PowerAdmin
 ### Requirements

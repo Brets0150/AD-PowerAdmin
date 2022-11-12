@@ -4,15 +4,20 @@
 	A collection of functions to help manage, and harden Windows Active Directory.
 
 .VERSION
-    0.5.0 beta
+    0.6.0 beta
 
 .DESCRIPTION
-    This is a collection of functions to help manage, and harden Windows Active Directory. This tool is
+    AD-PowerAdmin is a tool to help Active Directory administrators secure and manage their AD.
+    Automating security checks ranging from User and Computer cleanup, password audits,
+    security misconfiguration audits, and much more. The core philosophy is to automate daily testing
+    of AD security and email when there is an issue. This tool focuses on common weaknesses,
+    and attack-vectors adversaries use and defends against them.
 
 .EXAMPLE
 	PS> git clone https://github.com/Brets0150/AD-PowerAdmin.git
     # Edit the config file "AD-PowerAdmin_settings.ps1" to your liking.
     PS> cd AD-PowerAdmin
+    # Edit the config file "AD-PowerAdmin_settings.ps1" to your liking.
     PS> .\AD-PowerAdmin.ps1
 .LINK
 	https://github.com/Brets0150/AD-PowerAdmin
@@ -1175,71 +1180,77 @@ function New-ADPowerAdminSmsaAccount {
 
 # A Function that will create a new GPO to give the AD-PowerAdmin sMSA account the "Log on as a service" right.
 Function New-ADPowerAdminGPO {
-    # Create a new GPO to give the AD-PowerAdmin sMSA account the "Log on as a service" right.
-    [string]$GpoName = "AD-PowerAdminGPO"
-    [string]$GpoComment = "AD-PowerAdmin GPO Settings"
     # Get domain controller to run all commands against
     [object]$DomainContollerServer = Get-ADDomainController
-    # Check is a GPO with the same name,$GpoName, already exists. If it does not exist, then create a new GPO.
-    if (-Not $null -eq (Get-GPO -Name $GpoName -Server $DomainContollerServer -ErrorAction SilentlyContinue) ) {
-        Write-Host "The GPO '$GpoName' already exists." -ForegroundColor Red
-        break
-    }
-    # Get the $global:MsaAccountName object.
-    [object]$MsaUser = Get-ADServiceAccount -Filter "Name -eq '$global:MsaAccountName'" -Properties * -ErrorAction SilentlyContinue
-    # Get domain distinguished name. E.i. "DC=contoso,DC=com"
-    [object]$DomainDistinguishedName = (Get-ADDomain).DistinguishedName
-    # Get the OU distinguished name for the computer this script is running on.
-    [object]$ComputerDistinguishedName = (Get-ADComputer -Identity "$env:COMPUTERNAME" -Properties DistinguishedName).DistinguishedName
-    # Remove the computer name from the distinguished name.
-    [string]$ComputerDistinguishedName = $ComputerDistinguishedName -replace "CN=$env:COMPUTERNAME,", ''
-    #Create text required for GptTmpl.inf file for the GPO, inserting the SIDs of the user(s) found previously
-    [string]$GpoContent = "[Unicode]
-    Unicode=yes
-    [Version]
-    signature=`"`$CHICAGO$`"
-    Revision=1
-    [Privilege Rights]
-    SeServiceLogonRight = *$($MsaUser.SID.Value)"
     # Get the Active Directory root DNS domain name.
     [object]$DnsRootDomainName = Get-ADDomain -Identity $DomainContollerServer.Domain | Select-Object -Property DNSRoot
-    #Create new GPO object
-    [object]$NewGPO = New-GPO -Name $GpoName -Server $DomainContollerServer -Comment $GpoComment
-    # \\localhost\SYSVOL\tdcme.loc\Policies\{D13F994F-C0E6-449B-82D5-3467D614C99D}\Machine\Microsoft\Windows NT\SecEdit
-    [string]$GpoFileRootDir = "\\$($DnsRootDomainName.DNSRoot)\SYSVOL\$($DnsRootDomainName.DNSRoot)\Policies\{$($NewGPO.Id)}\Machine\Microsoft\Windows NT\SecEdit"
-    [string]$GpoFile = "$GpoFileRootDir\GptTmpl.inf"
-    #Create new SecEdit directory in the GPO folder in SYSVOL
-    New-Item $GpoFileRootDir -ItemType Directory
-    #Create GptTmpl.inf file in SecEdit folder
-    $GpoContent | Out-File "$GpoFile"
-    # Confirm the GptTmpl.inf file was created.
-    if (-Not (Test-Path $GpoFile)) {
-        Write-Host "Error: The GptTmpl.inf file was not created." -ForegroundColor Red
+    # \\localhost\SYSVOL\domain.loc\Policies\{6AC1786C-016F-11D2-945F-00C04fB984F9}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf
+    [string]$GpoCfgFile = "\\$($DnsRootDomainName.DNSRoot)\SYSVOL\$($DnsRootDomainName.DNSRoot)\Policies\{6AC1786C-016F-11D2-945F-00C04fB984F9}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
+    # Check it $GpoCfgFile exists.
+    if (-Not (Test-Path -Path "$GpoCfgFile")) {
+        Write-Host "Error: The GPO configuration file '$GpoCfgFile' does not exist." -ForegroundColor Red
         break
     }
-    # Set CSEs for new GPO - NB! otherwise settings won't be picked up by either the Group Policy Management console or the client
-    # GPO is created, but the settings are not visible in the 'Settings' tab of GPMC. The GPO does not apply correctly when linked.
-    # This condiition is due to a missing gPCMachineExtensionNames value within AD for the GPO. It needs to be set to [{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}].
-    Set-ADObject "CN={$($NewGPO.Id)},CN=Policies,CN=System,$DomainDistinguishedName" -Replace @{gPCMachineExtensionNames="[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]"} -Server $DomainContollerServer
-    #Force AD to process new GPO
-    $NewGPO | Set-GPRegistryValue -Key HKLM\SOFTWARE -ValueName "Default" -Value "" -Type String -Server $DomainContollerServer
-    $NewGPO | Remove-GPRegistryValue -Key HKLM\SOFTWARE -ValueName "Default" -Server $DomainContollerServer
-
-    # Link the GPO to the OU where the computer this script is running on is located.
-    # Get the OU distinguished name for the computer this script is running on.
-    [string]$ComputerDistinguishedName = (Get-ADComputer -Identity "$env:COMPUTERNAME" -Properties DistinguishedName).DistinguishedName
-    # Remove the computer name from the distinguished name.
-    [string]$ComputerOuDistinguishedName = $ComputerDistinguishedName -replace "CN=$env:COMPUTERNAME,", ''
-    # Try to link the GPO to the OU where the computer this script is running on is located.
-    try {
-        # Link the GPO to the OU where the computer this script is running on is located.
-        New-GPLink -Guid $([string]$NewGPO.Id) -Target "$ComputerOuDistinguishedName" -LinkEnabled Yes -Server $DomainContollerServer
-    } catch {
-        # If the GPO could not be linked to the OU where the computer this script is running on is located, then display error message and exit.
-        Write-Host "The GPO '$GpoName' could not be linked to the OU '$ComputerOuDistinguishedName'." -ForegroundColor Red
+    # Get content of the $GpoCfgFile. Maintain the line breaks.
+    [string]$GpoCfgFileContent = Get-Content -Path $GpoCfgFile -Raw
+    # Check if the $GpoCfgFileContent contains the "SeServiceLogonRight" line.
+    if ($GpoCfgFileContent -notmatch "SeServiceLogonRight") {
+        Write-Host "Warrning: The GPO configuration file '$GpoCfgFile' does not contain the 'SeServiceLogonRight' line." -ForegroundColor Yellow
+    }
+    $SID = Get-ADServiceAccount -Identity "$global:MsaAccountName`$" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SID -ErrorAction SilentlyContinue
+    # Check if the $SID is null.
+    if ($null -eq $SID) {
+        Write-Host "Error: The SID for the sMSA account '$global:MsaAccountName' was not found." -ForegroundColor Red
+        break
+    }
+    # Check if the $GpoCfgFileContent contains $global:MsaAccountName or $SID.Value is already in the "SeServiceLogonRight" line.
+    if (($GpoCfgFileContent -match "$global:MsaAccountName") -or ($GpoCfgFileContent -match "$($SID.Value)")) {
+        Write-Host "The GPO configuration file '$GpoCfgFile' already contains the '$global:MsaAccountName' or '$($SID.Value)' line." -ForegroundColor Red
+        break
+    }
+    # For each line of a file, check if the line contains the "SeServiceLogonRight" line.
+    # If the line contains the "SeServiceLogonRight" line, then add the $global:MsaAccountName to the line.
+    # If the line does not contain the "SeServiceLogonRight" line, then add the line to the $GpoCfgFileContentNew variable.
+    [string]$GpoCfgFileContentNew = ""
+    foreach ($Line in $GpoCfgFileContent.Split("`n")) {
+        if ($Line -match "SeServiceLogonRight") {
+            # Track if the SeServiceLogonRight line is found.
+            [bool]$SeServiceLogonRightLineFound = $true
+            # Remove the line break from the end of the line.
+            $Line = $Line.TrimEnd()
+            $Line = $Line + ",*$($SID.Value)"
+        }
+        $GpoCfgFileContentNew = $GpoCfgFileContentNew + $Line + "`n"
+    }
+    # Check if the SeServiceLogonRight line was found. If it was not found then add a new line containing'SeServiceLogonRight = "*$($SID.Value)"' agfter the line that starts with 'SeBatchLogonRight'.
+    if (-Not $SeServiceLogonRightLineFound) {
+        [string]$GpoCfgFileContentNew = ""
+        foreach ($Line in $GpoCfgFileContent.Split("`n")) {
+            if ($Line -match "SeBatchLogonRight") {
+                $Line = $Line + "`n" + "SeServiceLogonRight = *$($SID.Value)"
+            }
+            $GpoCfgFileContentNew = $GpoCfgFileContentNew + $Line + "`n"
+        }
+    }
+    # Write-Output $GpoCfgFile
+    $GpoCfgFileContentNew | Out-File "$GpoCfgFile" -Encoding unicode -Force -NoNewline
+    # Confirm that the $GpoCfgFile matches the $GpoCfgFileContentNew.
+    [string]$GpoCfgFileContentNewTest = Get-Content -Path $GpoCfgFile -Raw
+    if ($GpoCfgFileContentNewTest -ne $GpoCfgFileContentNew) {
+        Write-Host '----------------------------------------' -ForegroundColor Yellow
+        $GpoCfgFileContentNew
+        Write-Host '----------------------------------------' -ForegroundColor Yellow
+        $GpoCfgFileContentNewTest
+        Write-Host '----------------------------------------' -ForegroundColor Yellow
+        Write-Host "Error: The GPO configuration file '$GpoCfgFile' was not updated." -ForegroundColor Red
         Exit 1
     }
-
+    # Create a object variable that contains the "Default Domain Controllers Policy" GPO.
+    [object]$DefaultDomainControllersPolicy = Get-GPO -Guid '6AC1786C-016F-11D2-945F-00C04fB984F9'
+    #Force AD to process new GPO
+    $DefaultDomainControllersPolicy | Set-GPRegistryValue -Key HKLM\SOFTWARE -ValueName "Default" -Value "" -Type String -Server $DomainContollerServer | Out-Null
+    $DefaultDomainControllersPolicy | Remove-GPRegistryValue -Key HKLM\SOFTWARE -ValueName "Default" -Server $DomainContollerServer | Out-Null
+    Invoke-GPUpdate -Force
 }
 # End of the New-ADPowerAdminGPO function.
 
@@ -1555,11 +1566,7 @@ do {
     }
 
     't' {
-        Write-Host $global:ThisScript
-        #Remove-Item -Path '\\localhost\SYSVOL\wowlan.com\Policies\{}' -Recurse -Force
-        # Get the datetime 5 minutes from now.
-        # $DateTime = (Get-Date).AddMinutes(5)
-        # New-ScheduledTask -ActionString 'PowerShell' -ActionArguments "$global:ThisScript -Unattended -JobName `'Test`' -JobVar1 `'$UserOnly`'" -ScheduleRunTime $DateTime -Recurring Once -TaskName "Test" -TaskDiscription "Just a Test" | Out-Null
+        Write-Host "Test"
     }
 
     'h' {
