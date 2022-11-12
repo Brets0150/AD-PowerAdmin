@@ -1,4 +1,4 @@
-#  AD-PowerAdmin
+#  AD-PowerAdmin --  !! STILL IN BETA !! Do not use.
 AD-PowerAdmin is a tool to help Active Directory administrators secure and manage their AD. Automating security checks ranging from User and Computer cleanup, password audits, security misconfiguration audits, and much more. The core philosophy is to automate daily testing of AD security and email when there is an issue. This tool focuses on common weaknesses, and attack-vectors adversaries use and defends against them.
 
 # Features
