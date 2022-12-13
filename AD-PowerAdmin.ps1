@@ -100,24 +100,29 @@ if ($global:Debug) {
 Function Get-ADAdmins() {
     [PSCustomObject]$ADAdmins = @()
 
-
     <# High Value Target Groups
     Domain administrators
     Enterprise administrators
-    Schema administrators
+    Schema Admins
     Backup operators
     Account operators
     Server operators
     #>
 
     # Append $ADAdmins with members of the Domain Admins
-    $ADAdmins = Get-ADGroupMember -Identity "Domain Admins" -Recursive
-
+    $ADAdmins = Get-ADGroupMember -Identity "Domain Admins" -Recursive -ErrorAction:SilentlyContinue
     # Append $ADAdmins with members of the Enterprise Admins
-    $ADAdmins += Get-ADGroupMember -Identity "Enterprise Admins" -Recursive
-
+    $ADAdmins += Get-ADGroupMember -Identity "Enterprise Admins" -Recursive -ErrorAction:SilentlyContinue
     # Append $ADAdmins with members of the Builtin Administrators group
-    $ADAdmins += Get-ADGroupMember -Identity "Administrators" -Recursive
+    $ADAdmins += Get-ADGroupMember -Identity "Administrators" -Recursive -ErrorAction:SilentlyContinue
+    # Append $ADAdmins with members of the Builtin "Schema administrators" group
+    $ADAdmins += Get-ADGroupMember -Identity "Schema Admins" -Recursive -ErrorAction:SilentlyContinue
+    # Append $ADAdmins with members of the Builtin "Backup operators" group
+    $ADAdmins += Get-ADGroupMember -Identity "Backup Operators" -Recursive -ErrorAction:SilentlyContinue
+    # Append $ADAdmins with members of the Builtin "Account operators" group
+    $ADAdmins += Get-ADGroupMember -Identity "Account Operators" -Recursive -ErrorAction:SilentlyContinue
+    # Append $ADAdmins with members of the Builtin "Server operators" group
+    $ADAdmins += Get-ADGroupMember -Identity "Server Operators" -Recursive -ErrorAction:SilentlyContinue
 
     # Remove duplicates from $ADAdmins
     $ADAdmins = $ADAdmins | Select-Object -Unique
@@ -132,7 +137,7 @@ Function Get-ADAdminAudit() {
     # Loop through each AD Admin User
     Get-ADAdmins | ForEach-Object {
         # Get the AD User's details
-        Get-ADUser -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, LastLogonDate
+        Get-ADUser -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, LastLogonDate -ErrorAction:SilentlyContinue
     } | Format-List -Property Name, SamAccountName, DistinguishedName, LastLogonDate
 }
 # End of Get-ADAdminAudit function
@@ -1288,6 +1293,29 @@ function New-ADPowerAdminScheduledTask {
 }
 # End of the New-ADPowerAdminScheduledTask function.
 
+# Function to search for a given User in Active Directory.
+function Search-ADUser {
+    # Ask the user for the User to search for.
+    [string]$User = Read-Host "Enter the User to search for:"
+    # Confirm the user given string is not empty.
+    if ($User -eq '') {
+        Write-Host "Error: The User given was empty." -ForegroundColor Red
+        return
+    }
+    # Search for the given User in Active Directory.
+    [Object]$SearchResults = Get-AdUser -Filter "(Name -like '*$User*') -and (Enabled -eq 'True')" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
+    # Check if the $SearchResults variable is empty.
+    if ($null -eq $SearchResults) {
+        Write-Host "Error: The User '$User' was not found in Active Directory." -ForegroundColor Red
+        return
+    }
+    # Display the search results to the user.
+    Write-Host "The following users were found to match in Active Directory:" -ForegroundColor Yellow
+    $SearchResults | Format-List
+    return
+}
+# End of the Search-ADUser function.
+
 # Function that runs a collection of function that nned to be performed daily on Active Directory.
 function Start-DailyADTasks {
 
@@ -1548,6 +1576,11 @@ do {
         Get-PasswordAuditAdminReport -AdPwTestData $AdPwdAuditData
         # With the $AdPwdAuditData variable, run the Invoke-WeakPwdProcess function.
         Invoke-WeakPwdProcess -AdPwTestData $AdPwdAuditData
+    }
+
+    's' {
+        # Search of a user in the Active Directory.
+        Search-ADUser
     }
 
     'd' {
