@@ -1034,21 +1034,21 @@ Function Send-Email {
 
 # A To ask a user for the variable for the Send-Email function. With the gathered information, the function will send an email to the user.
 Function Send-EmailTest {
-    $Subject = "ADPowerAdmin: Test Email"
-    $Body = "This is a test email from the ADPowerAdmin script. If you are reading this, then the email was sent successfully."
+    [string]$Subject = "ADPowerAdmin: Test Email"
+    [string]$Body = "This is a test email from the ADPowerAdmin script. If you are reading this, then the email was sent successfully."
     Write-Host "You can leave any of the following fields blank and the script will use the default settings from the 'AD-PowerAdmin_settings.ps1' file." -ForegroundColor Yellow
     # Ask the user for the email address to send the test email to.
-    $ToEmail = Read-Host "Enter the email address to send the test email to"
+    [string]$ToEmail = Read-Host "Enter the email address to send the test email to"
     # Ask the user for the email address to send the test email from.
-    $FromEmail = Read-Host "Enter the email address to send the test email from"
+    [string]$FromEmail = Read-Host "Enter the email address to send the test email from"
     # Ask the user for the SMTP Server to send the test email from.
-    $SmtpServer = Read-Host "Enter the SMTP Server to send the test email"
+    [string]$SmtpServer = Read-Host "Enter the SMTP Server to send the test email"
     # Ask the user for the SMTP Port to send the test email from.
-    $SmtpPort = Read-Host "Enter the SMTP Port to send the test email"
+    [string]$SmtpPort = Read-Host "Enter the SMTP Port to send the test email"
     # Ask the user for the SMTP User to send the test email from.
-    $SmtpUser = Read-Host "Enter the SMTP User to send the test email"
+    [string]$SmtpUser = Read-Host "Enter the SMTP User to send the test email"
     # Ask the user for the SMTP Password to send the test email from.
-    $SmtpPass = Read-Host "Enter the SMTP Password to send the test email"
+    [string]$SmtpPass = Read-Host "Enter the SMTP Password to send the test email"
 
     $SendTestEmailParam = @{}
 
@@ -1099,9 +1099,9 @@ Function Send-EmailTest {
     # If $ToEmail is not empty, then use the $global:ToEmail variable for $ToEmail. If the $global:ToEmail is empty, then display an error and exit the function.
     # If $ToEmail is not empty add it to the $SendTestEmailParam variable.
     if ($ToEmail -ne '') {
-        $SendTestEmailParam.ToEmail = "$ToEmail"
-    } elseif ($global:ToEmail -ne '') {
-        $SendTestEmailParam.ToEmail = "$global:ToEmail"
+        [string]$ToEmail = "$ToEmail"
+    } elseif ($global:ADAdminEmail -ne '') {
+        [string]$ToEmail = "$global:ADAdminEmail"
     } else {
         Write-Host "Error: The To Email is not set. Please set the To Email in the 'AD-PowerAdmin_settings.ps1' file." -ForegroundColor Red
         return
@@ -1110,9 +1110,9 @@ Function Send-EmailTest {
     # If $FromEmail is not empty, then use the $global:FromEmail variable for $FromEmail. If the $global:FromEmail is empty, then display an error and exit the function.
     # If $FromEmail is not empty add it to the $SendTestEmailParam variable.
     if ($FromEmail -ne '') {
-        $SendTestEmailParam.FromEmail = "$FromEmail"
+        [string]$FromEmail = "$FromEmail"
     } elseif ($global:FromEmail -ne '') {
-        $SendTestEmailParam.FromEmail = "$global:FromEmail"
+        [string]$FromEmail = "$global:FromEmail"
     } else {
         Write-Host "Error: The From Email is not set. Please set the From Email in the 'AD-PowerAdmin_settings.ps1' file." -ForegroundColor Red
         return
@@ -1210,8 +1210,8 @@ Function New-ADPowerAdminGPO {
     }
     # Check if the $GpoCfgFileContent contains $global:MsaAccountName or $SID.Value is already in the "SeServiceLogonRight" line.
     if (($GpoCfgFileContent -match "$global:MsaAccountName") -or ($GpoCfgFileContent -match "$($SID.Value)")) {
-        Write-Host "The GPO configuration file '$GpoCfgFile' already contains the '$global:MsaAccountName' or '$($SID.Value)' line." -ForegroundColor Red
-        break
+        Write-Host "The GPO configuration file '$GpoCfgFile' already contains the '$global:MsaAccountName' or '$($SID.Value)' line." -ForegroundColor Yellow
+        return
     }
     # For each line of a file, check if the line contains the "SeServiceLogonRight" line.
     # If the line contains the "SeServiceLogonRight" line, then add the $global:MsaAccountName to the line.
@@ -1315,6 +1315,28 @@ function Search-ADUser {
     return
 }
 # End of the Search-ADUser function.
+
+# Function to search the Default Domain Policy for a given GPO setting.
+function Search-DefaultDomainPolicy {
+    # Ask the user for the GPO setting to search for.
+    [string]$GPOSetting = Read-Host "Enter the GPO setting to search for:"
+    # Confirm the GPO setting given string is not empty.
+    if ($GPOSetting -eq '') {
+        Write-Host "Error: The GPO setting given was empty." -ForegroundColor Red
+        return
+    }
+    # Search for the given GPO setting in the Default Domain Policy.
+    [Object]$SearchResults = Get-GPRegistryValue -Name $GPOSetting -All -ErrorAction SilentlyContinue
+    # Check if the $SearchResults variable is empty.
+    if ($null -eq $SearchResults) {
+        Write-Host "Error: The GPO setting '$GPOSetting' was not found in the Default Domain Policy." -ForegroundColor Red
+        return
+    }
+    # Display the search results to the user.
+    Write-Host "The following GPO settings were found to match in the Default Domain Policy:" -ForegroundColor Yellow
+    $SearchResults | Format-List
+    return
+}
 
 # Function that runs a collection of function that nned to be performed daily on Active Directory.
 function Start-DailyADTasks {
