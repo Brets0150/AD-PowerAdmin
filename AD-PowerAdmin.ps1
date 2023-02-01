@@ -4,7 +4,7 @@
 	A collection of functions to help manage, and harden Windows Active Directory.
 
 .VERSION
-    0.6.0 beta
+    0.6.2 beta
 
 .DESCRIPTION
     AD-PowerAdmin is a tool to help Active Directory administrators secure and manage their AD.
@@ -46,7 +46,7 @@ Param (
 $host.UI.RawUI.WindowTitle = "AD PowerAdmin - CyberGladius.com"
 
 # Version of this script.
-[string]$global:Version = "0.6.0 beta"
+[string]$global:Version = "0.6.2 beta"
 
 #=======================================================================================
 # Base checks.
@@ -101,12 +101,18 @@ Function Get-ADAdmins() {
     [PSCustomObject]$ADAdmins = @()
 
     <# High Value Target Groups
-    Domain administrators
-    Enterprise administrators
+    Domain Admins
+    Enterprise Admins
+    Administrators
     Schema Admins
-    Backup operators
-    Account operators
-    Server operators
+    Backup Operators
+    Account Operators
+    Server Operators
+    Domain Controllers
+    Print Operators
+    Replicator
+    Enterprise Key Admins
+    Key Admins
     #>
 
     # Append $ADAdmins with members of the Domain Admins
@@ -123,6 +129,16 @@ Function Get-ADAdmins() {
     $ADAdmins += Get-ADGroupMember -Identity "Account Operators" -Recursive -ErrorAction:SilentlyContinue
     # Append $ADAdmins with members of the Builtin "Server operators" group
     $ADAdmins += Get-ADGroupMember -Identity "Server Operators" -Recursive -ErrorAction:SilentlyContinue
+    # Append $ADAdmins with members of the Builtin "Domain controllers" group
+    $ADAdmins += Get-ADGroupMember -Identity "Domain Controllers" -Recursive -ErrorAction:SilentlyContinue
+    # Append $ADAdmins with members of the Builtin "Print operators" group
+    $ADAdmins += Get-ADGroupMember -Identity "Print Operators" -Recursive -ErrorAction:SilentlyContinue
+    # Append $ADAdmins with members of the Builtin "Replicator" group
+    $ADAdmins += Get-ADGroupMember -Identity "Replicator" -Recursive -ErrorAction:SilentlyContinue
+    # Append $ADAdmins with members of the Builtin "Enterprise key admins" group
+    $ADAdmins += Get-ADGroupMember -Identity "Enterprise Key Admins" -Recursive -ErrorAction:SilentlyContinue
+    # Append $ADAdmins with members of the Builtin "key admins" group
+    $ADAdmins += Get-ADGroupMember -Identity "Key Admins" -Recursive -ErrorAction:SilentlyContinue
 
     # Remove duplicates from $ADAdmins
     $ADAdmins = $ADAdmins | Select-Object -Unique
@@ -141,6 +157,52 @@ Function Get-ADAdminAudit() {
     } | Format-List -Property Name, SamAccountName, DistinguishedName, LastLogonDate
 }
 # End of Get-ADAdminAudit function
+
+# Function containing test for security best practices in Active Directory.
+Function Test-ADSecurityBestPractices() {
+
+    Write-Host "======================================================================================" -ForegroundColor White
+    # Test for Unprivileged accounts with adminCount=1, use the Search-ADUserAdminCountHighPrivilegedGroups function.
+    Write-Host "Testing for Unprivileged accounts with adminCount=1" -ForegroundColor Yellow
+    Search-ADUserAdminCountHighPrivilegedGroups
+    Write-Host "======================================================================================" -ForegroundColor White
+
+    # Test for Usersand computerswith non-default Primary Group IDs
+    Write-Host "Testing for Users and computers with non-default Primary Group IDs" -ForegroundColor Yellow
+    Search-ADUserNonDefaultPrimaryGroup
+    Write-Host "======================================================================================" -ForegroundColor White
+
+    # Test for Disabled accounts with Group Membership other than "Domain Users" group.
+    Write-Host "Testing for Disabled accounts with Group Membership other than 'Domain Users' group" -ForegroundColor Yellow
+    Search-DisabledADAccountWithGroupMembership
+    Write-Host "======================================================================================" -ForegroundColor White
+
+
+
+}
+# End of Test-ADSecurityBestPractices function
+
+# Function to test for Users with non-default Primary Group IDs
+Function Search-ADUserNonDefaultPrimaryGroup() {
+    # Get a list of all AD Users
+    $ADUsers = Get-ADUser -Filter * -Properties Name, SamAccountName, DistinguishedName, PrimaryGroupID -ErrorAction:SilentlyContinue
+
+    # Loop through each AD User
+    $ADUsers | ForEach-Object {
+        # If the PrimaryGroupID is not 513, then the user is not in the default "Domain Users" group.
+        if ($_.PrimaryGroupID -ne 513) {
+            # Get the name of the Primary Group
+            $PrimaryGroup = Get-ADGroup -Identity $_.PrimaryGroupID -Properties Name -ErrorAction:SilentlyContinue
+            # Write the AD User's details to the screen
+            Write-Host "User: $($_.Name) ($($_.SamAccountName))" -ForegroundColor Yellow
+            Write-Host "DistinguishedName: $($_.DistinguishedName)" -ForegroundColor Yellow
+            Write-Host "PrimaryGroupID: $($_.PrimaryGroupID)" -ForegroundColor Yellow
+            Write-Host "PrimaryGroup: $($PrimaryGroup.Name)" -ForegroundColor Yellow
+            Write-Host ""
+        }
+    }
+}
+# End of Search-ADUserNonDefaultPrimaryGroup function
 
 # Take a link and download the file to the current directory.
 Function Get-DownloadFile {
@@ -964,6 +1026,8 @@ Function Send-Email {
         [Parameter(Mandatory=$false,Position=9)]
         [bool]$DebugEmail
     )
+    # Set the email Security Protocol to TLS 1.2.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
     # Build the email sending variables.
     $EmailServerParam = @{}
@@ -1000,7 +1064,7 @@ Function Send-Email {
 
     $Smtp = New-Object Net.Mail.SmtpClient($EmailServerParam.SmtpServer, $EmailServerParam.Port);
     # SSL is always used.
-    $Smtp.EnableSSL = $true;
+    $Smtp.EnableSSL = [bool]$global:SmtpEnableSSL;
 
     # If $SMTPUser and $SMTPPass is not empty or null, then use the $global:SMTPUser and $global:SMTPPassword variables. If the $global:SMTPUser or $global:SMTPPassword is empty, then display an warning and continue.
     # If either is not empty, then use the $global:SMTPUser and $global:SMTPPassword to build $Smtp.Credentials object variable.
@@ -1316,6 +1380,96 @@ function Search-ADUser {
 }
 # End of the Search-ADUser function.
 
+# Function to search disabled AD account and check if they are a member of any group other than the "Domain Users" group.
+function Search-DisabledADAccountWithGroupMembership {
+    # Search for all disabled AD accounts.
+    [Object]$SearchResults = Get-AdUser -Filter "Enabled -eq 'False'" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
+    # Check if the $SearchResults variable is empty.
+    if ($null -eq $SearchResults) {
+        Write-Host "Error: No disabled AD accounts were found." -ForegroundColor Yellow
+        return
+    }
+    # Check if the disabled AD accounts are a member of any group other than the "Domain Users" group.
+    Write-Host "Checking if the disabled AD accounts are a member of any group other than the 'Domain Users' group." -ForegroundColor Yellow
+    # Loop through each disabled AD account.
+    foreach ($DisabledADAccount in $SearchResults) {
+        # Get the disabled AD account's groups.
+        [Object]$DisabledADAccountGroups = Get-ADPrincipalGroupMembership -Identity $DisabledADAccount.DistinguishedName
+
+        # Create a list variable to store the disabled AD account's groups.
+        [Object]$DisabledADAccountGroupsList = @()
+        # Loop through each disabled AD account's group and add it to the $DisabledADAccountGroupsList variable if it is not the "Domain Users" group.
+        foreach ($DisabledADAccountGroup in $DisabledADAccountGroups) {
+            if ($DisabledADAccountGroup.Name -ne 'Domain Users') {
+                $DisabledADAccountGroupsList += $DisabledADAccountGroup.Name
+            }
+        }
+
+        # If the $DisabledADAccountGroupsList is not empty, then display the disabled AD account's groups to the user.
+        if ($DisabledADAccountGroupsList -ne '') {
+            # Display the disabled AD account's groups to the user.
+            Write-Host "The disabled AD account '$($DisabledADAccount.Name)' is a member of the following groups:" -ForegroundColor Red
+            $DisabledADAccountGroupsList | Format-List
+        }
+    }
+    return
+}
+# End of the Search-DisabledADAccount function.
+
+# Function to search all AD User accounts for those with attributes "adminCount" = 1.
+function Search-ADUserAdminCount {
+    # Search for all AD User accounts with attributes "adminCount" = 1.
+    [Object]$SearchResults = Get-AdUser -Filter "adminCount -eq 1" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
+    # Check if the $SearchResults variable is empty.
+    if ($null -eq $SearchResults) {
+        Write-Host "Error: No AD User accounts with attributes 'adminCount' = 1 were found." -ForegroundColor Red
+        return
+    }
+    return $SearchResults
+}
+# End of the Search-ADUserAdminCount function.
+
+# Function that will use Search-ADUserAdminCount to search for all AD User accounts with attributes "adminCount" = 1 and then check if the user is a member of any high privileged groups.
+# High privileged groups include Domain Admins, Enterprise Admins, Administrators, Schema Adminsm, Backup Operators, Account Operators, Server Operators, Domain Controllers, Print Operators, Replicator, Enterprise Key Admins, and Key Admins.
+function Search-ADUserAdminCountHighPrivilegedGroups {
+    # Search for all AD User accounts with attributes "adminCount" = 1.
+    [Object]$SearchResults = Search-ADUserAdminCount
+    # Check if the $SearchResults variable is empty.
+    if ($null -eq $SearchResults) {
+        return
+    }
+    # Create an array of all high privileged groups.
+    [array]$HighPrivilegedGroups = @("Domain Admins", "Enterprise Admins", "Administrators", "Schema Admins", "Backup Operators", "Account Operators", "Server Operators", "Domain Controllers", "Print Operators", "Replicator", "Enterprise Key Admins", "Key Admins")
+
+    # Get all members of the high privileged groups.
+    [Object]$HighPrivilegedGroupsMembers = $HighPrivilegedGroups | ForEach-Object {
+        Get-ADGroupMember -Identity $_
+    }
+
+    # Check if the user is a member of any high privileged groups.
+    [Object]$SearchResults | ForEach-Object {
+        # Test if the current user is a member of any high privileged groups. If the user is a member of any high privileged groups, then continue to the next user.
+        if ($HighPrivilegedGroupsMembers -contains $_.DistinguishedName) {
+            continue
+        }
+        # If the current user name is krbtgt, then continue to the next user.
+        if ($_.Name -eq 'krbtgt') {
+            continue
+        }
+        # If the loop has not been continued, then the user is not a member of any high privileged groups.
+        # The user account attributes "adminCount" = 1 should be cleared.
+        # Ask the user if they want to clear the user account attributes "adminCount" = 1.
+        Write-Host "The user '$($_.Name)' ('$($_.DistinguishedName)') has attributes 'adminCount' = 1 but is not a member of any high privileged groups." -ForegroundColor Yellow
+        [string]$ClearAdminCount = Read-Host "Do you want to clear the user account attributes 'adminCount' = 1? (Y/N):"
+        # Check if the user wants to clear the user account attributes "adminCount" = 1. If yes, then set the user account attributes "adminCount" = <not set>.
+        if ($ClearAdminCount -eq 'Y' -or $ClearAdminCount -eq 'y') {
+            Set-ADUser -Identity $_.DistinguishedName -Clear adminCount
+            Write-Host "The user account attributes 'adminCount' = 1 for the user '$($_.Name)' has been cleared." -ForegroundColor Green
+        }
+    }
+}
+# End of the Search-ADUserAdminCountHighPrivilegedGroups function.
+
 # Function to search the Default Domain Policy for a given GPO setting.
 function Search-DefaultDomainPolicy {
     # Ask the user for the GPO setting to search for.
@@ -1407,11 +1561,13 @@ function Show-Menu {
     Write-Host " 8:  Press  '8' Run a password audit WITHOUT sending emails to users or scheduling a forced password changes."
     Write-Host " 9:  Press  '9' Same as option 8, but send the password audit report to the Admins."
     Write-Host " 10: Press  '10' Run a password audit AND send emails to users and schedule forced password changes."
-    Write-Host "D: Press 'D' Run all daily tasks."
-    Write-Host "I: Press 'I' To install this script as a scheduled task to run the daily test, checks, and clean-up."
-    Write-Host "E: Press 'E' To send a test email."
-    Write-Host "H: Press 'H' To show the help menu."
-    Write-Host "Q: Press 'Q' to quit."
+    Write-Host "S:    Press 'S' Search for a specific user"
+    Write-Host "D:    Press 'D' Run all daily tasks."
+    Write-Host "FAC:  Enter 'FAC' to run a adminCount audit and fix any issues found."
+    Write-Host "I:    Press 'I' To install this script as a scheduled task to run the daily test, checks, and clean-up."
+    Write-Host "E:    Press 'E' To send a test email."
+    Write-Host "H:    Press 'H' To show the help menu."
+    Write-Host "Q:     Press 'Q' to quit."
 }
 # End of the Show-Menu function.
 
@@ -1428,6 +1584,21 @@ function Show-Help {
 
     === Audit AD Admin account Report. ===
         This option will generate a report of all accounts with Domain Administrator rights or Enterprise Administrator rights.
+        Microsoft states the following groups should be treated as high-value targets:
+            Domain Admins
+            Enterprise Admins
+            Administrators
+            Schema Admins
+            Backup Operators
+            Account Operators
+            Server Operators
+            Domain Controllers
+            Print Operators
+            Replicator
+            Enterprise Key Admins
+            Key Admins
+
+        So any user in any of these groups will be reported on.
 
     === Force KRBTGT password Update. ===
         This option will update the KRBTGT password for all domain controllers.
@@ -1487,6 +1658,8 @@ function Show-Help {
             - The follow up process to ensure users change their password is done via a scheduled task.
             - The process by which the password data is pulled is done via a DCSync. This can trigger an alert in your SIEM.
                 A DCSync, is not an attack, it is a normal process, but attackers are known to use DCSync to get password hashes.
+            - If non-user accounts have the warrning 'These administrative accounts are allowed to be delegated to a service' then it
+                may be a false positive. See my post here for more details: https://cybergladius.social/@CyberGladius/109649278142902592
 
     =====================================================
     "
@@ -1608,6 +1781,11 @@ do {
     'd' {
         # Run daily tasks.
         Start-DailyADTasks
+    }
+
+    'fac' {
+        # Force all users to change their password.
+        Search-ADUserAdminCountHighPrivilegedGroups
     }
 
     'i' {
