@@ -4,7 +4,7 @@
 	Only variables and configurations for AD-PowerAdmin.
 
 .VERSION
-    0.6.0 beta
+    0.6.2 beta
 
 .DESCRIPTION
     Only variables and configurations for AD-PowerAdmin.
@@ -189,6 +189,10 @@
 # The email address that the email will be sent from.
 # EXAMPLE: [string]$global:ReportEmailFrom = 'AdPowerAdmin@example.com'
 [string]$global:ReportsEmailFrom = $global:FromEmail
+
+# Use SSL to connect to the SMTP server.
+# EXAMPLE: [bool]$global:SmtpEnableSSL = $true
+[bool]$global:SmtpEnableSSL = $true
 
 # The SMTP server port. The default port is 587.
 # EXAMPLE: [int]$global:SMTPServerPort = 587
