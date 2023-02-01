@@ -1,4 +1,11 @@
-#  AD-PowerAdmin --  !! STILL IN BETA !!
+
+<div align="center">
+    <div style="display: flex; align-items: flex-start;">
+        <img align=top src="https://cybergladius.com/wp-content/uploads/2023/02/ADPowerAdmin_Logo_half.png" />
+    </div>
+</div>
+
+#  AD-PowerAdmin Overview
 AD-PowerAdmin is a tool to help Active Directory administrators secure and manage their AD. Automating security checks ranging from User and Computer cleanup, password audits, security misconfiguration audits, and much more. The core philosophy is to automate daily testing of AD security and email when there is an issue. This tool focuses on common weaknesses, and attack-vectors adversaries use and defends against them.
 
 # Features
@@ -19,6 +26,7 @@ Here is a quick list of features
  - Download the breached password list from Have-I-Been-Pwned "https://haveibeenpwned.com/Passwords"
  - Build a list of weak passwords.
 
+### Installing
 To get started download the latest release ZIP file or clone this repositories.
 
     PS C:\Scripts> git clone https://github.com/Brets0150/AD-PowerAdmin.git
@@ -40,8 +48,28 @@ AD-PowerAdmin can be run manually, on-demand, or installed for full automation. 
 
 #
 # Features In-Depth
-## Audit AD Admin account Report
-This option will generate a report of all accounts with Domain Administrator rights or Enterprise Administrator rights.
+## Audit for AD Security Best Practices
+This audit will look for many small security and best practices recommendations. Most of the tests are simple but could leave an AD server open to attack. Test performed include the following.
+
+ - Unprivileged accounts with "adminCount=1" attribute set. [REF-LINK](https://cybergladius.social/@CyberGladius/109649278142902592)
+ - Users and computers with non-default Primary Group IDs.
+ - Disabled accounts with Group Membership other than 'Domain Users' group.
+
+## Audit AD Admin Account Report
+This admin audit report will generate a list of all user accounts within the domain that have group membership in highly privileged groups. These groups should be used as little as possible, and membership should only be given if required by a job role. Here is a list of the groups audited.
+
+ - Domain Admins
+ - Enterprise Admins
+ - Administrators
+ - Schema Admins
+ - Backup Operators
+ - Account Operators
+ - Server Operators
+ - Domain Controllers
+ - Print Operators
+ - Replicator
+ - Enterprise Key Admins
+ - Key Admins
 
 ## Force KRBTGT password Update
 This option will update the KRBTGT password for all domain controllers.
@@ -79,8 +107,8 @@ The Password Audit checks for the following.
 If you want to test for known breached passwords, you will need to download the breached password list
 from https://haveibeenpwned.com/Passwords. The file is a 7z compressed file. You will need to extract
 the file and save it to the same directory as the AD-PowerAdmin.ps1 script. The file name should be
-'pwned-passwords-ntlm-ordered-by-hash-v8.txt' and the file size should be 28.5GB. The file is updated every
-12 months. You will need to download the new file and replace the old file when it is updated.
+'pwned-passwords-ntlm-ordered-by-hash-v8.txt' and the file size should be 28.5GB uncompressed. The file is updated
+every 12 months. You will need to download the new file and replace the old file when it is updated.
 
 If you want to test for weak passwords, you will need to download or build a list of weak passwords.
 The file should be a text file with one password per line. Consider all the bad passwords you have seen in
@@ -95,6 +123,12 @@ password will have X days to change their password, default is 3 days. If the us
 password within X days, the user account will have the 'User must change password at next logon' option enabled.
 
 On the first day of the month, the script will send an email to the admin account with a report of all the audit results.
+### Process Flow
+<div align="center">
+    <div style="display: flex; align-items: flex-start;">
+        <img align=top src="https://cybergladius.com/wp-content/uploads/2023/02/ADPowerAdmin_WeakPWTest.png" />
+    </div>
+</div>
 
 ### !!!   NOTES   !!!
 - You must update the settings in 'AD-PowerAdmin_settings.ps1' to matches your AD setup.
@@ -103,4 +137,5 @@ On the first day of the month, the script will send an email to the admin accoun
     A DCSync, is not an attack, it is a normal process, but attackers are known to use DCSync to get password hashes.
 
 #
+
 
