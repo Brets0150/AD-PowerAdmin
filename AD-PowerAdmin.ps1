@@ -152,9 +152,18 @@ Function Get-ADAdmins() {
 Function Get-ADAdminAudit() {
     # Loop through each AD Admin User
     Get-ADAdmins | ForEach-Object {
-        # Get the AD User's details
-        Get-ADUser -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, LastLogonDate -ErrorAction:SilentlyContinue
-    } | Format-List -Property Name, SamAccountName, DistinguishedName, LastLogonDate
+        # Test if $_ is a AD User, Computer, or Group Managed Service Account.
+        if ($_.ObjectClass -eq "user") {
+            # Get the AD User's details
+            Get-ADUser -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate -ErrorAction:SilentlyContinue
+        } elseif ($_.ObjectClass -eq "computer") {
+            # Get the AD Computer's details
+            Get-ADComputer -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate -ErrorAction:SilentlyContinue
+        } elseif ($_.ObjectClass -eq "groupManagedServiceAccount") {
+            # Get the AD Group Managed Service Account's details
+            Get-ADServiceAccount -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate -ErrorAction:SilentlyContinue
+        }
+    } | Format-List -Property Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate
 }
 # End of Get-ADAdminAudit function
 
@@ -176,8 +185,6 @@ Function Test-ADSecurityBestPractices() {
     Write-Host "Testing for Disabled accounts with Group Membership other than 'Domain Users' group" -ForegroundColor Yellow
     Search-DisabledADAccountWithGroupMembership
     Write-Host "======================================================================================" -ForegroundColor White
-
-
 
 }
 # End of Test-ADSecurityBestPractices function

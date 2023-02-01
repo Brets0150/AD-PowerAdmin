@@ -71,6 +71,8 @@ This admin audit report will generate a list of all user accounts within the dom
  - Enterprise Key Admins
  - Key Admins
 
+The audit includes Domain Controllers, and Managed Service Accounts. Any account that have group membership that could be used to escalate to Domain Admins will be listed in the report. This is a good way to find rogue domain controllers, and managed service accounts that have been compromised.
+
 ## Force KRBTGT password Update
 This option will update the KRBTGT password for all domain controllers.
 During normal operation, the KRBTGT password needs to be updated every 90 days, twice.
