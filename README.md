@@ -1,7 +1,7 @@
 
 <div align="center">
     <div style="display: flex; align-items: flex-start;">
-        <img align=top src="https://cybergladius.com/wp-content/uploads/2023/02/ADPowerAdmin_Logo_half.png" />
+        <img align=top src="https://cybergladius.com/wp-content/uploads/2023/02/ADPowerAdmin_Logo_half2.png" />
     </div>
 </div>
 
