@@ -1,7 +1,7 @@
 
 <div align="center">
     <div style="display: flex; align-items: flex-start;">
-        <img align=top src="https://cybergladius.com/wp-content/uploads/2023/02/ADPowerAdmin_Logo_half.png" />
+        <img align=top src="https://cybergladius.com/wp-content/uploads/2023/02/ADPowerAdmin_Logo_half-v2.png" />
     </div>
 </div>
 
@@ -141,6 +141,3 @@ On the first day of the month, the script will send an email to the admin accoun
     may be a false positive. See my post here for more details: https://cybergladius.social/@CyberGladius/109649278142902592
 
 #
-#
-
-
