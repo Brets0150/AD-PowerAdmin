@@ -137,6 +137,8 @@ On the first day of the month, the script will send an email to the admin accoun
 - The follow up process to ensure users change their password is done via a scheduled task.
 - The process by which the password data is pulled is done via a DCSync. This can trigger an alert in your SIEM.
     A DCSync, is not an attack, it is a normal process, but attackers are known to use DCSync to get password hashes.
+- If non-user accounts have the warning 'These administrative accounts are allowed to be delegated to a service' then it
+    may be a false positive. See my post here for more details: https://cybergladius.social/@CyberGladius/109649278142902592
 
 #
 

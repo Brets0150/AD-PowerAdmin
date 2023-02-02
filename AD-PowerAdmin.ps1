@@ -97,7 +97,7 @@ if ($global:Debug) {
 # Functions
 
 # Funcation to build a list of AD Users with Adinistrative Rights, including the Domain Admin and Enterprise Admins.
-Function Get-ADAdmins() {
+Function Get-ADAdmins {
     [PSCustomObject]$ADAdmins = @()
 
     <# High Value Target Groups
@@ -149,7 +149,7 @@ Function Get-ADAdmins() {
 # End of Get-ADAdmins function
 
 # Fuction to takes a list of AD Users and gets their account details.
-Function Get-ADAdminAudit() {
+Function Get-ADAdminAudit {
     # Loop through each AD Admin User
     Get-ADAdmins | ForEach-Object {
         # Test if $_ is a AD User, Computer, or Group Managed Service Account.
@@ -168,7 +168,7 @@ Function Get-ADAdminAudit() {
 # End of Get-ADAdminAudit function
 
 # Function containing test for security best practices in Active Directory.
-Function Test-ADSecurityBestPractices() {
+Function Test-ADSecurityBestPractices {
 
     Write-Host "======================================================================================" -ForegroundColor White
     # Test for Unprivileged accounts with adminCount=1, use the Search-ADUserAdminCountHighPrivilegedGroups function.
@@ -193,19 +193,14 @@ Function Test-ADSecurityBestPractices() {
 Function Search-ADUserNonDefaultPrimaryGroup() {
     # Get a list of all AD Users
     $ADUsers = Get-ADUser -Filter * -Properties Name, SamAccountName, DistinguishedName, PrimaryGroupID -ErrorAction:SilentlyContinue
-
     # Loop through each AD User
     $ADUsers | ForEach-Object {
         # If the PrimaryGroupID is not 513, then the user is not in the default "Domain Users" group.
         if ($_.PrimaryGroupID -ne 513) {
-            # Get the name of the Primary Group
-            $PrimaryGroup = Get-ADGroup -Identity $_.PrimaryGroupID -Properties Name -ErrorAction:SilentlyContinue
-            # Write the AD User's details to the screen
-            Write-Host "User: $($_.Name) ($($_.SamAccountName))" -ForegroundColor Yellow
-            Write-Host "DistinguishedName: $($_.DistinguishedName)" -ForegroundColor Yellow
-            Write-Host "PrimaryGroupID: $($_.PrimaryGroupID)" -ForegroundColor Yellow
-            Write-Host "PrimaryGroup: $($PrimaryGroup.Name)" -ForegroundColor Yellow
-            Write-Host ""
+            # If the user account has the guest $_.DistinguishedName, and is in the 514 group, and has the $_.Name of guest, then skip the user.
+            if ($_.DistinguishedName -eq "CN=Guest,CN=Users,$($(Get-ADDomain).DistinguishedName)" -And $_.PrimaryGroupID -eq 514 -And $_.Name -eq "Guest") { return }
+            # Write the AD User's details to the console
+            Write-Host "User: $($_.Name) ($($_.SamAccountName)) DistinguishedName: $($_.DistinguishedName) IN PrimaryGroupID: $($_.PrimaryGroupID)" -ForegroundColor Red
         }
     }
 }
@@ -1423,27 +1418,14 @@ function Search-DisabledADAccountWithGroupMembership {
 }
 # End of the Search-DisabledADAccount function.
 
-# Function to search all AD User accounts for those with attributes "adminCount" = 1.
-function Search-ADUserAdminCount {
-    # Search for all AD User accounts with attributes "adminCount" = 1.
-    [Object]$SearchResults = Get-AdUser -Filter "adminCount -eq 1" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
-    # Check if the $SearchResults variable is empty.
-    if ($null -eq $SearchResults) {
-        Write-Host "Error: No AD User accounts with attributes 'adminCount' = 1 were found." -ForegroundColor Red
-        return
-    }
-    return $SearchResults
-}
-# End of the Search-ADUserAdminCount function.
-
 # Function that will use Search-ADUserAdminCount to search for all AD User accounts with attributes "adminCount" = 1 and then check if the user is a member of any high privileged groups.
 # High privileged groups include Domain Admins, Enterprise Admins, Administrators, Schema Adminsm, Backup Operators, Account Operators, Server Operators, Domain Controllers, Print Operators, Replicator, Enterprise Key Admins, and Key Admins.
 function Search-ADUserAdminCountHighPrivilegedGroups {
     # Search for all AD User accounts with attributes "adminCount" = 1.
-    [Object]$SearchResults = Search-ADUserAdminCount
+    [Object]$SearchResults = Get-AdUser -Filter "adminCount -eq 1" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
     # Check if the $SearchResults variable is empty.
     if ($null -eq $SearchResults) {
-        return
+        return $null
     }
     # Create an array of all high privileged groups.
     [array]$HighPrivilegedGroups = @("Domain Admins", "Enterprise Admins", "Administrators", "Schema Admins", "Backup Operators", "Account Operators", "Server Operators", "Domain Controllers", "Print Operators", "Replicator", "Enterprise Key Admins", "Key Admins")
@@ -1452,17 +1434,12 @@ function Search-ADUserAdminCountHighPrivilegedGroups {
     [Object]$HighPrivilegedGroupsMembers = $HighPrivilegedGroups | ForEach-Object {
         Get-ADGroupMember -Identity $_
     }
-
     # Check if the user is a member of any high privileged groups.
     [Object]$SearchResults | ForEach-Object {
         # Test if the current user is a member of any high privileged groups. If the user is a member of any high privileged groups, then continue to the next user.
-        if ($HighPrivilegedGroupsMembers -contains $_.DistinguishedName) {
-            continue
-        }
+        if ($HighPrivilegedGroupsMembers.distinguishedName -contains $_.distinguishedName ) { return }
         # If the current user name is krbtgt, then continue to the next user.
-        if ($_.Name -eq 'krbtgt') {
-            continue
-        }
+        if ($_.Name -eq 'krbtgt') { return }
         # If the loop has not been continued, then the user is not a member of any high privileged groups.
         # The user account attributes "adminCount" = 1 should be cleared.
         # Ask the user if they want to clear the user account attributes "adminCount" = 1.
@@ -1559,7 +1536,7 @@ function Show-Menu {
     Show-Logo
     Write-Host "================ AD-PowerAdmin Tools ================"
     Write-Host " 1:  Press  '1' Audit AD Admin account Report."
-    Write-Host " 2:  Press  '2' Run a security audit."
+    Write-Host " 2:  Press  '2' Run Audit for AD Security Best Practices."
     Write-Host " 3:  Press  '3' Force KRBTGT password Update."
     Write-Host " 4:  Press  '4' Search for inactive computers report only."
     Write-Host " 5:  Press  '5' Search for inactive computers and disable them."
@@ -1567,16 +1544,28 @@ function Show-Menu {
     Write-Host " 7:  Press  '7' Search for inactive users accounts and disable them."
     Write-Host " 8:  Press  '8' Run a password audit WITHOUT sending emails to users or scheduling a forced password changes."
     Write-Host " 9:  Press  '9' Same as option 8, but send the password audit report to the Admins."
-    Write-Host " 10: Press  '10' Run a password audit AND send emails to users and schedule forced password changes."
-    Write-Host "S:    Press 'S' Search for a specific user"
+    Write-Host " 10: Press  '10' Run a password audit AND send emails to users AND schedule forced password changes."
+    Write-Host "M:    Press 'M' To show the extended menu."
+    Write-Host "H:    Press 'H' To show the help menu."
+    Write-Host "Q:    Press 'Q' to quit."
+}
+# End of the Show-Menu function.
+
+# Function to display the main menu options for AD-PowerAdmin
+function Show-ExtendedMenu {
+    Clear-Host
+    Show-Logo
+    Write-Host "================ AD-PowerAdmin Tools ================"
+    Write-Host "============== Extended Functions Menu =============="
     Write-Host "D:    Press 'D' Run all daily tasks."
     Write-Host "FAC:  Enter 'FAC' to run a adminCount audit and fix any issues found."
     Write-Host "I:    Press 'I' To install this script as a scheduled task to run the daily test, checks, and clean-up."
     Write-Host "E:    Press 'E' To send a test email."
-    Write-Host "H:    Press 'H' To show the help menu."
-    Write-Host "Q:     Press 'Q' to quit."
+    Write-Host "B:    Press 'B' To go back to the main menu."
+    Write-Host "Q:    Press 'Q' to quit."
 }
 # End of the Show-Menu function.
+
 
 # Function Help Menu
 function Show-Help {
@@ -1733,7 +1722,7 @@ do {
 
     '2' {
         # Run a security audit.
-        Write-Host "Hello World!"
+        Test-ADSecurityBestPractices
     }
 
     '3' {
@@ -1807,6 +1796,17 @@ do {
 
     't' {
         Write-Host "Test"
+        Search-ADUserAdminCountHighPrivilegedGroups
+    }
+
+    'm' {
+        # Display the main menu.
+        Show-ExtendedMenu
+    }
+
+    'b' {
+        # Display the main menu.
+        Show-Menu
     }
 
     'h' {
