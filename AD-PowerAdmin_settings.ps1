@@ -4,7 +4,7 @@
 	Only variables and configurations for AD-PowerAdmin.
 
 .VERSION
-    0.6.2 beta
+    1.0.2 Alpha
 
 .DESCRIPTION
     Only variables and configurations for AD-PowerAdmin.
