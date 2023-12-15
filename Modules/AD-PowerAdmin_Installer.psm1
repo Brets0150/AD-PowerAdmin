@@ -41,61 +41,6 @@ Function Initialize-Module {
 
 Initialize-Module
 
-Function Install-DSInternals {
-    <#
-    .SYNOPSIS
-    Function to check if the DSInternals PowerShell module is installed. If not, then install it, if the install fails, error and exit the script.
-
-    .DESCRIPTION
-    Function to check if the DSInternals PowerShell module is installed. If not, then install it, if the install fails, error and exit the script.
-    DSInternals is used to audit users passwords and other security attributes.
-    The module is well-vetted by Microsoft and is safe to use.
-    PowerShell Gallery: https://www.powershellgallery.com/packages/DSInternals/4.7
-    GitHub: https://github.com/MichaelGrafnetter/DSInternals
-
-    .EXAMPLE
-    Install-DSInternals
-
-    .NOTES
-
-    #>
-
-    # Check if the DSInternals PowerShell module is installed. If not, then install it.
-    if ( $null -eq (Get-Module -ListAvailable -Name DSInternals) ) {
-        # Install the DSInternals PowerShell module.
-        Install-Module -Name DSInternals -Force -ErrorAction SilentlyContinue
-    }
-    # Checkc if the DSInternals PowerShell module is installed. Try again to install it.
-    if ( $null -eq (Get-Module -ListAvailable -Name DSInternals) ) {
-        Write-Host "Warning: The DSInternals PowerShell module failed to install. Trying another method...." -ForegroundColor Yellow
-        # TLS 1.2 must be enabled on older versions of Windows.
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-        # Download the NuGet package manager binary.
-        Install-PackageProvider -Name NuGet -Force
-        # Register the PowerShell Gallery as package repository if it is missing for any reason.
-        if($null -eq (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) { Register-PSRepository -Default }
-        # Download the DSInternals PowerShell module.
-        Install-Module -Name DSInternals -Force
-    }
-
-    # confrim that the DSInternals PowerShell module is installed. If not, then output an error and exit the script.
-    if ( $null -eq (Get-Module -ListAvailable -Name DSInternals) ) {
-        Write-Host "Error: The DSInternals PowerShell module is not installed. Please install it and try again." -ForegroundColor Red
-        Exit 1
-    }
-
-    # Try to import the DSInternals PowerShell module. If the import fails, then output an error and exit the script.
-    try {
-        Import-Module -Name DSInternals -ErrorAction SilentlyContinue
-    } catch {
-        Write-Host "Error: The DSInternals PowerShell module failed to import." -ForegroundColor Red
-        Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
-        Exit 1
-    }
-
-# End of Install-DSInternals function
-}
-
 function Install-ADPowerAdmin {
     <#
     .SYNOPSIS
@@ -174,6 +119,61 @@ function Install-ADPowerAdmin {
     Write-Host "The AD-PowerAdmin install is complete." -ForegroundColor Green
 
 # End of the Install-ADPowerAdmin function.
+}
+
+Function Install-DSInternals {
+    <#
+    .SYNOPSIS
+    Function to check if the DSInternals PowerShell module is installed. If not, then install it, if the install fails, error and exit the script.
+
+    .DESCRIPTION
+    Function to check if the DSInternals PowerShell module is installed. If not, then install it, if the install fails, error and exit the script.
+    DSInternals is used to audit users passwords and other security attributes.
+    The module is well-vetted by Microsoft and is safe to use.
+    PowerShell Gallery: https://www.powershellgallery.com/packages/DSInternals/4.7
+    GitHub: https://github.com/MichaelGrafnetter/DSInternals
+
+    .EXAMPLE
+    Install-DSInternals
+
+    .NOTES
+
+    #>
+
+    # Check if the DSInternals PowerShell module is installed. If not, then install it.
+    if ( $null -eq (Get-Module -ListAvailable -Name DSInternals) ) {
+        # Install the DSInternals PowerShell module.
+        Install-Module -Name DSInternals -Force -ErrorAction SilentlyContinue
+    }
+    # Checkc if the DSInternals PowerShell module is installed. Try again to install it.
+    if ( $null -eq (Get-Module -ListAvailable -Name DSInternals) ) {
+        Write-Host "Warning: The DSInternals PowerShell module failed to install. Trying another method...." -ForegroundColor Yellow
+        # TLS 1.2 must be enabled on older versions of Windows.
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+        # Download the NuGet package manager binary.
+        Install-PackageProvider -Name NuGet -Force
+        # Register the PowerShell Gallery as package repository if it is missing for any reason.
+        if($null -eq (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) { Register-PSRepository -Default }
+        # Download the DSInternals PowerShell module.
+        Install-Module -Name DSInternals -Force
+    }
+
+    # confrim that the DSInternals PowerShell module is installed. If not, then output an error and exit the script.
+    if ( $null -eq (Get-Module -ListAvailable -Name DSInternals) ) {
+        Write-Host "Error: The DSInternals PowerShell module is not installed. Please install it and try again." -ForegroundColor Red
+        Exit 1
+    }
+
+    # Try to import the DSInternals PowerShell module. If the import fails, then output an error and exit the script.
+    try {
+        Import-Module -Name DSInternals -ErrorAction SilentlyContinue
+    } catch {
+        Write-Host "Error: The DSInternals PowerShell module failed to import." -ForegroundColor Red
+        Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+        Exit 1
+    }
+
+# End of Install-DSInternals function
 }
 
 function New-ADPowerAdminSmsaAccount {

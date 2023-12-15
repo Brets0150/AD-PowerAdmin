@@ -114,6 +114,7 @@
             ReleaseNotes = @'
             v1.0:
             - Migrate from old methods to new methods.
+            - There is now a installer, uninstaller, and test function for all of AD-PowerAdmin's components.
 '@
 
         } # End of PSData hashtable
