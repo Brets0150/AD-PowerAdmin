@@ -36,6 +36,8 @@
     The module includes three functions:
     - Get-ADAdminAudit
     - Get-ADUserAudit
+    - Test-ADSecurityBestPractices
+    - Search-AD
     - Search-ADComputerInDefaultFolder
     - Search-ADUserNonDefaultPrimaryGroup
     - Search-MultipleInactiveComputers
@@ -78,7 +80,7 @@
     # NestedModules = @()
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-    FunctionsToExport = @('Get-ADAdminAudit', 'Search-MultipleInactiveComputers', 'Get-ADUserAudit','Search-MultipleInactiveUsers','Search-ADUser','Test-ADSecurityBestPractices', 'Start-DailyInactiveUserAudit', 'Start-DailyInactiveComputerAudit')
+    FunctionsToExport = @('Get-ADAdminAudit', 'Search-MultipleInactiveComputers', 'Get-ADUserAudit','Search-MultipleInactiveUsers','Search-AD','Test-ADSecurityBestPractices', 'Start-DailyInactiveUserAudit', 'Start-DailyInactiveComputerAudit')
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
     CmdletsToExport = @()

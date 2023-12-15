@@ -23,7 +23,7 @@ Function Initialize-Module {
             Command  = 'Update-KRBTGTPassword'
         }
         'Update-KRBTGTPasswordForce' = @{
-            Title    = 'Force Update KRBTGT Password'
+            Title    = 'Update KRBTGT Password - Force'
             Label    = 'Force a password change to the KRBTGT account. The password will be updated now and a scheduled task will be created to update the password again in 10 hours.'
             Module   = 'AD-PowerAdmin_PasswordsCtl'
             Function = 'Update-KRBTGTPassword'

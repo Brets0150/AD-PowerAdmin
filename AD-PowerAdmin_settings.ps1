@@ -41,6 +41,14 @@
 # You do NOT need to alter the default value, nor do I recommend it.
 [string]$global:MsaAccountName = "ADPowerAdmMSA"
 
+# -------------------[Mandatory]------------------- #
+# AD-PowerAdmin Install Directory.
+# This is the directory where AD-PowerAdmin will be installed.
+# The default is to install AD-PowerAdmin in C:\Scripts\AD-PowerAdmin.
+# If you want to change the install directory, you can change the value below.
+# Example: $global:InstallDirectory = "C:\Scripts\AD-PowerAdmin"
+[string]$global:InstallDirectory = "C:\Scripts\AD-PowerAdmin"
+
 ##############################################################################################
 # -------------------[Optional]------------------- #
 # Enable or disable the Daily tasks that will be run.

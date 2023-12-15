@@ -30,7 +30,7 @@ Function Initialize-Module {
             Command  = "Get-ADUserAudit"
         }
         'Search-InactiveComputers' = @{
-            Title    = "Find Inactive Computers"
+            Title    = "Search Inactive Computers"
             Label    = "Search for inactive computers report only."
             Module   = "AD-PowerAdmin_Audits"
             Function = "Search-MultipleInactiveComputers"
@@ -44,7 +44,7 @@ Function Initialize-Module {
             Command  = 'Search-MultipleInactiveComputers -InactiveComputersLocations $global:InactiveComputersLocations -InactiveDays $global:InactiveDays -ReportOnly $false'
         }
         'Search-InactiveUsers' = @{
-            Title    = "Find Inactive Users"
+            Title    = "Search Inactive Users"
             Label    = "Search for inactive users report only."
             Module   = "AD-PowerAdmin_Audits"
             Function = "Search-MultipleInactiveUsers"
@@ -57,12 +57,12 @@ Function Initialize-Module {
             Function = "Search-MultipleInactiveUsers"
             Command  = 'Search-MultipleInactiveUsers -InactiveUsersLocations $global:InactiveUsersLocations -InactiveDays $global:InactiveDays -ReportOnly $false'
         }
-        'Search-ADUser' = @{
-            Title    = "AD User Search"
-            Label    = "Search for AD User."
+        'Search-AD' = @{
+            Title    = "Search AD"
+            Label    = "Search AD for a User, Computer, or all Objects."
             Module   = "AD-PowerAdmin_Audits"
-            Function = "Search-ADUser"
-            Command  = 'Search-ADUser -TextResults $true'
+            Function = "Search-AD"
+            Command  = 'Search-AD -TextResults $true'
         }
         'Test-ADSecurityBestPractices' = @{
             Title    = "AD Security Check"
@@ -947,47 +947,80 @@ function Search-DisabledObjects {
     return
 }
 
-function Search-ADUser {
+function Search-AD {
     <#
     .SYNOPSIS
     Function to search for a given User in Active Directory.
 
     .DESCRIPTION
-    Function to search for a given User in Active Directory.
+    Search AD for a given User, Computer, or Object(everything) based on the object name. The user will be asked if they want to
+    search for a User, Computer, or Object. The user will then be asked for the name of the User, Computer, or Object to search
+    for. The search will then be performed and the results will be displayed to the user.
 
     .EXAMPLE
-    Example: Search-ADUser -TextResults $true
+    Example: Search-AD -TextResults $true
+
+    .EXAMPLE
+    Example: Search-AD -TextResults $false
 
     .INPUTS
-    # Search-ADUser does not take pipeline input.
+    # Search-AD does not take pipeline input.
 
     .OUTPUTS
-    # The output is a list of AD User accounts that match the given User.
+    Search-AD will output an object of the search results if the $TextResults variable is false. If the $TextResults variable is true, then Search-AD will output the search results in text format.
 
     .NOTES
+    Need to add the ability to search without asking the user for input.
 
     #>
     Param(
         [Parameter(Mandatory=$true,Position=1)]
         [bool]$TextResults
     )
-    # Ask the user for the User to search for.
-    [string]$User = Read-Host "Enter the User to search for"
+    # Ask the user if they want to search for a computer, user or all objects.
+    [string]$SearchType = Read-Host "Do you want to search for a computer, user or all objects? (C/U/A)"
+    # Check if the $SearchType is not equal to 'C', 'U', or 'A', or is empty. The check should be case insensitive.
+    if ($SearchType -ne 'C' -and $SearchType -ne 'U' -and $SearchType -ne 'A' -and $SearchType -ne 'c' -and $SearchType -ne 'u' -and $SearchType -ne 'a' -or $SearchType -eq '') {
+        Write-Host "Warrning: The SearchType given was empty. Defaulting to all Objects" -ForegroundColor Yellow
+        $SearchType = 'A'
+    }
+
+    # Ask the user for the obect name to search for.
+    [string]$AdObect = Read-Host "Enter the name of the User/Computer/Object to search for"
+
     # Confirm the user given string is not empty.
-    if ($User -eq '') {
-        Write-Host "Error: The User given was empty." -ForegroundColor Red
+    if ($AdObect -eq '') {
+        Write-Host "Error: Empty search paramater given." -ForegroundColor Red
         return
     }
-    # Search for the given User in Active Directory.
-    [Object]$SearchResults = Get-AdUser -Filter "(Name -like '*$User*') -and (Enabled -eq 'True')" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
+
+    # If the user wants to search for a computer, then search for the computer.
+    if ($SearchType -eq 'C' -or $SearchType -eq 'c') {
+        # Search for the given Computer in Active Directory.
+        [Object]$SearchResults = Get-AdComputer -Filter "(Name -like '*$AdObect*') -and (Enabled -eq 'True')" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
+    }
+
+    # If the user wants to search for a user, then search for the user.
+    if ($SearchType -eq 'U' -or $SearchType -eq 'u') {
+        # Search for the given User in Active Directory.
+        [Object]$SearchResults = Get-AdUser -Filter "(Name -like '*$AdObect*') -and (Enabled -eq 'True')" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
+    }
+
+    # If the user wants to search for all objects, then search for the object.
+    if ($SearchType -eq 'A' -or $SearchType -eq 'a') {
+        # Search for the given Object in Active Directory.
+        [Object]$SearchResults = Get-AdObject -Filter "(Name -like '*$AdObect*')" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
+    }
+
     # Check if the $SearchResults variable is empty.
     if ($null -eq $SearchResults) {
-        Write-Host "Error: The User '$User' was not found in Active Directory." -ForegroundColor Red
+        Write-Host "Error: '$AdObect' was not found in Active Directory." -ForegroundColor Red
         return
     }
+
     # If the user wants the results in text format, then display the results to the user.
     if ($TextResults) {
-        Write-Host "The following users were found to match in Active Directory:" -ForegroundColor Yellow
+        Write-Host "The following objects were found to match in Active Directory:" -ForegroundColor Yellow
         $SearchResults | Format-List
         return
     }
@@ -1002,7 +1035,13 @@ Function Test-ADSecurityBestPractices {
     Function containing test for security best practices in Active Directory.
 
     .DESCRIPTION
-    Test multiple security best practices in Active Directory.
+    This audit will look for many small security and best practices recommendations. Most of the tests are simple but could leave an AD server open to attack.
+
+    Test performed include the following.
+        - Unprivileged accounts with "adminCount=1" attribute set.
+            REF Link: https://cybergladius.social/@CyberGladius/109649278142902592
+        - Users and computers with non-default Primary Group IDs.
+        - Disabled accounts with Group Membership other than 'Domain Users' group.
 
     .EXAMPLE
     Test-ADSecurityBestPractices

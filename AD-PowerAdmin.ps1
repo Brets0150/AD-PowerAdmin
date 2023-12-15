@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+#  Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     A collection of functions to help manage, and harden Windows Active Directory.
@@ -36,11 +36,14 @@ Param (
     [Parameter(ParameterSetName='Unattend',Mandatory=$false)][string]$JobVar1
 )
 
-# Get this files full path and name and put it in a variable.
+# Get this files full path and name(C:\Scripts\AD-PowerAdmin\AD-PowerAdmin.ps1) and put it in a variable.
 [string]$global:ThisScript = ([io.fileinfo]$MyInvocation.MyCommand.Definition).FullName
 
-# Parse the $global:ThisScript variable to get the directory path without the script name.
+# Parse the $global:ThisScript variable to get the directory path without the script name(C:\Scripts\AD-PowerAdmin).
 [string]$global:ThisScriptDir = $global:ThisScript.Split("\\")[0..($global:ThisScript.Split("\\").Count - 2)] -join "\\"
+
+# Get this scripts name(AD-PowerAdmin.ps1) and put it in a variable.
+[string]$global:ThisScriptsName = $global:ThisScript.Split("\\")[-1]
 
 # Set Module path
 [string]$global:ModulesPath = "$global:ThisScriptDir\\Modules"
@@ -264,14 +267,15 @@ function Enter-MainMenu {
     # Call the Show-Logo function to display the logo.
     Clear-Host
     Show-Logo
-    # Set the menu number counter to 0.
-    [int]$MenuIndex = 0
+
     [array]$MenuObjects = @()
+    [int]$MenuIndex = 0
+    # Track the max length of the menu options to make the menu look nice.
     [int]$OptionsMaxTextLength = 0
 
     # Build a user select menu from the $global:Menu variable. Foreach item in the $global:Menu variable, create a number for the user to select, next to the number display the "FunctionName" ' -- ' "Label".
     # The $global:Menu variable is populated by the Initialize-Module function in each module.
-    foreach ($MenuItem in $global:Menu.GetEnumerator()) {
+    foreach ( $MenuItem in $( $global:Menu.GetEnumerator() | Sort-Object {$_.Value.Title} ) ) {
         # Increment the menu number counter by 1.
         $MenuIndex++
         # Create a new object to store the menu item.
@@ -296,8 +300,8 @@ function Enter-MainMenu {
 
         # Add the object to the $MenuObjects variable.
         $MenuObjects += $MenuItemObject
-
     }
+    # Set the $MaxLabelLength variable to the $global:OptionsMaxTextLength - $OptionsMaxTextLength to make the menu look nice.
     $MaxLabelLength = $global:OptionsMaxTextLength - $OptionsMaxTextLength
 
     # Foreach item in the $global:MenuObjects variable, increment the $MenuNumber counter by 1 and output the $MenuNumber $_.Values.FunctionName $_.Values.Label
