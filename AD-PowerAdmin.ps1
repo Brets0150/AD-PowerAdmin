@@ -15,7 +15,6 @@
 
 .EXAMPLE
     PS> git clone https://github.com/Brets0150/AD-PowerAdmin.git
-    # Edit the config file "AD-PowerAdmin_settings.ps1" to your liking.
     PS> cd AD-PowerAdmin
     # Edit the config file "AD-PowerAdmin_settings.ps1" to your liking.
     PS> .\AD-PowerAdmin.ps1

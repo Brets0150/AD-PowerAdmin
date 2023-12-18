@@ -282,7 +282,7 @@ Function Get-ADUserAudit {
     }
 }
 
-Function Search-ADComputerInDefaultFolder {
+Function Get-ADComputerInDefaultFolder {
     <#
     .SYNOPSIS
     Function that will check is there are any AD COmputer objects in the default Computer folder.
@@ -308,17 +308,25 @@ Function Search-ADComputerInDefaultFolder {
     Needs to be tested. Not done.
 
     #>
-    Write-Host "Testing for AD Computers in the default 'Computers' folder, all computers" -ForegroundColor Yellow
-    Write-Host "should be sorted into OUs to ensure they are getting all the corrent GPOs applied." -ForegroundColor Yellow
+
+    $Count = 0
+
     # Get a list of all AD Computers
     $ADComputers = Get-ADComputer -Filter * -Properties Name, SamAccountName, DistinguishedName, ObjectClass -ErrorAction:SilentlyContinue
+
     # Loop through each AD Computer
     $ADComputers | ForEach-Object {
         # If the AD Computer is in the default "Computers" folder, then it is not in the default "Computers" folder.
         if ($_.DistinguishedName -like "CN=$($_.Name),CN=Computers,$($(Get-ADDomain).DistinguishedName)") {
             # If the AD Computer is in the default "Computers" folder, then it is not in the default "Computers" folder.
             Write-Host "AD Computer '$($_.Name)' is in the default 'Computers' folder" -ForegroundColor Red
+            $Count++
         }
+    }
+
+    # If $Count is 0, then no AD Computers were found in the default "Computers" folder.
+    if ($Count -eq 0) {
+        Write-Host "No AD Computers were found in the default 'Computers' folder." -ForegroundColor Green
     }
  # End of Search-ADComputerInDefaultFolder function
 }
@@ -350,17 +358,27 @@ Function Search-ADUserNonDefaultPrimaryGroup {
 
     #>
 
+    # Set a count to 0
+    $Count = 0
     # Get a list of all AD Users
     $ADUsers = Get-ADUser -Filter * -Properties Name, SamAccountName, DistinguishedName, PrimaryGroupID -ErrorAction:SilentlyContinue
     # Loop through each AD User
-    $ADUsers | ForEach-Object {
+    ForEach ($ADUser in $ADUsers) {
         # If the PrimaryGroupID is not 513, then the user is not in the default "Domain Users" group.
-        if ($_.PrimaryGroupID -ne 513) {
-            # If the user account has the guest $_.DistinguishedName, and is in the 514 group, and has the $_.Name of guest, then skip the user.
-            if ($_.DistinguishedName -eq "CN=Guest,CN=Users,$($(Get-ADDomain).DistinguishedName)" -And $_.PrimaryGroupID -eq 514 -And $_.Name -eq "Guest") { return }
+        if ($ADUser.PrimaryGroupID -ne 513) {
+
+            # If the user account has the guest $ADUser.DistinguishedName, and is in the 514 group, and has the $_.Name of guest, then skip the user.
+            if ($ADUser.DistinguishedName -eq "CN=Guest,CN=Users,$($(Get-ADDomain).DistinguishedName)" -And $ADUser.PrimaryGroupID -eq 514 -And $ADUser.Name -eq "Guest") { continue }
+
             # Write the AD User's details to the console
-            Write-Host "User: $($_.Name) ($($_.SamAccountName)) DistinguishedName: $($_.DistinguishedName) IN PrimaryGroupID: $($_.PrimaryGroupID)" -ForegroundColor Red
+            Write-Host "User: $($ADUser.Name) ($($ADUser.SamAccountName)) DistinguishedName: $($ADUser.DistinguishedName) IN PrimaryGroupID: $($ADUser.PrimaryGroupID)" -ForegroundColor Red
+
+            $Count++
         }
+    }
+    # If $Count is 0, then no AD Users were found with a non-default Primary Group ID.
+    if ($Count -eq 0) {
+        Write-Host "No AD Users were found with a non-default Primary Group ID." -ForegroundColor Green
     }
 
  # End of Search-ADUserNonDefaultPrimaryGroup function
@@ -700,56 +718,6 @@ Function Search-MultipleInactiveUsers {
 # End of Search-MultipleInactiveUsers function
 }
 
-Function Get-ADUserNestedGroups {
-    <#
-    .SYNOPSIS
-    A Function to get all recursive groups a user belongs, and return a list of all groups the user in.
-
-    .DESCRIPTION
-
-    .EXAMPLE
-    Get-ADUserNestedGroups -DistinguishedName "CN=Test User,OU=Users,DC=EXAMPLE,DC=COM"
-
-    .INPUTS
-    Get-ADUserNestedGroups does not take pipeline input.
-
-    .OUTPUTS
-    The output is a list of all recursive groups a user belongs.
-
-    .NOTES
-
-    #>
-
-    Param
-    (
-    [Parameter(Mandatory=$true,Position=1)]
-    [string]$DistinguishedName,
-    [Parameter(Mandatory=$false,Position=2)]
-    [array]$Groups = @()
-    )
-
-    #Get the AD object, and get group membership.
-    $ADObject = Get-ADObject -Filter "DistinguishedName -eq '$DistinguishedName'" -Properties memberOf, DistinguishedName
-    #If object exists.
-    If($ADObject){
-        #Enummurate through each of the groups.
-        Foreach($GroupDistinguishedName in $ADObject.memberOf){
-            #Get member of groups from the enummerated group.
-            $CurrentGroup = Get-ADObject -Filter "DistinguishedName -eq '$GroupDistinguishedName'" -Properties memberOf, DistinguishedName
-            #Check if the group is already in the array.
-            If(($Groups | Where-Object {$_.DistinguishedName -eq $GroupDistinguishedName}).Count -eq 0){
-                # Add group to array.
-                $Groups +=  $CurrentGroup
-                # Get recursive groups.
-                $Groups = Get-ADUserNestedGroups -DistinguishedName $GroupDistinguishedName -Groups $Groups
-            }
-        }
-    }
-    #Return groups.
-    Return $Groups
-#End of the Get-ADUserNestedGroups function.
-}
-
 function Search-DisabledADAccountWithGroupMembership {
     <#
     .SYNOPSIS
@@ -778,17 +746,28 @@ function Search-DisabledADAccountWithGroupMembership {
         Write-Host "Error: No disabled AD accounts were found." -ForegroundColor Yellow
         return
     }
-    # Check if the disabled AD accounts are a member of any group other than the "Domain Users" group.
-    Write-Host "Checking if the disabled AD accounts are a member of any group other than the 'Domain Users' group." -ForegroundColor Yellow
+
     # Loop through each disabled AD account.
     foreach ($DisabledADAccount in $SearchResults) {
+
         # Get the disabled AD account's groups.
-        [Object]$DisabledADAccountGroups = Get-ADPrincipalGroupMembership -Identity $DisabledADAccount.DistinguishedName
+        [Object]$DisabledADAccountGroupMemberships = Get-ADPrincipalGroupMembership -Identity $DisabledADAccount.DistinguishedName
 
         # Create a list variable to store the disabled AD account's groups.
         [Object]$DisabledADAccountGroupsList = @()
         # Loop through each disabled AD account's group and add it to the $DisabledADAccountGroupsList variable if it is not the "Domain Users" group.
-        foreach ($DisabledADAccountGroup in $DisabledADAccountGroups) {
+        foreach ($DisabledADAccountGroup in $DisabledADAccountGroupMemberships) {
+
+            # If the disabled AD account is Guest, and the group is the "Guests", or Domain Guests group, then continue to the next group.
+            if ($DisabledADAccount.Name -eq 'Guest' -and ($DisabledADAccountGroup.Name -eq 'Guests' -or $DisabledADAccountGroup.Name -eq 'Domain Guests')) { continue }
+
+            # If the disabled AD account is krbtgt, and the group is the "Denied RODC Password Replication Group" group, then continue to the next group.
+            if ($DisabledADAccount.Name -eq 'krbtgt' -and $DisabledADAccountGroup.Name -eq 'Denied RODC Password Replication Group') { continue }
+
+            # If the disabled AD account is DefaultAccount, and the group is the "System Managed Accounts Group" group, then continue to the next group.
+            if ($DisabledADAccount.Name -eq 'DefaultAccount' -and $DisabledADAccountGroup.Name -eq 'System Managed Accounts Group') { continue }
+
+            # For all other groups that are not the "Domain Users" group, add the group to the $DisabledADAccountGroupsList variable.
             if ($DisabledADAccountGroup.Name -ne 'Domain Users') {
                 $DisabledADAccountGroupsList += $DisabledADAccountGroup.Name
             }
@@ -822,17 +801,19 @@ function Search-ADUserAdminCountHighPrivilegedGroups {
     Search-ADUserAdminCountHighPrivilegedGroups does not take pipeline input.
 
     .OUTPUTS
-    The output is a list of AD User accounts with attributes "adminCount" = 1 that are not a member of any high privileged groups.
+    None.
 
     .NOTES
 
     #>
 
+    $Count = 0
+
     # Search for all AD User accounts with attributes "adminCount" = 1.
-    [Object]$SearchResults = Get-AdUser -Filter "adminCount -eq 1" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
+    [Object]$ADUsersWAdmCount = Get-AdUser -Filter "adminCount -eq 1" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
     # Check if the $SearchResults variable is empty.
-    if ($null -eq $SearchResults) {
-        return $null
+    if ($null -eq $ADUsersWAdmCount) {
+        continue
     }
     # Create an array of all high privileged groups.
     [array]$HighPrivilegedGroups = @("Domain Admins", "Enterprise Admins", "Administrators", "Schema Admins", "Backup Operators", "Account Operators", "Server Operators", "Domain Controllers", "Print Operators", "Replicator", "Enterprise Key Admins", "Key Admins")
@@ -842,21 +823,27 @@ function Search-ADUserAdminCountHighPrivilegedGroups {
         Get-ADGroupMember -Identity $_
     }
     # Check if the user is a member of any high privileged groups.
-    [Object]$SearchResults | ForEach-Object {
+    ForEach ($ADUser in $ADUsersWAdmCount) {
         # Test if the current user is a member of any high privileged groups. If the user is a member of any high privileged groups, then continue to the next user.
-        if ($HighPrivilegedGroupsMembers.distinguishedName -contains $_.distinguishedName ) { return }
+        if ($HighPrivilegedGroupsMembers.distinguishedName -contains $ADUser.distinguishedName ) { continue }
         # If the current user name is krbtgt, then continue to the next user.
-        if ($_.Name -eq 'krbtgt') { return }
+        if ($ADUser.Name -eq 'krbtgt') { continue }
         # If the loop has not been continued, then the user is not a member of any high privileged groups.
         # The user account attributes "adminCount" = 1 should be cleared.
         # Ask the user if they want to clear the user account attributes "adminCount" = 1.
-        Write-Host "The user '$($_.Name)' ('$($_.DistinguishedName)') has attributes 'adminCount' = 1 but is not a member of any high privileged groups." -ForegroundColor Yellow
-        [string]$ClearAdminCount = Read-Host "Do you want to clear the user account attributes 'adminCount' = 1? (Y/N):"
+        Write-Host "The user '$($ADUser.Name)' ('$($ADUser.DistinguishedName)') has attributes 'adminCount' = 1 but is not a member of any high privileged groups." -ForegroundColor Yellow
+        [string]$ClearAdminCount = Read-Host "Do you want to clear the user account attributes 'adminCount' = 1? (default=Y, Y/n)"
         # Check if the user wants to clear the user account attributes "adminCount" = 1. If yes, then set the user account attributes "adminCount" = <not set>.
-        if ($ClearAdminCount -eq 'Y' -or $ClearAdminCount -eq 'y') {
-            Set-ADUser -Identity $_.DistinguishedName -Clear adminCount
-            Write-Host "The user account attributes 'adminCount' = 1 for the user '$($_.Name)' has been cleared." -ForegroundColor Green
+        if ($ClearAdminCount -eq 'Y' -or $ClearAdminCount -eq 'y' -or $ClearAdminCount -eq '') {
+            Set-ADUser -Identity $ADUser.DistinguishedName -Clear adminCount
+            Write-Host "The user account attributes 'adminCount' = 1 for the user '$($ADUser.Name)' has been cleared." -ForegroundColor Green
         }
+        # Increment the $Count variable by 1.
+        $Count++
+    }
+    # If $Count is 0, then no AD Users were found with attributes "adminCount" = 1.
+    if ($Count -eq 0) {
+        Write-Host "No AD Users were found with attributes 'adminCount' = 1." -ForegroundColor Green
     }
 # End of the Search-ADUserAdminCountHighPrivilegedGroups function.
 }
@@ -900,6 +887,120 @@ function Search-DefaultDomainPolicy {
     Write-Host "The following GPO settings were found to match in the Default Domain Policy:" -ForegroundColor Yellow
     $SearchResults | Format-List
     return
+}
+
+function Search-ObjectWithDCSyncRisk {
+    <#
+    .SYNOPSIS
+    Function to search for AD objects with DCSync permissions.
+
+    .DESCRIPTION
+    Get a list of AD objects with DCSync permissions. Then enumerate all members of the AD objects that inharet DCSync permissions.
+
+    .EXAMPLE
+    Search-ObjectWithDCSyncRisk  | Format-List
+
+    .NOTES
+    If you do not pipe the output of this function to a Format command, then it will not display anything. I pulled my hair out for a while trying to figure out why it was not displaying anything, then I piped it to a Format command and it worked.
+    So if you want to see the output, then pipe it to a Format command.
+    Example: Search-ObjectWithDCSyncRisk  | Format-List or Search-ObjectWithDCSyncRisk  | Format-Table
+    DONT DO THIS: Search-ObjectWithDCSyncRisk
+    #>
+
+    # Get the Domain distinguished path.
+    $ADPath = "AD:$($(Get-ADDomain).DistinguishedName)"
+
+    # Get the access control list (ACL) for the specified Active Directory path
+    $ACLs = Get-Acl "$ADPath"
+
+    # Create a variable to store the accounts with DCSync permissions.
+    [Object]$DCSyncPermissionObjects = @()
+
+    <# Get all objects with enough DCSync permissions to perform a DCSync attack.
+
+     Here is the URL to MS documentation on the permissions: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-adts/1522b774-6464-41a3-87a5-1e5633c3fbbb
+     "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2" = DS-Replication-Get-Changes
+     "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2" = DS-Replication-Get-Changes-All
+     "89e95b76-444d-4c62-991a-0facbeda640c" = DS-Replication-Get-Changes-In-Filtered-Set
+     "WriteDacl" = Write DACL
+     "GenericAll" = Generic All
+
+     If I missed any, please let me know.
+    #>
+
+    foreach ($ACL in $ACLs.Access) {
+        if ($ACL.IdentityReference -and (
+            $ACL.ObjectType -eq "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2" -or
+            $ACL.ObjectType -eq "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2" -or
+            $ACL.ObjectType -eq "89e95b76-444d-4c62-991a-0facbeda640c" -or
+            $ACL.ActiveDirectoryRights -contains "WriteDacl" -or
+            $ACL.ActiveDirectoryRights -contains "GenericAll"
+        )) {
+            # Add the account to the $AccountsWithDCSyncPermissions variable.
+            $DCSyncPermissionObjects += $ACL
+        }
+    }
+
+    # Set the $DCSyncRiskObjects variable to an empty array.
+    [array]$DCSyncRiskObjects = @()
+
+    # Foreach AD object in $ObjectWithDCSyncPermissions, get all members of the group and put it in a new variable.
+    ForEach ($ObjectName in $($DCSyncPermissionObjects | Select-Object -Unique -ExpandProperty IdentityReference)) {
+
+        # Split the account name into domain and name
+        $Domain, $SAMName = $ObjectName -split '\\', 2
+
+        # If the $Domain is 'NT AUTHORITY', then continue to the next account. This is a "SYSTEM" & "ENTERPRISE DOMAIN CONTROLLERS" account. There is no way(that I know of) to get the account object for this account.
+        if ( "$Domain" -eq 'NT AUTHORITY' ) { continue }
+
+        # Get the AD object by using the SamAccountName.
+        $ADObject = Get-ADObject -Filter {SamAccountName -eq $SAMName} -Properties SamAccountName, DistinguishedName, ObjectClass
+
+        # If the $ADObject is empty, then continue to the next account.
+        if (-not $ADObject) { Write-Host "Account $ObjectName not found"; continue }
+
+        # If the $ADObject has a ObjectClass of "group", recursively get all members of the group and put it in a new variable.
+        if ($ADObject.ObjectClass -eq 'group') {
+            # Recursive look up all members of the group.
+            $GroupsMemberUsers = Get-ADGroupMember -Recursive -Identity $ADObject.DistinguishedName
+
+            # Foreach AD Object(User, Computer, ServiceAccount) in $GroupsMemberUsers get the object details SamAccountName, DistinguishedName, and ObjectClass, add them to the $ADUsers variable.
+            foreach ($Object in $GroupsMemberUsers) {
+                # Get the AD object details.
+                $ADData = Get-ADObject -Filter {distinguishedName -eq $Object.DistinguishedName} -Properties SamAccountName, DistinguishedName, ObjectClass
+
+                # Create a new temporary object to store the AD object details.
+                [object]$ADUserData = New-Object -TypeName PSObject
+                $ADUserData | Add-Member -MemberType NoteProperty -Name "SamAccountName" -Value $ADData.SamAccountName
+                $ADUserData | Add-Member -MemberType NoteProperty -Name "DistinguishedName" -Value $ADData.DistinguishedName
+                $ADUserData | Add-Member -MemberType NoteProperty -Name "ObjectClass" -Value $ADData.ObjectClass
+                $ADUserData | Add-Member -MemberType NoteProperty -Name "InheritedPermissionsFrom" -Value $ObjectName
+
+                # Add the temporary object to the $DCSyncRiskObjects variable.
+                $DCSyncRiskObjects += $ADUserData
+                # Clear the temporary object.
+                Clear-Variable ADUserData, ADData
+            }
+        }
+        # If the $ADObject has a ObjectClass of user, Get the user account SAM name, distinguished name, and last login date.
+        if ($ADObject.ObjectClass -ne 'group') {
+            $ADData = Get-ADObject -Filter {distinguishedName -eq $Object.DistinguishedName} -Properties SamAccountName, DistinguishedName, ObjectClass
+
+            # Create a new temporary object to store the AD object details.
+            [object]$ADUserData = New-Object -TypeName PSObject
+            $ADUserData | Add-Member -MemberType NoteProperty -Name "SamAccountName" -Value $ADData.SamAccountName
+            $ADUserData | Add-Member -MemberType NoteProperty -Name "DistinguishedName" -Value $ADData.DistinguishedName
+            $ADUserData | Add-Member -MemberType NoteProperty -Name "ObjectClass" -Value $ADData.ObjectClass
+            $ADUserData | Add-Member -MemberType NoteProperty -Name "InheritedPermissionsFrom" -Value $ObjectName
+
+            # Add the temporary object to the $DCSyncRiskObjects variable.
+            $DCSyncRiskObjects += $ADUserData
+            # Clear the temporary object.
+            Clear-Variable ADUserData, ADData
+        }
+    }
+    #Return the $DCSyncRiskObjects variable.
+    $DCSyncRiskObjects
 }
 
 function Search-DisabledObjects {
@@ -1038,10 +1139,11 @@ Function Test-ADSecurityBestPractices {
     This audit will look for many small security and best practices recommendations. Most of the tests are simple but could leave an AD server open to attack.
 
     Test performed include the following.
-        - Unprivileged accounts with "adminCount=1" attribute set.
+        - Find, w/ option to fix, unprivileged accounts with "adminCount=1" attribute set.
             REF Link: https://cybergladius.social/@CyberGladius/109649278142902592
-        - Users and computers with non-default Primary Group IDs.
+        - Users and computers with non-default Primary Group IDs(A method of hiding backdoor accounts).
         - Disabled accounts with Group Membership other than 'Domain Users' group.
+        - Computers in the default "Computers" folder. Unsorted computers will likely be missing GPOs.
 
     .EXAMPLE
     Test-ADSecurityBestPractices
@@ -1055,6 +1157,11 @@ Function Test-ADSecurityBestPractices {
     .NOTES
 
     #>
+
+    # Test for DCSync permissions.
+    Write-Host "The following AD Objects have DCSync permissions and could be used to perform a DCSync Attack." -ForegroundColor Yellow
+    Write-Host "Some or all of these AD Objects with DCSync permissions may be completely expected, depend on your environment." -ForegroundColor Yellow
+    Search-ObjectWithDCSyncRisk | Format-List
 
     Write-Host "======================================================================================" -ForegroundColor White
     # Test for Unprivileged accounts with adminCount=1, use the Search-ADUserAdminCountHighPrivilegedGroups function.
@@ -1074,8 +1181,19 @@ Function Test-ADSecurityBestPractices {
 
     # Test for Computers in the default "Computers" folder.
     Write-Host "Testing for Computers in the default 'Computers' folder" -ForegroundColor Yellow
-    Search-ADComputerInDefaultFolder
+    Get-ADComputerInDefaultFolder
     Write-Host "======================================================================================" -ForegroundColor White
+
+    # Test for inactive users.
+    Write-Host "Testing for inactive users" -ForegroundColor Yellow
+    Search-MultipleInactiveUsers -InactiveUsersLocations $global:InactiveUsersLocations -InactiveDays $global:InactiveDays -ReportOnly $true
+    Write-Host "======================================================================================" -ForegroundColor White
+
+    # Test for inactive computers.
+    Write-Host "Testing for inactive computers" -ForegroundColor Yellow
+    Search-MultipleInactiveComputers -InactiveComputersLocations $global:InactiveComputersLocations -InactiveDays $global:InactiveDays -ReportOnly $true
+    Write-Host "======================================================================================" -ForegroundColor White
+
 # End of Test-ADSecurityBestPractices function
 }
 
@@ -1124,3 +1242,4 @@ function Start-DailyInactiveComputerAudit {
     }
 # End of Start-DailyInactiveUserAudit function
 }
+

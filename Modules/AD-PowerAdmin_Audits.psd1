@@ -12,7 +12,7 @@
     RootModule = 'AD-PowerAdmin_Audits.psm1'
 
     # Version number of this module.
-    ModuleVersion = '0.1'
+    ModuleVersion = '1.1'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -41,6 +41,10 @@
     - Search-ADComputerInDefaultFolder
     - Search-ADUserNonDefaultPrimaryGroup
     - Search-MultipleInactiveComputers
+    - Search-MultipleInactiveUsers
+    - Start-DailyInactiveComputerAudit
+    - Start-DailyInactiveUserAudit
+    - Search-ObjectWithDCSyncRisk
 '@
 
     # Minimum version of the Windows PowerShell engine required by this module
@@ -122,8 +126,9 @@
 
             # ReleaseNotes of this module
             ReleaseNotes = @'
-            v1.0:
-            - Migrate from old methods to new methods.
+            Change Log:
+                v1.0: Updated old code to work within new framework.
+                v1.1: Added Search-ObjectWithDCSyncRisk. This function adds to the Test-ADSecurityBestPractices series and will search for objects that have the DCSync permission that could be abused by an attacker.
 '@
 
         } # End of PSData hashtable
