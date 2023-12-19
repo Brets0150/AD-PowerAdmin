@@ -58,7 +58,6 @@ Function Get-DownloadFile {
     # End of Get-DownloadFile function
 }
 
-
 Function New-ScheduledTask {
     <#
     .SYNOPSIS
@@ -137,7 +136,6 @@ Function New-ScheduledTask {
 
     #End of New-ScheduledTask function
 }
-
 
 # A Function that takes in "TO" and "FROM" email addresses and a subject line and sends an email with the contents of the $ReportData variable.
 Function Send-Email {

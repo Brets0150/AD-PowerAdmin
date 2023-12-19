@@ -331,6 +331,71 @@ Function Get-ADComputerInDefaultFolder {
  # End of Search-ADComputerInDefaultFolder function
 }
 
+Function Get-ADUserNestedGroups {
+    <#
+    .SYNOPSIS
+    Function to get all groups a user is a member of, including nested groups.
+
+    .DESCRIPTION
+    Get a list of the unique groups a user is a member of, including nested groups.
+
+    .EXAMPLE
+    #The user to check.
+    $User = "CN=Aaron Williams,OU=Datacenter,OU=US,OU=Network.Users,OU=Wow.Users,DC=wowlan,DC=com";
+
+    #Get all groups.
+    $Groups = Get-ADUserNestedGroups -DistinguishedName (Get-ADUser -Identity $User).DistinguishedName;
+
+    #Output all groups.
+    $Groups | Select-Object Name | Sort-Object -Property Name;
+
+    .NOTES
+    This function is used by the Search-ObjectWithDCSyncRisk function.
+
+    #>
+
+    Param(
+        [string]$DistinguishedName,
+        [array]$Groups = @()
+    )
+
+    #Get the AD object, and get group membership.
+    $ADObject = Get-ADObject -Filter "DistinguishedName -eq '$DistinguishedName'" -Properties memberOf, DistinguishedName;
+
+    # If object does not exist, display an error message, and exit the function.
+    if ($null -eq $ADObject) {
+        Write-Host "Error: The object specified in the DistinguishedName parameter does not exist in the Active Directory Domain." -ForegroundColor Red
+        return
+    }
+
+    #If object exists.
+    If($ADObject)
+    {
+        #Enummurate through each of the groups.
+        Foreach($GroupDistinguishedName in $ADObject.memberOf)
+        {
+            #Get member of groups from the enummerated group.
+            $CurrentGroup = Get-ADObject -Filter "DistinguishedName -eq '$GroupDistinguishedName'" -Properties memberOf, DistinguishedName;
+
+            #Check if the group is already in the array.
+            If(($Groups | Where-Object {$_.DistinguishedName -eq $GroupDistinguishedName}).Count -eq 0)
+            {
+                # Add group to array.
+                $Groups +=  $CurrentGroup;
+
+                #Get recursive groups.
+                $Groups = Get-ADUserNestedGroups -DistinguishedName $GroupDistinguishedName -Groups $Groups;
+            }
+        }
+    }
+
+    # Filter $Groups to be unique and sorted by name.
+    $Groups = $Groups | Select-Object -Unique | Select-Object Name | Sort-Object -Property Name;
+    #Return groups.
+    Return $Groups;
+# End of Get-ADUserNestedGroups function
+}
+
 Function Search-ADUserNonDefaultPrimaryGroup {
     <#
     .SYNOPSIS
@@ -1000,7 +1065,7 @@ function Search-ObjectWithDCSyncRisk {
         }
     }
     #Return the $DCSyncRiskObjects variable.
-    $DCSyncRiskObjects
+    return $DCSyncRiskObjects
 }
 
 function Search-DisabledObjects {
