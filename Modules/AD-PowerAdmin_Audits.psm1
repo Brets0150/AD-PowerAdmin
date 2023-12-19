@@ -331,7 +331,7 @@ Function Get-ADComputerInDefaultFolder {
  # End of Search-ADComputerInDefaultFolder function
 }
 
-Function Get-ADUserNestedGroups {
+Function Get-ADUserMemberOf {
     <#
     .SYNOPSIS
     Function to get all groups a user is a member of, including nested groups.
@@ -341,10 +341,10 @@ Function Get-ADUserNestedGroups {
 
     .EXAMPLE
     #The user to check.
-    $User = "CN=Aaron Williams,OU=Datacenter,OU=US,OU=Network.Users,OU=Wow.Users,DC=wowlan,DC=com";
+    $User = "CN=James Bond,OU=Techs,OU=US,OU=Network,OU=Users,DC=example,DC=com";
 
     #Get all groups.
-    $Groups = Get-ADUserNestedGroups -DistinguishedName (Get-ADUser -Identity $User).DistinguishedName;
+    $Groups = Get-ADUserMemberOf -DistinguishedName (Get-ADUser -Identity $User).DistinguishedName;
 
     #Output all groups.
     $Groups | Select-Object Name | Sort-Object -Property Name;
@@ -384,7 +384,7 @@ Function Get-ADUserNestedGroups {
                 $Groups +=  $CurrentGroup;
 
                 #Get recursive groups.
-                $Groups = Get-ADUserNestedGroups -DistinguishedName $GroupDistinguishedName -Groups $Groups;
+                $Groups = Get-ADUserMemberOf -DistinguishedName $GroupDistinguishedName -Groups $Groups;
             }
         }
     }
