@@ -45,6 +45,7 @@
     - Start-DailyInactiveComputerAudit
     - Start-DailyInactiveUserAudit
     - Search-ObjectWithDCSyncRisk
+    - Test-PasswordPolicy
 '@
 
     # Minimum version of the Windows PowerShell engine required by this module
@@ -129,6 +130,7 @@
             Change Log:
                 v1.0: Updated old code to work within new framework.
                 v1.1: Added Search-ObjectWithDCSyncRisk. This function adds to the Test-ADSecurityBestPractices series and will search for objects that have the DCSync permission that could be abused by an attacker.
+                      Added Test-PasswordPolicy. This function adds to the Test-ADSecurityBestPractices series and will test the password policy of the domain.
 '@
 
         } # End of PSData hashtable

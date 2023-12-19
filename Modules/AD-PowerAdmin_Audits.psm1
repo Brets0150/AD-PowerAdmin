@@ -219,13 +219,13 @@ Function Get-ADAdminAudit {
         } elseif ($_.ObjectClass -eq "computer") {
             # Get the AD Computer's details
             Get-ADComputer -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate -ErrorAction:SilentlyContinue
-        } elseif ($_.ObjectClass -eq "groupManagedServiceAccount") {
+        } elseif ($_.ObjectClass -like '*ManagedServiceAccount') {
             # Get the AD Group Managed Service Account's details
             Get-ADServiceAccount -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate -ErrorAction:SilentlyContinue
         }
     }
     # Ask the user if they want to export the results to a CSV file.
-    $ExportResults = Read-Host "Would you like to export the results to a CSV file? (Y/N)"
+    $ExportResults = Read-Host "Would you like to export the results to a CSV file? (Default:N, y/N)"
     # If the user enters "Y" or "y", then export the results to a CSV file.
     if ($ExportResults -eq "Y" -or $ExportResults -eq "y") {
         # Get the current datetime and put it in a variable.
@@ -895,7 +895,7 @@ function Search-ObjectWithDCSyncRisk {
     Function to search for AD objects with DCSync permissions.
 
     .DESCRIPTION
-    Get a list of AD objects with DCSync permissions. Then enumerate all members of the AD objects that inharet DCSync permissions.
+    Get a list of AD objects with DCSync permissions by pulling the ACLs from the domain. Then enumerate all members of the AD objects that inharet DCSync permissions.
 
     .EXAMPLE
     Search-ObjectWithDCSyncRisk  | Format-List
@@ -1138,7 +1138,9 @@ Function Test-ADSecurityBestPractices {
     .DESCRIPTION
     This audit will look for many small security and best practices recommendations. Most of the tests are simple but could leave an AD server open to attack.
 
-    Test performed include the following.
+    Test performed include the following
+        - AD Password Policy review.
+        - Audit AD objects that pose a risk of DCSync attack.
         - Find, w/ option to fix, unprivileged accounts with "adminCount=1" attribute set.
             REF Link: https://cybergladius.social/@CyberGladius/109649278142902592
         - Users and computers with non-default Primary Group IDs(A method of hiding backdoor accounts).
@@ -1157,6 +1159,11 @@ Function Test-ADSecurityBestPractices {
     .NOTES
 
     #>
+
+    # Test for the AD Password Policy.
+    Write-Host "Testing the AD Password Policy" -ForegroundColor White
+    Test-PasswordPolicy
+    Write-Host "======================================================================================" -ForegroundColor White
 
     # Test for DCSync permissions.
     Write-Host "The following AD Objects have DCSync permissions and could be used to perform a DCSync Attack." -ForegroundColor Yellow
@@ -1194,7 +1201,109 @@ Function Test-ADSecurityBestPractices {
     Search-MultipleInactiveComputers -InactiveComputersLocations $global:InactiveComputersLocations -InactiveDays $global:InactiveDays -ReportOnly $true
     Write-Host "======================================================================================" -ForegroundColor White
 
+    # Run a password audit. This test uses the Get-PasswordAuditAdminReport function from the "AD-PowerAdmin_PasswordAudit.psm1" module.
+    Write-Host "Running a password audit" -ForegroundColor Yellow
+    Get-PasswordAuditAdminReport
 # End of Test-ADSecurityBestPractices function
+}
+
+Function Test-PasswordPolicy {
+    <#
+    .SYNOPSIS
+    Function to test the AD Password Policy.
+
+    .DESCRIPTION
+    Get the current domain password policy settings, then review the settings and display any settings that are not set to the recommended values.
+
+    .EXAMPLE
+    Test-PasswordPolicy
+
+    .INPUTS
+    Test-PasswordPolicy does not take pipeline input.
+
+    .OUTPUTS
+    None.
+
+    .NOTES
+
+    #>
+
+    $PasswordPolicy = Get-ADDefaultDomainPasswordPolicy
+
+    # Check if the $PasswordPolicy variable is empty.
+    if ($null -eq $PasswordPolicy) {
+        Write-Host "Error: The Password Policy was not found." -ForegroundColor Red
+        return
+    }
+
+    # Check if the Password Policy settings are set to the recommended values.
+    # Check if the Password Policy setting "ComplexityEnabled" is set to $true.
+    if ($PasswordPolicy.ComplexityEnabled -eq $true) {
+        Write-Host "The Password Policy setting 'ComplexityEnabled' is set to $($PasswordPolicy.ComplexityEnabled). Good!" -ForegroundColor Green
+    } else {
+        Write-Host "The Password Policy setting 'ComplexityEnabled' is set to $($PasswordPolicy.ComplexityEnabled). This should be set to true." -ForegroundColor Red
+    }
+
+    # Check if the Password Policy setting "LockoutDuration" is set to 00:00:30.
+    if ($PasswordPolicy.LockoutDuration -le '00:30:00') {
+        Write-Host "The Password Policy setting 'LockoutDuration' is set to $($PasswordPolicy.LockoutDuration). Good!" -ForegroundColor Green
+    } else {
+        Write-Host "The Password Policy setting 'LockoutDuration' is set to $($PasswordPolicy.LockoutDuration). This should be set to 00:00:30." -ForegroundColor Red
+    }
+
+    # Check if the Password Policy setting "LockoutObservationWindow" is set to 00:00:30.
+    if ($PasswordPolicy.LockoutObservationWindow -le '00:30:00') {
+        Write-Host "The Password Policy setting 'LockoutObservationWindow' is set to $($PasswordPolicy.LockoutObservationWindow). Good!" -ForegroundColor Green
+    } else {
+        Write-Host "The Password Policy setting 'LockoutObservationWindow' is set to $($PasswordPolicy.LockoutObservationWindow). This should be set to 00:00:30." -ForegroundColor Red
+    }
+
+    # Check if the Password Policy setting "LockoutThreshold" is set to 5.
+    if ($PasswordPolicy.LockoutThreshold -le 5) {
+        Write-Host "The Password Policy setting 'LockoutThreshold' is set to $($PasswordPolicy.LockoutThreshold). Good!" -ForegroundColor Green
+    } else {
+        Write-Host "The Password Policy setting 'LockoutThreshold' is set to $($PasswordPolicy.LockoutThreshold). This should be set to 5." -ForegroundColor Red
+    }
+
+    # Check if the Password Policy setting "MaxPasswordAge" is set to 42.
+    if ($PasswordPolicy.MaxPasswordAge -le '90.00:00:00') {
+        Write-Host "The Password Policy setting 'MaxPasswordAge' is set to $($PasswordPolicy.MaxPasswordAge). Good!" -ForegroundColor Green
+    } else {
+        Write-Host "The Password Policy setting 'MaxPasswordAge' is set to $($PasswordPolicy.MaxPasswordAge)." -ForegroundColor Yellow
+    }
+    Write-Host "The Password Policy setting 'MaxPasswordAge' recommendations have changed recently(2022)." -ForegroundColor Yellow
+    Write-Host "We no longer suggest forcing users to update their passwords every 90-days." -ForegroundColor Yellow
+    Write-Host "If you want to know more read here: https://cybergladius.com/password-policy-best-practices-in-2023/" -ForegroundColor Yellow
+
+    # Check if the Password Policy setting "MinPasswordAge" is set to 1.
+    if ($PasswordPolicy.MinPasswordAge -ge '1.00:00:00') {
+        Write-Host "The Password Policy setting 'MinPasswordAge' is set to $($PasswordPolicy.MinPasswordAge). Good!" -ForegroundColor Green
+    } else {
+        Write-Host "The Password Policy setting 'MinPasswordAge' is set to $($PasswordPolicy.MinPasswordAge). This should be set to 1." -ForegroundColor Red
+    }
+
+    # Check if the Password Policy setting "MinPasswordLength" is set to 14.
+    if ($PasswordPolicy.MinPasswordLength -ge 14) {
+        Write-Host "The Password Policy setting 'MinPasswordLength' is set to $($PasswordPolicy.MinPasswordLength). Good!" -ForegroundColor Green
+    } else {
+        Write-Host "The Password Policy setting 'MinPasswordLength' is set to $($PasswordPolicy.MinPasswordLength). This should be set to 14." -ForegroundColor Red
+    }
+
+    # Check if the Password Policy setting "PasswordHistoryCount" is set to 24.
+    if ($PasswordPolicy.PasswordHistoryCount -ge 24) {
+        Write-Host "The Password Policy setting 'PasswordHistoryCount' is set to $($PasswordPolicy.PasswordHistoryCount). Good!" -ForegroundColor Green
+    } else {
+        Write-Host "The Password Policy setting 'PasswordHistoryCount' is set to $($PasswordPolicy.PasswordHistoryCount). This should be set to 24." -ForegroundColor Red
+    }
+
+    # Check if the Password Policy setting "ReversibleEncryptionEnabled" is set to $false.
+    if ($PasswordPolicy.ReversibleEncryptionEnabled -eq $false) {
+        Write-Host "The Password Policy setting 'ReversibleEncryptionEnabled' is set to $($PasswordPolicy.ReversibleEncryptionEnabled). Good!" -ForegroundColor Green
+    } else {
+        Write-Host "The Password Policy setting 'ReversibleEncryptionEnabled' is set to $($PasswordPolicy.ReversibleEncryptionEnabled). This should be set to false." -ForegroundColor Red
+    }
+
+# End of Test-PasswordPolicy function
 }
 
 function Start-DailyInactiveUserAudit {
@@ -1242,4 +1351,3 @@ function Start-DailyInactiveComputerAudit {
     }
 # End of Start-DailyInactiveUserAudit function
 }
-

@@ -117,250 +117,6 @@ Function Get-ADUserPasswordAge {
 # End of Get-ADUserPasswordAge function
 }
 
-Function Test-PasswordIsComplex {
-    <#
-    .SYNOPSIS
-    FUNCTION: Confirm Generated Password Meets Complexity Requirements
-    Source: https://docs.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/password-must-meet-complexity-requirements
-
-    .DESCRIPTION
-    FUNCTION: Confirm Generated Password Meets Complexity Requirements
-    Source: https://docs.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/password-must-meet-complexity-requirements
-
-    .PARAMETER StringToTest
-    The string to test if it meets the complexity requirements.
-
-    .EXAMPLE
-    Test-PasswordIsComplex -StringToTest "Password123!"
-
-    .NOTES
-
-    #>
-
-    Param(
-        [Parameter(Mandatory=$True,Position=1)]
-        [String]$StringToTest
-    )
-
-	Process {
-		$criteriaMet = 0
-
-		# Upper Case Characters (A through Z, with diacritic marks, Greek and Cyrillic characters)
-		If ($StringToTest -cmatch '[A-Z]') {$criteriaMet++}
-
-		# Lower Case Characters (a through z, sharp-s, with diacritic marks, Greek and Cyrillic characters)
-		If ($StringToTest -cmatch '[a-z]') {$criteriaMet++}
-
-		# Numeric Characters (0 through 9)
-		If ($StringToTest -match '\d') {$criteriaMet++}
-
-		# Special Chracters (Non-alphanumeric characters, currency symbols such as the Euro or British Pound are not counted as special characters for this policy setting)
-		If ($StringToTest -match '[\^~!@#$%^&*_+=`|\\(){}\[\]:;"''<>,.?/]') {$criteriaMet++}
-
-		# Check If It Matches Default Windows Complexity Requirements
-		If ($criteriaMet -lt 3) {Return $false}
-		If ($StringToTest.Length -lt 8) {Return $false}
-		Return $true
-	}
-# End of Test-PasswordIsComplex function
-}
-
-Function New-RandomPassword {
-    <#
-    .SYNOPSIS
-    Function to create a random 64 character long password and return it.
-
-    .DESCRIPTION
-    Function to create a random 64 character long password and return it.
-
-    .EXAMPLE
-    $NewPassword = New-RandomPassword
-
-    .INPUTS
-    None
-
-    .OUTPUTS
-    System.String
-
-    .NOTES
-
-    #>
-
-    param(
-        [Parameter(Mandatory=$False,Position=1)]
-        [int]$PasswordNrChars = 64
-    )
-
-	Process {
-		$Iterations = 0
-        Do {
-			If ($Iterations -ge 20) {
-				EXIT
-			}
-			$Iterations++
-			$pwdBytes = @()
-			$rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
-			Do {
-				[byte[]]$byte = [byte]1
-				$rng.GetBytes($byte)
-				If ($byte[0] -lt 33 -or $byte[0] -gt 126) {
-					CONTINUE
-				}
-                $pwdBytes += $byte[0]
-			}
-			While ($pwdBytes.Count -lt $PasswordNrChars)
-				$NewPassword = ([char[]]$pwdBytes) -join ''
-			}
-        Until (Test-PasswordIsComplex $NewPassword)
-        Return $NewPassword
-	}
-# End of New-RandomPassword function
-}
-
-Function Update-KRBTGTPassword {
-    <#
-    .SYNOPSIS
-    Update the KRBTGT password in the Active Directory Domain.
-
-    .DESCRIPTION
-    === KRBTGT password Check ===
-    This option will check the KRBTGT AD Account password age. If the password age is greater than 90 days, then the password will be updated.
-    If the password age is less than 90 days, then the password will not be updated, unless the force switch is used.
-    During normal operation, the KRBTGT password needs to be updated every 90 days, twice.
-    Every 90 days, update the KRBTGT password, wait 10 hours, then update it again.
-    Alternativly, use this scripts '-Daliy' option to automate this process.
-
-    See my blog post for more details: https://cybergladius.com/ad-hardening-against-kerberos-golden-ticket-attack/
-
-    The menu options are:
-        1. Update the KRBTGT password in the Active Directory Domain if the password
-            is older than the preset number of days(set in the AD-PowerAdmin_settings.ps1).
-            A scheduled task will be created to update the password again in 10 hours.
-        NOTE: This option will not create a scheduled task if AD-PowerAdmin is running not installed!
-
-        2. Force a password change to the KRBTGT account now. There will be NO scheduled task
-            created to update the password again in 10 hours.
-            If you have a breach, run this option twise to invalidate all current tickets.
-            You may see a few things temporarily break, but ligitamate users and computers
-            will be able to re-authenticate.
-
-    .PARAMETER OverridePwd
-    # If the OverridePwd switch is used, then the KRBTGT password will be updated even if the current password last update time is less than 90 days.
-
-    .EXAMPLE
-    Update-KRBTGTPassword
-
-    .NOTES
-
-    #>
-
-    Param(
-        [Parameter(Mandatory=$False,Position=1)]
-        [bool]$OverridePwd
-    )
-
-    # If [bool]$OverridePwd is unset, empty, or null, set it to $false.
-    If ($null -eq $OverridePwd -or $OverridePwd -eq $false -or $OverridePwd -eq "") {
-        $OverridePwd = $false
-    }
-
-    # Get the current domain
-    [string]$Domain = (Get-ADDomain).NetbiosName
-
-    # if the current running user is a member of the Domain Admins group.
-    if ( $null -eq ((Get-ADGroupMember -Identity "Domain Admins") | Where-Object {$_.SamAccountName -eq $env:UserName}) ) {
-        # If the current user is not a member of the Domain Admins group, then exit the script.
-        Write-Host "You are not a member of the Domain Admins group. Please contact your Domain Administrator."
-        return
-    }
-
-    # Try to connect to the Active Directory Domain, if fails, display error message and return the main menu.
-    try {
-        $ADTest = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$Domain")
-    } catch {
-        Write-Host "Unable to connect to the Active Directory Domain. Please check the Domain Name and try again."
-        Write-Host "$ADTest"
-        Write-Host "$_"
-        return
-    }
-
-    # Get KRBTGT AD Object with all properties and attributes, store in $KRBTGTObject.
-    $KRBTGTObject = Get-ADUser -Filter {sAMAccountName -eq 'krbtgt'} -Properties *
-
-    # Get a Intiger of days between the current date and the PasswordLastSet of the KRBTGT AD Object.
-    [int]$KRBTGTLastUpdateDays = (Get-Date).DayOfYear - $KRBTGTObject.PasswordLastSet.DayOfYear
-
-    # Check if the current KRBTGT password last update time is less than 90 days.
-    if ( ($KRBTGTLastUpdateDays -lt $global:krbtgtPwUpdateInterval) -and ($OverridePwd -eq $false) ) {
-        # If the current KRBTGT password last update time is less than 90 days, then exit the script.
-        Write-Host "The current KRBTGT password last update time is less than $global:krbtgtPwUpdateInterval days."
-        Write-Host "Days since last update: $KRBTGTLastUpdateDays"
-    }
-
-    # If the current KRBTGT password last update time is greater than 90 days, then update the krbtgt user password.
-    if ( ($KRBTGTLastUpdateDays -gt $global:krbtgtPwUpdateInterval) -or $OverridePwd ) {
-
-        try {
-            [int]$PassLength = 64
-
-            # Generate A New Password With The Specified Length (Text)
-            [string]$NewKRBTGTPassword = (New-RandomPassword $PassLength).ToString()
-
-            # Convert the NewKRBTGTPassword to SecureString
-            $NewKRBTGTPasswordSecure = ConvertTo-SecureString -String $NewKRBTGTPassword -AsPlainText -Force
-
-            # Update the krbtgt user password with a random password genorated by the New-RandomPassword function.
-            Set-ADAccountPassword -Identity $KRBTGTObject.DistinguishedName -Reset -NewPassword $NewKRBTGTPasswordSecure
-
-            # Update the KRBTGT object variable.
-            $KRBTGTObject = Get-ADUser -Filter {sAMAccountName -eq 'krbtgt'} -Properties *
-
-            # check if the password was updated successfully by checking if the PasswordLastSet equal to the current date and time.
-            if ( $KRBTGTObject.PasswordLastSet.DayOfYear -eq (Get-Date).DayOfYear ) {
-                # If the password was updated successfully, then display a success message.
-                Write-Host "The KRBTGT password was updated successfully." -ForegroundColor Green
-
-                # If $OverridePwd is not true, then add the scheduled task to update the KRBTGT password.
-                If ($OverridePwd -eq $false) {
-                    # Get the time it will be 10 hours and 10 minutes from the current time.
-                    $NextUpdateTime = (Get-Date).AddHours(10).AddMinutes(10)
-
-                    [string]$ThisScriptsFullName = $global:ThisScript
-
-                    # Create a schedule task to run the Update-KRBTGTPassword function X number of hours after first password update.
-                    New-ScheduledTask -ActionString 'PowerShell' -ActionArguments "$ThisScriptsFullName -Unattended $true -JobName `"krbtgt-RotateKey`"" -ScheduleRunTime $NextUpdateTime `
-                    -Recurring Once -TaskName "KRBTGT-Final-Update" -TaskDiscription "KRBTGT second password update, to run once."
-
-                    # Check if the scheduled task named "KRBTGT-Final-Update" was created successfully.
-                    if ($null -eq (Get-ScheduledTask -TaskName "KRBTGT-Final-Update")) {
-                        # If the scheduled task was not created successfully, then display an error message.
-                        Write-Host "The KRBTGT password update task was not created successfully." -ForegroundColor Red
-                        return
-                    }
-                }
-                # If $OverridePwd is true, check if the scheduled task named "KRBTGT-Final-Update" exists, if it does unregister it.
-                If ($OverridePwd -eq $true) {
-                    # Check if the scheduled task named "KRBTGT-Final-Update" exists.
-                    if ($null -ne (Get-ScheduledTask -TaskName "KRBTGT-Final-Update" -ErrorAction SilentlyContinue -WarningAction SilentlyContinue)) {
-                        # If the scheduled task named "KRBTGT-Final-Update" exists, then unregister it.
-                        Unregister-ScheduledTask -TaskName "KRBTGT-Final-Update" -Confirm:$false
-                    }
-                }
-            } else {
-                # If the password was not updated successfully, then display an error message.
-                Write-Host "The KRBTGT password was not updated successfully." -ForeGroundColor Red
-                return
-            }
-        }
-        catch {
-            Write-Host "Unable to update the KRBTGT password. Please check the Domain Name and try again."
-            Write-Output $_
-            return
-        }
-    }
-# End of Update-KRBTGTPassword function
-}
-
 Function Get-PasswordAudit {
     <#
     .SYNOPSIS
@@ -566,6 +322,202 @@ Function Get-PasswordAuditAdminReport {
 # End of Get-PasswordAuditAdminReport function
 }
 
+Function New-RandomPassword {
+    <#
+    .SYNOPSIS
+    Function to create a random 64 character long password and return it.
+
+    .DESCRIPTION
+    Function to create a random 64 character long password and return it.
+
+    .EXAMPLE
+    $NewPassword = New-RandomPassword
+
+    .INPUTS
+    None
+
+    .OUTPUTS
+    System.String
+
+    .NOTES
+
+    #>
+
+    param(
+        [Parameter(Mandatory=$False,Position=1)]
+        [int]$PasswordNrChars = 64
+    )
+
+	Process {
+		$Iterations = 0
+        Do {
+			If ($Iterations -ge 20) {
+				EXIT
+			}
+			$Iterations++
+			$pwdBytes = @()
+			$rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
+			Do {
+				[byte[]]$byte = [byte]1
+				$rng.GetBytes($byte)
+				If ($byte[0] -lt 33 -or $byte[0] -gt 126) {
+					CONTINUE
+				}
+                $pwdBytes += $byte[0]
+			}
+			While ($pwdBytes.Count -lt $PasswordNrChars)
+				$NewPassword = ([char[]]$pwdBytes) -join ''
+			}
+        Until (Test-PasswordIsComplex $NewPassword)
+        Return $NewPassword
+	}
+# End of New-RandomPassword function
+}
+
+Function Update-KRBTGTPassword {
+    <#
+    .SYNOPSIS
+    Update the KRBTGT password in the Active Directory Domain.
+
+    .DESCRIPTION
+    === KRBTGT password Check ===
+    This option will check the KRBTGT AD Account password age. If the password age is greater than 90 days, then the password will be updated.
+    If the password age is less than 90 days, then the password will not be updated, unless the force switch is used.
+    During normal operation, the KRBTGT password needs to be updated every 90 days, twice.
+    Every 90 days, update the KRBTGT password, wait 10 hours, then update it again.
+    Alternativly, use this scripts '-Daliy' option to automate this process.
+
+    See my blog post for more details: https://cybergladius.com/ad-hardening-against-kerberos-golden-ticket-attack/
+
+    The menu options are:
+        1. Update the KRBTGT password in the Active Directory Domain if the password
+            is older than the preset number of days(set in the AD-PowerAdmin_settings.ps1).
+            A scheduled task will be created to update the password again in 10 hours.
+        NOTE: This option will not create a scheduled task if AD-PowerAdmin is running not installed!
+
+        2. Force a password change to the KRBTGT account now. There will be NO scheduled task
+            created to update the password again in 10 hours.
+            If you have a breach, run this option twise to invalidate all current tickets.
+            You may see a few things temporarily break, but ligitamate users and computers
+            will be able to re-authenticate.
+
+    .PARAMETER OverridePwd
+    # If the OverridePwd switch is used, then the KRBTGT password will be updated even if the current password last update time is less than 90 days.
+
+    .EXAMPLE
+    Update-KRBTGTPassword
+
+    .NOTES
+
+    #>
+
+    Param(
+        [Parameter(Mandatory=$False,Position=1)]
+        [bool]$OverridePwd
+    )
+
+    # If [bool]$OverridePwd is unset, empty, or null, set it to $false.
+    If ($null -eq $OverridePwd -or $OverridePwd -eq $false -or $OverridePwd -eq "") {
+        $OverridePwd = $false
+    }
+
+    # Get the current domain
+    [string]$Domain = (Get-ADDomain).NetbiosName
+
+    # if the current running user is a member of the Domain Admins group.
+    if ( $null -eq ((Get-ADGroupMember -Identity "Domain Admins") | Where-Object {$_.SamAccountName -eq $env:UserName}) ) {
+        # If the current user is not a member of the Domain Admins group, then exit the script.
+        Write-Host "You are not a member of the Domain Admins group. Please contact your Domain Administrator."
+        return
+    }
+
+    # Try to connect to the Active Directory Domain, if fails, display error message and return the main menu.
+    try {
+        $ADTest = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$Domain")
+    } catch {
+        Write-Host "Unable to connect to the Active Directory Domain. Please check the Domain Name and try again."
+        Write-Host "$ADTest"
+        Write-Host "$_"
+        return
+    }
+
+    # Get KRBTGT AD Object with all properties and attributes, store in $KRBTGTObject.
+    $KRBTGTObject = Get-ADUser -Filter {sAMAccountName -eq 'krbtgt'} -Properties *
+
+    # Get a Intiger of days between the current date and the PasswordLastSet of the KRBTGT AD Object.
+    [int]$KRBTGTLastUpdateDays = (Get-Date).DayOfYear - $KRBTGTObject.PasswordLastSet.DayOfYear
+
+    # Check if the current KRBTGT password last update time is less than 90 days.
+    if ( ($KRBTGTLastUpdateDays -lt $global:krbtgtPwUpdateInterval) -and ($OverridePwd -eq $false) ) {
+        # If the current KRBTGT password last update time is less than 90 days, then exit the script.
+        Write-Host "The current KRBTGT password last update time is less than $global:krbtgtPwUpdateInterval days."
+        Write-Host "Days since last update: $KRBTGTLastUpdateDays"
+    }
+
+    # If the current KRBTGT password last update time is greater than 90 days, then update the krbtgt user password.
+    if ( ($KRBTGTLastUpdateDays -gt $global:krbtgtPwUpdateInterval) -or $OverridePwd ) {
+
+        try {
+            [int]$PassLength = 64
+
+            # Generate A New Password With The Specified Length (Text)
+            [string]$NewKRBTGTPassword = (New-RandomPassword $PassLength).ToString()
+
+            # Convert the NewKRBTGTPassword to SecureString
+            $NewKRBTGTPasswordSecure = ConvertTo-SecureString -String $NewKRBTGTPassword -AsPlainText -Force
+
+            # Update the krbtgt user password with a random password genorated by the New-RandomPassword function.
+            Set-ADAccountPassword -Identity $KRBTGTObject.DistinguishedName -Reset -NewPassword $NewKRBTGTPasswordSecure
+
+            # Update the KRBTGT object variable.
+            $KRBTGTObject = Get-ADUser -Filter {sAMAccountName -eq 'krbtgt'} -Properties *
+
+            # check if the password was updated successfully by checking if the PasswordLastSet equal to the current date and time.
+            if ( $KRBTGTObject.PasswordLastSet.DayOfYear -eq (Get-Date).DayOfYear ) {
+                # If the password was updated successfully, then display a success message.
+                Write-Host "The KRBTGT password was updated successfully." -ForegroundColor Green
+
+                # If $OverridePwd is not true, then add the scheduled task to update the KRBTGT password.
+                If ($OverridePwd -eq $false) {
+                    # Get the time it will be 10 hours and 10 minutes from the current time.
+                    $NextUpdateTime = (Get-Date).AddHours(10).AddMinutes(10)
+
+                    [string]$ThisScriptsFullName = $global:ThisScript
+
+                    # Create a schedule task to run the Update-KRBTGTPassword function X number of hours after first password update.
+                    New-ScheduledTask -ActionString 'PowerShell' -ActionArguments "$ThisScriptsFullName -Unattended $true -JobName `"krbtgt-RotateKey`"" -ScheduleRunTime $NextUpdateTime `
+                    -Recurring Once -TaskName "KRBTGT-Final-Update" -TaskDiscription "KRBTGT second password update, to run once."
+
+                    # Check if the scheduled task named "KRBTGT-Final-Update" was created successfully.
+                    if ($null -eq (Get-ScheduledTask -TaskName "KRBTGT-Final-Update")) {
+                        # If the scheduled task was not created successfully, then display an error message.
+                        Write-Host "The KRBTGT password update task was not created successfully." -ForegroundColor Red
+                        return
+                    }
+                }
+                # If $OverridePwd is true, check if the scheduled task named "KRBTGT-Final-Update" exists, if it does unregister it.
+                If ($OverridePwd -eq $true) {
+                    # Check if the scheduled task named "KRBTGT-Final-Update" exists.
+                    if ($null -ne (Get-ScheduledTask -TaskName "KRBTGT-Final-Update" -ErrorAction SilentlyContinue -WarningAction SilentlyContinue)) {
+                        # If the scheduled task named "KRBTGT-Final-Update" exists, then unregister it.
+                        Unregister-ScheduledTask -TaskName "KRBTGT-Final-Update" -Confirm:$false
+                    }
+                }
+            } else {
+                # If the password was not updated successfully, then display an error message.
+                Write-Host "The KRBTGT password was not updated successfully." -ForeGroundColor Red
+                return
+            }
+        }
+        catch {
+            Write-Host "Unable to update the KRBTGT password. Please check the Domain Name and try again."
+            Write-Output $_
+            return
+        }
+    }
+# End of Update-KRBTGTPassword function
+}
+
 Function Invoke-WeakPwdProcess {
     <#
     .SYNOPSIS
@@ -761,6 +713,54 @@ function Test-PwUserFollowup {
     # Unregister the scheduled task with the name "PwUserFollowup-$JobVar1
     Unregister-ScheduledTask -TaskName "PwFollowUp-$JobVar1" -Confirm:$false
 # End of the Test-PwUserFollowup function.
+}
+
+Function Test-PasswordIsComplex {
+    <#
+    .SYNOPSIS
+    FUNCTION: Confirm Generated Password Meets Complexity Requirements
+    Source: https://docs.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/password-must-meet-complexity-requirements
+
+    .DESCRIPTION
+    FUNCTION: Confirm Generated Password Meets Complexity Requirements
+    Source: https://docs.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/password-must-meet-complexity-requirements
+
+    .PARAMETER StringToTest
+    The string to test if it meets the complexity requirements.
+
+    .EXAMPLE
+    Test-PasswordIsComplex -StringToTest "Password123!"
+
+    .NOTES
+
+    #>
+
+    Param(
+        [Parameter(Mandatory=$True,Position=1)]
+        [String]$StringToTest
+    )
+
+	Process {
+		$criteriaMet = 0
+
+		# Upper Case Characters (A through Z, with diacritic marks, Greek and Cyrillic characters)
+		If ($StringToTest -cmatch '[A-Z]') {$criteriaMet++}
+
+		# Lower Case Characters (a through z, sharp-s, with diacritic marks, Greek and Cyrillic characters)
+		If ($StringToTest -cmatch '[a-z]') {$criteriaMet++}
+
+		# Numeric Characters (0 through 9)
+		If ($StringToTest -match '\d') {$criteriaMet++}
+
+		# Special Chracters (Non-alphanumeric characters, currency symbols such as the Euro or British Pound are not counted as special characters for this policy setting)
+		If ($StringToTest -match '[\^~!@#$%^&*_+=`|\\(){}\[\]:;"''<>,.?/]') {$criteriaMet++}
+
+		# Check If It Matches Default Windows Complexity Requirements
+		If ($criteriaMet -lt 3) {Return $false}
+		If ($StringToTest.Length -lt 8) {Return $false}
+		Return $true
+	}
+# End of Test-PasswordIsComplex function
 }
 
 function Start-MonthlyPasswordAudit {
