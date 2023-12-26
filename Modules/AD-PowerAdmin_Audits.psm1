@@ -71,6 +71,13 @@ Function Initialize-Module {
             Function = "Test-ADSecurityBestPractices"
             Command  = 'Test-ADSecurityBestPractices'
         }
+        'Test-Test' = @{
+            Title    = "Audit Tes"
+            Label    = "Audit Test"
+            Module   = "AD-PowerAdmin_Audits"
+            Function = "Test-Test"
+            Command  = 'Test-Test'
+        }
     }
 
     # Append the $global:UnattendedJobs with the jobs to be run unattended from this module.
@@ -215,29 +222,24 @@ Function Get-ADAdminAudit {
         # Test if $_ is a AD User, Computer, or Group Managed Service Account.
         if ($_.ObjectClass -eq "user") {
             # Get the AD User's details
-            Get-ADUser -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate -ErrorAction:SilentlyContinue
+            Get-ADUser -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
         } elseif ($_.ObjectClass -eq "computer") {
             # Get the AD Computer's details
-            Get-ADComputer -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate -ErrorAction:SilentlyContinue
+            Get-ADComputer -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
         } elseif ($_.ObjectClass -like '*ManagedServiceAccount') {
             # Get the AD Group Managed Service Account's details
-            Get-ADServiceAccount -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate -ErrorAction:SilentlyContinue
+            Get-ADServiceAccount -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
         }
     }
+    # Sort the results by the Name property and remove duplicates.
+    $AdminData = $AdminData | Sort-Object -Property Name | Select-Object -Unique | Format-List -Property Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled
+
     # Ask the user if they want to export the results to a CSV file.
-    $ExportResults = Read-Host "Would you like to export the results to a CSV file? (Default:N, y/N)"
-    # If the user enters "Y" or "y", then export the results to a CSV file.
-    if ($ExportResults -eq "Y" -or $ExportResults -eq "y") {
-        # Get the current datetime and put it in a variable.
-        [string]$CurrentDateTime = (Get-Date).ToString("yyyy-MM-dd_HH-mm-ss")
-        # Export the results to a CSV file.
-        $AdminData | Export-Csv -Path "$global:ThisScriptDir\\AD-AdminAudit_$CurrentDateTime.csv" -NoTypeInformation
-        # Display a message to the user that the results were exported to a CSV file.
-        Write-Host "The results were exported to a CSV file located in the same directory as this script." -ForegroundColor Green
-    } else {
-        # If the user enters anything other than "Y" or "y", then display a message to the user that the results were not exported to a CSV file.
-        $AdminData | Format-List -Property Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate
-    }
+    Export-AdPowerAdminData -Data $AdminData -ReportName "AD-AdminAudit"
+
+    # Return the list of AD Admins
+    return $AdminData
+# End of Get-ADAdminAudit function
 }
 
 Function Get-ADUserAudit {
@@ -394,6 +396,83 @@ Function Get-ADUserMemberOf {
     #Return groups.
     Return $Groups;
 # End of Get-ADUserNestedGroups function
+}
+
+Function Get-AdRightsGuidDict {
+    <#
+    .SYNOPSIS
+        Function to build a dictionary of the ACE RightsGuid to RightsName.
+
+    .DESCRIPTION
+        Build a dictionary(HashTable) of the ACE RightsGuid to RightsName. This is so we can lookup a Right/Permissions name from it's GUID.
+
+    .EXAMPLE
+        $AdRightsGuidDict = Get-AdRightsGuidDict
+
+        # The below should work, but it doesn't. I don't know why.
+        $PermissionName = $AdRightsGuidDict['1131f6aa-9c07-11d1-f79f-00c04fc2dcd2']
+
+        # This will work.
+        $PermissionName = $AdRightsGuidDict | Where-Object {$_.Key -eq '1131f6aa-9c07-11d1-f79f-00c04fc2dcd2'} | Select-Object -ExpandProperty Value
+
+    .NOTES
+        This function is used by the Search-ObjectWithDCSyncRisk function.
+
+    #>
+    Begin {
+        # Creating an empty dictionary
+        $GuidDictionary = @{}
+        $SchemaIDGuids = Get-ADObject -SearchBase (Get-ADRootDSE).SchemaNamingContext -LDAPFilter '(SchemaIDGUID=*)' -Properties Name, ObjectGUID
+        $ExtendedRights = Get-ADObject -SearchBase "CN=Extended-Rights,$((Get-ADRootDSE).ConfigurationNamingContext)" -LDAPFilter '(ObjectClass=controlAccessRight)' -Properties Name, RightsGUID
+    }
+    Process {
+        ForEach($SchemaIDGuid in $SchemaIDGuids) {
+            try {
+                [GUID]$Key = $SchemaIDGuid.ObjectGUID
+                [string]$Value = $SchemaIDGuid.name
+                $GUIDDictionary += @{$Key = $Value}
+            }
+            catch {
+                <# Didn't put anything here because I just want a silent error when building the hashtable. #>
+            }
+        }
+
+        ForEach($ExtendedRight in $ExtendedRights) {
+            try {
+                [GUID]$Key = $ExtendedRight.RightsGUID
+                [string]$Value = $ExtendedRight.Name
+                $GUIDDictionary += @{$Key = $Value}
+            }
+            catch {
+                <# Didn't put anything here because I just want a silent error when building the hashtable. #>
+            }
+        }
+    }
+    End {
+        # Sort the dictionary by the Name
+        $GuidDictionary = $GuidDictionary.GetEnumerator() | Sort-Object -Property Value
+
+        # Return the dictionary
+        return $GuidDictionary
+    }
+# End of Get-AdRightsGuidDict function
+}
+
+Function Get-DomainAcls {
+    # Get the Domain distinguished path.
+    $ADPath = "AD:$($(Get-ADDomain).DistinguishedName)"
+
+    # Get the access control list (ACL) for the specified Active Directory path
+    $ACLs = Get-Acl "$ADPath"
+
+    # Create a variable to store the accounts with DCSync permissions.
+    [Object]$DCSyncPermissionObjects = @()
+
+
+    foreach ($ACE in $ACLs.Access) {
+        $DCSyncPermissionObjects += $ACE
+    }
+    return $DCSyncPermissionObjects
 }
 
 Function Search-ADUserNonDefaultPrimaryGroup {
@@ -957,115 +1036,150 @@ function Search-DefaultDomainPolicy {
 function Search-ObjectWithDCSyncRisk {
     <#
     .SYNOPSIS
-    Function to search for AD objects with DCSync permissions.
+        Function to search for AD objects with DCSync permissions.
 
     .DESCRIPTION
-    Get a list of AD objects with DCSync permissions by pulling the ACLs from the domain. Then enumerate all members of the AD objects that inharet DCSync permissions.
+        Get a list of AD objects with DCSync permissions by pulling the ACLs from the domain. Then enumerate all members of the AD objects that inharet DCSync permissions.
 
     .EXAMPLE
-    Search-ObjectWithDCSyncRisk  | Format-List
+        Search-ObjectWithDCSyncRisk  | Format-List
 
     .NOTES
-    If you do not pipe the output of this function to a Format command, then it will not display anything. I pulled my hair out for a while trying to figure out why it was not displaying anything, then I piped it to a Format command and it worked.
-    So if you want to see the output, then pipe it to a Format command.
-    Example: Search-ObjectWithDCSyncRisk  | Format-List or Search-ObjectWithDCSyncRisk  | Format-Table
-    DONT DO THIS: Search-ObjectWithDCSyncRisk
+        If you do not pipe the output of this function to a Format command, then it will not display anything. I pulled my hair out for a while trying to figure out why it was not displaying anything, then I piped it to a Format command and it worked.
+        So if you want to see the output, then pipe it to a Format command.
+        Example: Search-ObjectWithDCSyncRisk  | Format-List or Search-ObjectWithDCSyncRisk  | Format-Table
+        DONT DO THIS: Search-ObjectWithDCSyncRisk
+
     #>
 
-    # Get the Domain distinguished path.
-    $ADPath = "AD:$($(Get-ADDomain).DistinguishedName)"
+    Begin {
+        # Get the current Domains A "revision level", "identifier authority", and "domain identifier" and put the whole value in a string variable that would match the begining of a SID format.
+        $DomainSID = (Get-ADDomain).DomainSID.Value
 
-    # Get the access control list (ACL) for the specified Active Directory path
-    $ACLs = Get-Acl "$ADPath"
+        # Create a dictionary of GUIDs and their names.
+        $AdRightsGuidDict = Get-AdRightsGuidDict
 
-    # Create a variable to store the accounts with DCSync permissions.
-    [Object]$DCSyncPermissionObjects = @()
+        # Set the $DCSyncRiskObjects variable to an empty array.
+        [array]$DCSyncRiskObjects = @()
 
-    <# Get all objects with enough DCSync permissions to perform a DCSync attack.
+        # Set the $DCSyncPermissionObjects variable to an empty array.
+        $DCSyncPermissionObjects = @()
 
-     Here is the URL to MS documentation on the permissions: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-adts/1522b774-6464-41a3-87a5-1e5633c3fbbb
-     "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2" = DS-Replication-Get-Changes
-     "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2" = DS-Replication-Get-Changes-All
-     "89e95b76-444d-4c62-991a-0facbeda640c" = DS-Replication-Get-Changes-In-Filtered-Set
-     "WriteDacl" = Write DACL
-     "GenericAll" = Generic All
+        <#
+            Get all objects with enough DCSync permissions to perform a DCSync attack.
 
-     If I missed any, please let me know.
-    #>
+            Here is the URL to MS documentation on the permissions: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-adts/1522b774-6464-41a3-87a5-1e5633c3fbbb
+            "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2" = DS-Replication-Get-Changes
+            "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2" = DS-Replication-Get-Changes-All
+            "89e95b76-444d-4c62-991a-0facbeda640c" = DS-Replication-Get-Changes-In-Filtered-Set
 
-    foreach ($ACL in $ACLs.Access) {
-        if ($ACL.IdentityReference -and (
-            $ACL.ObjectType -eq "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2" -or
-            $ACL.ObjectType -eq "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2" -or
-            $ACL.ObjectType -eq "89e95b76-444d-4c62-991a-0facbeda640c" -or
-            $ACL.ActiveDirectoryRights -contains "WriteDacl" -or
-            $ACL.ActiveDirectoryRights -contains "GenericAll"
-        )) {
-            # Add the account to the $AccountsWithDCSyncPermissions variable.
-            $DCSyncPermissionObjects += $ACL
+            If I missed any, please let me know.
+        #>
+        foreach ($ACL in (Get-DomainAcls)) {
+            if ($ACL.IdentityReference -and
+                (
+                $ACL.ObjectType -eq "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2" -or
+                $ACL.ObjectType -eq "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2" -or
+                $ACL.ObjectType -eq "89e95b76-444d-4c62-991a-0facbeda640c"
+                )
+            ){
+                # Add the account to the $AccountsWithDCSyncPermissions variable.
+                $DCSyncPermissionObjects += $ACL
+            }
         }
     }
 
-    # Set the $DCSyncRiskObjects variable to an empty array.
-    [array]$DCSyncRiskObjects = @()
+    Process {
 
-    # Foreach AD object in $ObjectWithDCSyncPermissions, get all members of the group and put it in a new variable.
-    ForEach ($ObjectName in $($DCSyncPermissionObjects | Select-Object -Unique -ExpandProperty IdentityReference)) {
+        # Foreach AD object in $DCSyncPermissionObjects, check the obect properties, then enumerate all members that are associated with the object.
+        #   Then add the object details to the $DCSyncRiskObjects variable.
+        ForEach ( $ObjectName in $DCSyncPermissionObjects ) {
+            # If the $ObjectName.IdentityReference contains the Domain SID, then get the AD object by using the ObjectSid.
+            # In my experiance, if the objectName is a SID, then it is a deleted object.
+            If ($ObjectName.IdentityReference -like "*$DomainSID*") {
+                $ADObject = Get-ADObject -Filter {ObjectSid -eq $ObjectName.IdentityReference} -Properties SamAccountName, DistinguishedName, ObjectClass -ErrorAction SilentlyContinue
+            }
 
-        # Split the account name into domain and name
-        $Domain, $SAMName = $ObjectName -split '\\', 2
+            # If the $ObjectName.IdentityReference does not contain the Domain SID, then split the account name into domain account name.
+            # Data Example: "EDomain\AccountName"
+            If ($ObjectName.IdentityReference -notlike "*$DomainSID*") {
+                # Split the account name into domain and name
+                $Domain, $SAMName = $ObjectName.IdentityReference -split '\\', 2
 
-        # If the $Domain is 'NT AUTHORITY', then continue to the next account. This is a "SYSTEM" & "ENTERPRISE DOMAIN CONTROLLERS" account. There is no way(that I know of) to get the account object for this account.
-        if ( "$Domain" -eq 'NT AUTHORITY' ) { continue }
+                # If the $Domain is 'NT AUTHORITY', then continue to the next account.
+                # This is a "SYSTEM" & "ENTERPRISE DOMAIN CONTROLLERS" account. There is no way(that I know of) to get the account object for this account.
+                if ( "$Domain" -eq 'NT AUTHORITY' ) { continue }
 
-        # Get the AD object by using the SamAccountName.
-        $ADObject = Get-ADObject -Filter {SamAccountName -eq $SAMName} -Properties SamAccountName, DistinguishedName, ObjectClass
+                # Get the AD object by using the SamAccountName.
+                $ADObject = Get-ADObject -Filter {SamAccountName -eq $SAMName} -Properties SamAccountName, DistinguishedName, ObjectClass -ErrorAction SilentlyContinue
+            }
 
-        # If the $ADObject is empty, then continue to the next account.
-        if (-not $ADObject) { Write-Host "Account $ObjectName not found"; continue }
+            # If the $ADObject is empty, then continue to the next account.
+            if (-not $ADObject) {
+                Write-Host "Error: AD Object `"$($ObjectName.IdentityReference)`" not found!" -ForegroundColor Red
+                Write-Host "This object has permissions to do a DCSync attack and the object no longer exist in AD. Review and remove old accounts from the domian ACLs." -ForegroundColor Red
+                continue
+            }
 
-        # If the $ADObject has a ObjectClass of "group", recursively get all members of the group and put it in a new variable.
-        if ($ADObject.ObjectClass -eq 'group') {
-            # Recursive look up all members of the group.
-            $GroupsMemberUsers = Get-ADGroupMember -Recursive -Identity $ADObject.DistinguishedName
+            # Set the $ADData variable to an empty array.
+            $ADData = @()
 
-            # Foreach AD Object(User, Computer, ServiceAccount) in $GroupsMemberUsers get the object details SamAccountName, DistinguishedName, and ObjectClass, add them to the $ADUsers variable.
-            foreach ($Object in $GroupsMemberUsers) {
-                # Get the AD object details.
-                $ADData = Get-ADObject -Filter {distinguishedName -eq $Object.DistinguishedName} -Properties SamAccountName, DistinguishedName, ObjectClass
+            # If the $ADObject has a ObjectClass of "group", recursively get all members of the group and put it in a new variable.
+            if ($ADObject.ObjectClass -eq 'group') {
+                # Recursive look up all members of the group.
+                $GroupsMembershipUsers = Get-ADGroupMember -Recursive -Identity $ADObject.DistinguishedName
+
+                # Foreach member of the group, get the AD object details SamAccountName, DistinguishedName, and ObjectClass.
+                foreach ($GroupMember in $GroupsMembershipUsers) {
+                    # Get the AD object details.
+                    $ADData += Get-ADObject -Filter {distinguishedName -eq $GroupMember.DistinguishedName} -Properties SamAccountName, DistinguishedName, ObjectClass
+                }
+            }
+
+            # If the $ADObject has a ObjectClass that is not group(Computer, MSA-Account, ect...), Get the object's SamAccountName, DistinguishedName, & ObjectClass and add it to the $ADData variable.
+            if ($ADObject.ObjectClass -ne 'group') {
+                $ADData += Get-ADObject -Filter {distinguishedName -eq $Object.DistinguishedName} -Properties SamAccountName, DistinguishedName, ObjectClass
+            }
+
+            # Foreach AD Object(User, Computer, ServiceAccount) in $ADData, get the object details SamAccountName, DistinguishedName, and ObjectClass, along
+            #   with the ObjectClass GUID and ObjectClass name, and add it to the $DCSyncRiskObjects variable.
+            foreach ($User in $ADData) {
+
+                # Look Up the ObjectClass name from the $PermissionGuid($ObjectName.ObjectType) within the $AdRightsGuidDict and store it in the $PermissionName variable.
+                $PermissionGuid = $ObjectName.ObjectType
+                $PermissionName = $AdRightsGuidDict | Where-Object {$_.Key -eq $PermissionGuid} | Select-Object -ExpandProperty Value
 
                 # Create a new temporary object to store the AD object details.
                 [object]$ADUserData = New-Object -TypeName PSObject
-                $ADUserData | Add-Member -MemberType NoteProperty -Name "SamAccountName" -Value $ADData.SamAccountName
-                $ADUserData | Add-Member -MemberType NoteProperty -Name "DistinguishedName" -Value $ADData.DistinguishedName
-                $ADUserData | Add-Member -MemberType NoteProperty -Name "ObjectClass" -Value $ADData.ObjectClass
-                $ADUserData | Add-Member -MemberType NoteProperty -Name "InheritedPermissionsFrom" -Value $ObjectName
+                $ADUserData | Add-Member -MemberType NoteProperty -Name "SamAccountName" -Value $User.SamAccountName
+                $ADUserData | Add-Member -MemberType NoteProperty -Name "DistinguishedName" -Value $User.DistinguishedName
+                $ADUserData | Add-Member -MemberType NoteProperty -Name "ObjectType" -Value $User.ObjectClass
+                $ADUserData | Add-Member -MemberType NoteProperty -Name "PermissionName" -Value $PermissionName
+                $ADUserData | Add-Member -MemberType NoteProperty -Name "PermissionGuid" -Value $PermissionGuid
+                $ADUserData | Add-Member -MemberType NoteProperty -Name "InheritedPermissionsFrom" -Value $ObjectName.IdentityReference
 
                 # Add the temporary object to the $DCSyncRiskObjects variable.
                 $DCSyncRiskObjects += $ADUserData
+
                 # Clear the temporary object.
-                Clear-Variable ADUserData, ADData
+                Clear-Variable ADUserData
             }
-        }
-        # If the $ADObject has a ObjectClass of user, Get the user account SAM name, distinguished name, and last login date.
-        if ($ADObject.ObjectClass -ne 'group') {
-            $ADData = Get-ADObject -Filter {distinguishedName -eq $Object.DistinguishedName} -Properties SamAccountName, DistinguishedName, ObjectClass
-
-            # Create a new temporary object to store the AD object details.
-            [object]$ADUserData = New-Object -TypeName PSObject
-            $ADUserData | Add-Member -MemberType NoteProperty -Name "SamAccountName" -Value $ADData.SamAccountName
-            $ADUserData | Add-Member -MemberType NoteProperty -Name "DistinguishedName" -Value $ADData.DistinguishedName
-            $ADUserData | Add-Member -MemberType NoteProperty -Name "ObjectClass" -Value $ADData.ObjectClass
-            $ADUserData | Add-Member -MemberType NoteProperty -Name "InheritedPermissionsFrom" -Value $ObjectName
-
-            # Add the temporary object to the $DCSyncRiskObjects variable.
-            $DCSyncRiskObjects += $ADUserData
             # Clear the temporary object.
-            Clear-Variable ADUserData, ADData
+            Clear-Variable ADData
         }
     }
-    #Return the $DCSyncRiskObjects variable.
-    return $DCSyncRiskObjects
+
+    End {
+
+        # Sort and remove duplicates from the $DCSyncRiskObjects variable.
+        $DCSyncRiskObjects = $DCSyncRiskObjects | Sort-Object -Property SamAccountName -Unique
+
+        # Ask the user if they want to export the data to a CSV file.
+        Export-AdPowerAdminData -Data $DCSyncRiskObjects -ReportName "DCSyncRiskObjects"
+
+        #Return the $DCSyncRiskObjects variable.
+        return $DCSyncRiskObjects
+   }
 }
 
 function Search-DisabledObjects {
@@ -1144,7 +1258,7 @@ function Search-AD {
         [bool]$TextResults
     )
     # Ask the user if they want to search for a computer, user or all objects.
-    [string]$SearchType = Read-Host "Do you want to search for a computer, user or all objects? (C/U/A)"
+    [string]$SearchType = Read-Host "Do you want to search for a Computer, User or All objects? (Default:A, c/u/A)"
     # Check if the $SearchType is not equal to 'C', 'U', or 'A', or is empty. The check should be case insensitive.
     if ($SearchType -ne 'C' -and $SearchType -ne 'U' -and $SearchType -ne 'A' -and $SearchType -ne 'c' -and $SearchType -ne 'u' -and $SearchType -ne 'a' -or $SearchType -eq '') {
         Write-Host "Warrning: The SearchType given was empty. Defaulting to all Objects" -ForegroundColor Yellow

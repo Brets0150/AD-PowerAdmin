@@ -114,6 +114,7 @@
             ReleaseNotes = @'
             v1.0:
             - Migrate from old methods to new methods.
+            - Added report export to CSV functionality to reduce repetitive code.
 '@
 
         } # End of PSData hashtable

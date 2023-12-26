@@ -371,3 +371,73 @@ function Get-DateFromCalendar {
     }
 }
 # End of the Get-DateFromCalendar function.
+
+Function Export-AdPowerAdminData {
+    <#
+    .SYNOPSIS
+    Function that will export data to a CSV file.
+
+    .DESCRIPTION
+    Export data to a CSV file.
+
+    .EXAMPLE
+    Export-AdPowerAdminData -Data $ReportData -ReportName "ADPowerAdmin"
+
+    .NOTES
+    This function is used by AD-PowerAdmin_Main.ps1 to export data to a CSV file.
+
+    #>
+    Param(
+        [Parameter(Mandatory=$True,Position=1)]
+        [object]$Data,
+        [Parameter(Mandatory=$True,Position=2)]
+        [string]$ReportName,
+        [Parameter(Mandatory=$False,Position=3)]
+        [switch]$Force
+    )
+
+    # Get the current datetime and put it in a variable.
+    [string]$CurrentDateTime = (Get-Date).ToString("yyyy-MM-dd_HH-mm-ss")
+    # Set the file name.
+    $FileName = "$($global:ThisScriptDir)\\$($ReportName)_$($CurrentDateTime).csv"
+
+    # Export the data to a CSV file.
+    try {
+        # Confirm the $Data variable is not empty.
+        if ($null -eq $Data) {
+            Write-Host "Error: Data sent for export is empty." -ForegroundColor Red
+            return
+        }
+        # If the $Force switch is not used, then export the data to a CSV file.
+        if (-not $Force) {
+            # Ask the user if they want to export the results to a CSV file.
+            $ExportQuestion = Read-Host "Would you like to export the results to a CSV file? (Default:N, y/N)"
+        }
+        # If the user enters "Y" or "y", then export the results to a CSV file.
+        if ($ExportQuestion -eq "Y" -or $ExportQuestion -eq "y" -or $Force) {
+            # Export the results to a CSV file.
+            $Data | Export-Csv -Path "$FileName" -NoTypeInformation
+        }
+        # If anything else is entered, then do not export the results to a CSV file.
+        else {
+            return
+        }
+    }
+    catch {
+        Write-Host "Error: Unable to export data to `"$FileName`"." -ForegroundColor Red
+        Write-Host "       Please check the file path and try again." -ForegroundColor Red
+        return
+    }
+
+    # Confirm the file was created.
+    if (Test-Path -Path $FileName) {
+        # Display a message to the user that the results were exported to a CSV file.
+        Write-Host "The results were exported to a CSV file located in the same directory as this script." -ForegroundColor Green
+    }
+    else {
+        Write-Host "Error: Unable to export data to `"$FileName`"." -ForegroundColor Red
+        Write-Host "    Please check the file path and try again." -ForegroundColor Red
+        return
+    }
+# End of Export-Data function
+}
