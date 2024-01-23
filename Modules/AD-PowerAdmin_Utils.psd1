@@ -115,6 +115,8 @@
             v1.0:
             - Migrate from old methods to new methods.
             - Added report export to CSV functionality to reduce repetitive code.
+            V1.1:
+            - Added pipeline support to Export-ADPowerAdminReport.
 '@
 
         } # End of PSData hashtable

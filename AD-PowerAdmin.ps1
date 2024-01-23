@@ -1,10 +1,10 @@
-#  Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
+#Requires -Version 5
+#Requires -Modules ActiveDirectory
+
 <#
 .SYNOPSIS
     A collection of functions to help manage, and harden Windows Active Directory.
-
-.VERSION
-    1.0.2 Alpha
 
 .DESCRIPTION
     AD-PowerAdmin is a tool to help Active Directory administrators secure and manage their AD.
@@ -24,6 +24,17 @@
 
 .NOTES
     Author: Bret.s AKA: CyberGladius / License: MIT
+
+    AD-PowerAdmin Change Log:
+        - v1.0.2 Alpha - 11/21/23: Total rewrite of the script. The script is now modular and can be expanded easily.
+            - All original funcions migrated to the new framework.
+            - Way too many changes to list here.
+            - Still Alpha, but getting close to Beta.
+        - v1.0.3 Alpha - 1/2/2024:
+            - Changed the debug logging managent process. I needed a way to save the console output from sub-functions for reports, so I had to change the way debug logging was handled, which lead debugging being its own funciton.
+            - Updated PowerShell version check to to be acurate when using PowerShell Remote(WinRM).
+        - 1.0.3 Beta - 1/23/2024:
+            - Moving to Beta, with soft deploy to production.
 #>
 
 #=======================================================================================
@@ -48,10 +59,10 @@ Param (
 [string]$global:ModulesPath = "$global:ThisScriptDir\\Modules"
 
 # Rename the terminal window, cuz it looks cool. =P
-$host.UI.RawUI.WindowTitle = "AD PowerAdmin - CyberGladius.com"
+$host.UI.RawUI.WindowTitle = "AD-PowerAdmin - CyberGladius.com"
 
 # Version of this script.
-[string]$global:Version = "1.0.2 Alpha"
+[string]$global:Version = "1.0.3 Beta"
 
 # Max character length of the menu options.
 [int]$global:OptionsMaxTextLength = 82
@@ -89,6 +100,35 @@ function Show-Logo {
 " -ForegroundColor Cyan
 }
 
+function Initialize-Debug {
+    <#
+    .SYNOPSIS
+    Function that will check the $global:Debug variable, if set to true start a transcript for the whole session.
+    This function is called at the beginning of the begining of the script and the Enter-MainMenu function. Some other
+        function need to call a start-transcript; breaking the main transcript. This function will check if a transcript
+        is already running, if not, restart the debug transcript.
+    #>
+
+    # Check if a transcript is already running.
+    try {
+        Get-Transcript | Out-Null
+        $TranscriptRunning = $true
+    } catch {
+        $TranscriptRunning = $false
+    }
+
+    # If the transcript is not running, check if it should be running, if so, start it.
+    if (!$TranscriptRunning) {
+        # No transcript is currently running.
+        if ($global:Debug) {
+            Start-Transcript -Path "$global:ThisScriptDir\\AD-PowerAdmin_Debug.log" -Append -Force | Out-Null
+        }
+    }
+
+    return
+# End of Initialize-Debug function.
+}
+
 function Initialize-AllModules {
     # Try to import the models from the Modules folder and catch any errors.
     try {
@@ -109,13 +149,17 @@ function Initialize-ADPowerAdmin {
 
     .SYNOPSIS
     This function will check if all the base requirements are met to run this script.
+        This code is pretty straight forward.
 
     #>
 
     # Check if the script is running with PowerShell version 5 or higher.
     # If not, throw an error and exit.
-    if ($host.Version.Major -lt 5){
+    if ($PSVersionTable.PSVersion.Major -lt 5){
         Write-Output "This script requires PowerShell 5 or higher."
+        Write-Output "Your PowerShell version is $($PSVersionTable.PSVersion.Major).$($PSVersionTable.PSVersion.Minor).$($PSVersionTable.PSVersion.Build).$($PSVersionTable.PSVersion.Revision)"
+        Write-Output "Your '`$PSVersionTable Results:'"
+        $PSVersionTable
         exit 1
     }
 
@@ -149,12 +193,12 @@ function Initialize-ADPowerAdmin {
     }
 
     # If debug, $global:Debug, is true, Start-Transcript will be called.
-    if ($global:Debug) {
-        Stop-Transcript -ErrorAction:SilentlyContinue | Out-Null
-        Start-Transcript -Path "$global:ThisScriptDir\\AD-PowerAdmin_Debug.log" -Append -Force | Out-Null
-    }
+    Initialize-Debug
 
+    # Import all the modules from the Modules folder.
     Initialize-AllModules
+
+# End of Initialize-ADPowerAdmin function.
 }
 
 function Start-Automation {
@@ -262,6 +306,10 @@ function Enter-MainMenu {
     .Notes
 
     #>
+
+    # Confirm debug is running if enabled. Some function need to call a start-transcript; breaking the main transcript.
+    #  This function will check if a transcript is already running, if not, restart the debug transcript.
+    Initialize-Debug
 
     # Call the Show-Logo function to display the logo.
     Clear-Host

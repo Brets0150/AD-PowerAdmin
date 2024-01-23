@@ -383,12 +383,24 @@ Function Export-AdPowerAdminData {
     .EXAMPLE
     Export-AdPowerAdminData -Data $ReportData -ReportName "ADPowerAdmin"
 
+    .PARAMETER Data
+    The data to be exported to a file. This is a required parameter.
+    You can use the pipeline to send data to this function, or you can use the -Data parameter.
+
+    .PARAMETER ReportName
+    The name of the report will be part of the filename that is created with the exported data. This is a required parameter.
+    Example: "ADPowerAdmin"
+    Result: "ADPowerAdmin_2020-01-01_00-00-00.csv"
+
+    .PARAMETER Force
+    If the $Force switch is used, then the function will not ask the user if they want to export the results to a CSV file, it will just export the results to a CSV file.
+
     .NOTES
     This function is used by AD-PowerAdmin_Main.ps1 to export data to a CSV file.
 
     #>
     Param(
-        [Parameter(Mandatory=$True,Position=1)]
+        [Parameter(Mandatory=$True,ValueFromPipeline=$true,Position=1)]
         [object]$Data,
         [Parameter(Mandatory=$True,Position=2)]
         [string]$ReportName,
@@ -398,8 +410,11 @@ Function Export-AdPowerAdminData {
 
     # Get the current datetime and put it in a variable.
     [string]$CurrentDateTime = (Get-Date).ToString("yyyy-MM-dd_HH-mm-ss")
+
+    # Making this a variable now, so if I want to expand this funtion in the future, I can add more file types.
+    $FileExtension = "CSV"
     # Set the file name.
-    $FileName = "$($global:ThisScriptDir)\\$($ReportName)_$($CurrentDateTime).csv"
+    $FileName = "$($global:ThisScriptDir)\\$($ReportName)_$($CurrentDateTime).$FileExtension"
 
     # Export the data to a CSV file.
     try {
@@ -411,12 +426,12 @@ Function Export-AdPowerAdminData {
         # If the $Force switch is not used, then export the data to a CSV file.
         if (-not $Force) {
             # Ask the user if they want to export the results to a CSV file.
-            $ExportQuestion = Read-Host "Would you like to export the results to a CSV file? (Default:N, y/N)"
+            $ExportQuestion = Read-Host "Would you like to export the results to a $FileExtension file? (Default:N, y/N)"
         }
         # If the user enters "Y" or "y", then export the results to a CSV file.
         if ($ExportQuestion -eq "Y" -or $ExportQuestion -eq "y" -or $Force) {
             # Export the results to a CSV file.
-            $Data | Export-Csv -Path "$FileName" -NoTypeInformation
+            $Data | Export-Csv -Path "$FileName" -NoTypeInformation -Force
         }
         # If anything else is entered, then do not export the results to a CSV file.
         else {
