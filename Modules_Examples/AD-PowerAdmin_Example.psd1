@@ -7,7 +7,6 @@
 #
 
 @{
-
     # Script module or binary module file associated with this manifest.
     RootModule = 'AD-PowerAdmin_Example.psm1'
 
@@ -18,6 +17,7 @@
     # CompatiblePSEditions = @()
 
     # ID used to uniquely identify this module
+    # You need to generate a new GUID before publishing a new version of your module. New-Guid cmdlet can be used to generate a new GUID.
     GUID = '85dd1ca5-9309-4f87-af20-eb9e842cf25c'
     # Author of this module
     Author = 'CyberGladius'
@@ -26,7 +26,7 @@
     CompanyName = 'CyberGladius.com'
 
     # Copyright statement for this module
-    Copyright = '(c) 2023 CyberGladius. All rights reserved.'
+    Copyright = '(c) 2024 CyberGladius. All rights reserved.'
 
     # Description of the functionality provided by this module
     Description = @'
@@ -76,12 +76,10 @@
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
     FunctionsToExport = @('Get-Example1', 'Get-Example2', 'Start-ExampleJob')
+    # IF YOU DO NOT EXPORT THE FUNCTIONS, THEN THE FUNCTIONS WILL NOT BE AVAILABLE TO THE MAIN SCRIPT.
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
     CmdletsToExport = @()
-
-    # Variables to export from this module
-#    MainMenuItems = @('ADAdminAudit', 'ADSecurityBestPractices Test')
 
     # Variables to export from this module
     VariablesToExport = '*'

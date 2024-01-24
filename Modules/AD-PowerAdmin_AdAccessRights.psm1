@@ -20,7 +20,7 @@ Function Initialize-Module {
     # Append $global:Menu with the menu items to be displayed.
     $global:Menu += @{
         'HighRiskAd-AceAudit' = @{
-            Title    = "Audit High Risk Ad-ACE"
+            Title    = "Audit High Risk Ad-ACEs"
             Label    = "Audit AD objects with high risk ACEs on the root domain."
             Module   = "AD-PowerAdmin_AdAccessRights"
             Function = "Search-HighRiskAdAce"
@@ -919,25 +919,31 @@ function Out-AclDetails {
             return
         }
         # Set the $Count variable to 0.
-        $Count = 0
+        [int]$Count = 0
     }
 
     Process{
+
         # Foreach ACE in the ACL array, orginized the data and output it to the user.
         ForEach ( $ACE in $ACL ) {
+            # Increment the $Count variable by 1.
+            $Count++
+
+            # Display the ACE count to make the list output easier to read.
+            Write-Host "-- ACE# $($Count) --" -ForegroundColor Green
+
+            # Display the ACE details to the user.
             Write-Host "`"$($ACE.SecurityPrincipal)`" has the following ACE:" -ForegroundColor Yellow
             $ACE | Select-Object -Property SecurityPrincipal, Access, AdRights, RightObjectName, Inheritance, InheritedObjectTypeName | Out-Default
             $ACE.ExplainAce | Out-Default
+            # Display a blank line to make the list output easier to read.
             Write-Host ""
             # Check if the $ACE has SecurityPrincipal.
             if ($ACE.SecurityPrincipalMembers.Count -gt 0) {
+                # If there are members who can use this right, then display them to the user.
                 Write-Host "The following AD objects are members of the `"$($ACE.SecurityPrincipal)`" and can use this right." -ForegroundColor Red
                 $ACE.SecurityPrincipalMembers | Select-Object -Property SamAccountName, RightObjectName, InheritedRightFrom, AceApplicableTo | Out-Default
             }
-            Write-Host "------" -ForegroundColor Green
-
-            # Increment the $Count variable by 1.
-            $Count++
         }
     }
 
