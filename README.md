@@ -46,42 +46,6 @@ AD-PowerAdmin can be run manually, on-demand, or installed for full automation. 
  - A Scheduled Task is created with the sMSA account, "ADPowerAdmMSA", that will launch the AD-PowerAdmin script daily at 9AM.
 
 #
-# Modular Framework
-AD-PowerAdmin has undergone an entire rework. This tool started with a single purpose, but over time, I kept adding more and more features, eventually turning a simple tool into a monolithic mess. To keep adding features, I needed to create a modular method of loading and managing new functions. I also wanted to enable others to add features without reading through all the tool's code. So, for AD-PowerAdmin to grow, I created a framework for adding functionality.
-
-Here is an overview of how the framework works.
-graph TD
-    subgraph MainScript
-        A[AD-PowerAdmin.ps1]
-        B[Import .psm1 Files from  Modules Folder]
-        C[Loop Through Modules]
-        D[Invoke Initialize-Module in Module]
-        E[Append to $global:Menu]
-        F[Build Main Menu from $global:Menu]
-        G[Display Main Menu]
-        H[User Selects Option]
-        I[Run Selects Option Function from a Module]
-        J[Help Option]
-        K[Output contents of the functions .DESCRIPTION]
-        L[Quit]
-    end
-
-    A --> B
-    B --> C
-    C --> D
-    D -->|For Each| E
-    E --> F
-    F --> D
-    F -->|All Modules Loaded| G
-    G --> H
-    H --> I
-    I --> G
-    H -->|h| J
-    H -->|q| L
-    J --> |Select Option| K
-    K --> G
-
-#
 # Features In-Depth
 ## Audit for AD Security Best Practices
 This audit will look for many small security and best practices recommendations. Most of the tests are simple but could leave an AD server open to attack. Test performed include the following.

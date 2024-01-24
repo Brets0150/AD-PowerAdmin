@@ -41,7 +41,7 @@ Initialize-Module
 Function Get-AdGuids {
     <#
     .SYNOPSIS
-        Function to build a vaiable containing AD GUIDs, their human-readable name, and their objectClass.
+        Function to build a variable containing AD GUIDs, their human-readable name, and their objectClass.
 
     .DESCRIPTION
         Build an array of hashtables containing AD GUIDs, their human-readable name, and their objectClass. The array is then used to look up ObjectTypes/Permissions/PermissionSets/ExtentedRight name from its GUID.
