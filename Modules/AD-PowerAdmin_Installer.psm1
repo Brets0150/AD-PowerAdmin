@@ -106,7 +106,7 @@ function Install-ADPowerAdmin {
     Set-ADPowerAdminGPO -Install
 
     # Create a new scheduled task to run the AD-PowerAdmin script daily.
-    New-ADPowerAdminScheduledTask -ScriptsFullFullPathForScheduleTask "$global:IntallDirectory\$global:ThisScriptsName"
+    New-ADPowerAdminScheduledTask -ScriptFullPathForScheduleTask "$global:InstallDirectory\$global:ThisScriptsName"
 
     # Install the DSInternals PowerShell module.
     Install-DSInternals
@@ -114,10 +114,16 @@ function Install-ADPowerAdmin {
     # Test the AD-PowerAdmin install.
     Write-Host "Testing the AD-PowerAdmin install." -ForegroundColor White
     Write-host "----------------------------------------" -ForegroundColor White
-    Test-ADPowerAdminInstall
-    Write-host "----------------------------------------" -ForegroundColor White
-    Write-Host "The AD-PowerAdmin install is complete." -ForegroundColor Green
-
+    if (Test-ADPowerAdminInstall) {
+        Write-Host "The AD-PowerAdmin install was successful." -ForegroundColor Green
+        Write-host "----------------------------------------" -ForegroundColor White
+        Write-Host "Breaking out of script to ensure you move to the running AD-PowerAdmin from the new install directory." -ForegroundColor Green
+        Write-host "----------------------------------------" -ForegroundColor White
+        exit 0
+    } else {
+        Write-Host "The AD-PowerAdmin install failed." -ForegroundColor Red
+        Write-host "----------------------------------------" -ForegroundColor White
+    }
 # End of the Install-ADPowerAdmin function.
 }
 
@@ -261,7 +267,7 @@ function New-ADPowerAdminScheduledTask {
 
     param (
         [Parameter(Mandatory=$false, Position=1)]
-        [string]$ScriptsFullFullPathForScheduleTask = "$global:ThisScript"
+        [string]$ScriptFullPathForScheduleTask = "$global:InstallDirectory\\$global:ThisScript"
     )
 
     # ---------- Create the AD-PowerAdmin schedule task ----------
@@ -269,14 +275,14 @@ function New-ADPowerAdminScheduledTask {
     # Set ScheduleRunTime to be tomorrow at 9:00 AM.
     [datetime]$ScheduleRunTime = (Get-Date).AddDays(1).Date + "09:00:00"
     [string]$TaskDiscription = "AD-PowerAdmin Daily Tasks"
-    [string]$ThisScriptsFullName = "$ScriptsFullFullPathForScheduleTask"
+    [string]$ThisScriptsFullName = "$ScriptFullPathForScheduleTask"
     # Check if the AD-PowerAdmin_Daily schedule task already exists.
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
         # If the AD-PowerAdmin schedule task already exists, then ask the user if they want to overwrite the existing schedule task.
         Write-Host "The AD-PowerAdmin schedule task already exists." -ForegroundColor Yellow
-        $OverwriteScheduleTask = Read-Host "Do you want to overwrite the existing schedule task? (Y/N)"
+        $OverwriteScheduleTask = Read-Host "Do you want to overwrite the existing schedule task? (Default Y: Y/n)"
         # If the user does not want to overwrite the existing schedule task, then exit the function.
-        if ($OverwriteScheduleTask -ne 'Y' -or $OverwriteScheduleTask -ne 'y') {
+        if ($OverwriteScheduleTask -eq 'N' -or $OverwriteScheduleTask -eq 'n') {
             Write-Host "The AD-PowerAdmin schedule task was not overwritten." -ForegroundColor Yellow
             return
         }
@@ -437,33 +443,56 @@ function Copy-AdPowerAdmin {
     # Check if this script is running from the AD-PowerAdmin home directory.
     if ($global:InstallDirectory -ne $global:ThisScriptDir) {
 
-        # Check if the two directory contents match each other before we try to copy the data.
-        $DirCompare = Compare-Object -ReferenceObject (Get-ChildItem -Path "$global:ThisScriptDir" -Exclude ".git") -DifferenceObject (Get-ChildItem -Path "$global:InstallDirectory" -Exclude ".git") -Property Name -PassThru
+        try{
+            # Check if the two directory contents match each other before we try to copy the data.
+            $DirCompare = Compare-Object -ReferenceObject (Get-ChildItem -Path "$global:ThisScriptDir" -Exclude ".git") -DifferenceObject (Get-ChildItem -Path "$global:InstallDirectory" -Exclude ".git") -Property Name -PassThru
 
-        # If the two directory contents already match, then exit the function.
-        if ( $null -eq $DirCompare ) {
-            Write-Host 'AD-PowerAdmin is not running from the directory set in the AD-PowerAdmin_setttings.ps1($global:InstallDirectory)
-             config file, but the current running scripts directorys files match the install directorys files.' -ForegroundColor Yellow
+            # If the two directory contents already match, then exit the function.
+            if ( $null -eq $DirCompare ) {
+                # The two directory contents match each other.
+                Write-Host 'AD-PowerAdmin is not running from the directory set in the AD-PowerAdmin_setttings.ps1($global:InstallDirectory) config file, but the current running scripts files match the install directorys files.' -ForegroundColor Yellow
+                return
+            }
+        }
+        catch {
+            Write-Host 'The installation directory set in the AD-PowerAdmin_setttings.ps1($global:InstallDirectory) does not exist or is empty.' -ForegroundColor Yellow
+        }
+
+        # Get a list of the files in the AD-PowerAdmin current directory. We will use this list to compare the files in the AD-PowerAdmin home directory.
+        $CurrentDirFiles = Get-ChildItem -Path "$global:ThisScriptDir" -Exclude ".git"
+
+        # If this script is running from the AD-PowerAdmin home directory, then move the AD-PowerAdmin home directory.
+        Write-Host "Moving the AD-PowerAdmin files to the configured new home directory." -ForegroundColor Yellow
+
+        try {
+            # Had this as a copy command, but changed it to a move command. Reason is if someone add a large password list to the AD-PowerAdmin home directory, then it would take a long time to copy the files.
+            Move-Item -Path "$global:ThisScriptDir/*" -Destination "$global:InstallDirectory" -Force -ErrorAction SilentlyContinue
+        }
+        catch {
+            # Some error happened when we tried to move the files to the new home directory. The debug file will trigger this. Silenting the error.
+        }
+    }
+
+    # After we copied files to the new home directory, check if the two directory contents match each other.
+    try {
+        # Check if the two directory contents match each other.
+        $DirCompare = Compare-Object -ReferenceObject $CurrentDirFiles -DifferenceObject (Get-ChildItem -Path "$global:InstallDirectory" -Exclude ".git") -Property Name -PassThru
+
+        # Check the $InstallStatus variable for any differences.
+        if ( $null -ne $DirCompare ) {
+            Write-Host "Error: The AD-PowerAdmin home directory was not moved successfully." -ForegroundColor Red
+            Write-Host "The following files were not copied to the new home directory:" -ForegroundColor Red
+            $DirCompare | Select-Object -ExpandProperty Name
             return
         }
 
-        # If this script is running from the AD-PowerAdmin home directory, then move the AD-PowerAdmin home directory.
-        Write-Host "Copy the AD-PowerAdmin files to the configured new home directory." -ForegroundColor Yellow
-        Copy-Item -Path "$global:ThisScriptDir/*" -Destination "$global:InstallDirectory" -Force -Recurse
-        Clear-Variable -Name $DirCompare -ErrorAction SilentlyContinue
+        if ( $null -eq $DirCompare ) {
+            Write-Host "The AD-PowerAdmin home directory move was successful." -ForegroundColor Green
+        }
     }
-
-    # Check if the two directory contents match each other.
-    $DirCompare = Compare-Object -ReferenceObject (Get-ChildItem -Path "$global:ThisScriptDir" -Exclude ".git") -DifferenceObject (Get-ChildItem -Path "$global:InstallDirectory" -Exclude ".git") -Property Name -PassThru
-
-    # Check the $InstallStatus variable for any differences.
-    if ( $null -ne $DirCompare ) {
-        Write-Host "Error: The AD-PowerAdmin home directory was not copied successfully." -ForegroundColor Red
-        return
-    }
-
-    if ( $null -eq $DirCompare ) {
-        Write-Host "The AD-PowerAdmin currect directory matches the  set home directory." -ForegroundColor Green
+    catch {
+        # If you are here, then the "-DifferenceObject" is empty or does not exist.
+        throw "Error: The AD-PowerAdmin home directory was not moved successfully."
     }
 
     # If the function has not returned yet, then the AD-PowerAdmin home directory was copied successfully.
@@ -721,6 +750,7 @@ function Test-ADPowerAdminInstall {
         $TestAdPowerAdminInstallGood = $false
     }
 
+    return $TestAdPowerAdminInstallGood
 # End of the Test-ADPowerAdminInstall function.
 }
 

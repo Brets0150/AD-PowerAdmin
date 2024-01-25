@@ -445,13 +445,13 @@ Function Update-KRBTGTPassword {
     $KRBTGTObject = Get-ADUser -Filter {sAMAccountName -eq 'krbtgt'} -Properties *
 
     # Get a Intiger of days between the current date and the PasswordLastSet of the KRBTGT AD Object.
-    [int]$KRBTGTLastUpdateDays = (Get-Date).DayOfYear - $KRBTGTObject.PasswordLastSet.DayOfYear
+    [int]$KRBTGTLastUpdateDays = $( $(Get-Date) - $KRBTGTObject.PasswordLastSet ).Days
 
     # Check if the current KRBTGT password last update time is less than 90 days.
-    if ( ($KRBTGTLastUpdateDays -lt $global:krbtgtPwUpdateInterval) -and ($OverridePwd -eq $false) ) {
+    if ( ( $($KRBTGTLastUpdateDays) -lt $global:krbtgtPwUpdateInterval ) -and ($OverridePwd -eq $false) ) {
         # If the current KRBTGT password last update time is less than 90 days, then exit the script.
         Write-Host "The current KRBTGT password last update time is less than $global:krbtgtPwUpdateInterval days."
-        Write-Host "Days since last update: $KRBTGTLastUpdateDays"
+        Write-Host "Days since last update: $($KRBTGTLastUpdateDays.ToString())"
     }
 
     # If the current KRBTGT password last update time is greater than 90 days, then update the krbtgt user password.
@@ -485,7 +485,7 @@ Function Update-KRBTGTPassword {
                     [string]$ThisScriptsFullName = $global:ThisScript
 
                     # Create a schedule task to run the Update-KRBTGTPassword function X number of hours after first password update.
-                    New-ScheduledTask -ActionString 'PowerShell' -ActionArguments "$ThisScriptsFullName -Unattended $true -JobName `"krbtgt-RotateKey`"" -ScheduleRunTime $NextUpdateTime `
+                    New-ScheduledTask -ActionString 'PowerShell' -ActionArguments "$ThisScriptsFullName -Unattended -JobName `"krbtgt-RotateKey`"" -ScheduleRunTime $NextUpdateTime `
                     -Recurring Once -TaskName "KRBTGT-Final-Update" -TaskDiscription "KRBTGT second password update, to run once."
 
                     # Check if the scheduled task named "KRBTGT-Final-Update" was created successfully.
