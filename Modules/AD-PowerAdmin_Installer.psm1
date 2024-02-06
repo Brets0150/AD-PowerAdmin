@@ -553,15 +553,22 @@ Function Set-ADPowerAdminGPO {
         return
     }
 
-    # Get domain controller to run all commands against
-    [object]$DomainContollerServer = Get-ADDomainController
-    # Get the Active Directory root DNS domain name.
-    [object]$DnsRootDomainName = Get-ADDomain -Identity $DomainContollerServer.Domain | Select-Object -Property DNSRoot
-    # \\localhost\SYSVOL\domain.loc\Policies\{6AC1786C-016F-11D2-945F-00C04fB984F9}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf
-    [string]$GpoCfgFile = "\\$($DnsRootDomainName.DNSRoot)\SYSVOL\$($DnsRootDomainName.DNSRoot)\Policies\{6AC1786C-016F-11D2-945F-00C04fB984F9}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
-    # Get content of the $GpoCfgFile. Maintain the line breaks.
-    [string]$GpoCfgFileContent = Get-Content -Path $GpoCfgFile -Raw
-    $SID = Get-ADServiceAccount -Identity "$global:MsaAccountName`$" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SID -ErrorAction SilentlyContinue
+    try {
+        # Get domain controller to run all commands against
+        [object]$DomainContollerServer = Get-ADDomainController
+        # Get the Active Directory root DNS domain name.
+        [object]$DnsRootDomainName = Get-ADDomain -Identity $DomainContollerServer.Domain | Select-Object -Property DNSRoot
+        # \\localhost\SYSVOL\domain.loc\Policies\{6AC1786C-016F-11D2-945F-00C04fB984F9}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf
+        [string]$GpoCfgFile = "\\$($DnsRootDomainName.DNSRoot)\SYSVOL\$($DnsRootDomainName.DNSRoot)\Policies\{6AC1786C-016F-11D2-945F-00C04fB984F9}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
+        # Get content of the $GpoCfgFile. Maintain the line breaks.
+        [string]$GpoCfgFileContent = Get-Content -Path $GpoCfgFile -Raw
+        $SID = Get-ADServiceAccount -Identity "$global:MsaAccountName`$" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SID -ErrorAction SilentlyContinue
+    }
+    catch {
+        # If the above throws an error, then the AD-PowerAdmin sMSA account does not exist.
+        return $false
+    }
+
 
     #Check it $GpoCfgFile exists.
     if (-Not (Test-Path -Path "$GpoCfgFile")) {
@@ -640,10 +647,9 @@ Function Set-ADPowerAdminGPO {
         # Get the "SeServiceLogonRight" line from the $GpoCfgFileContent, and test that line contains the $global:MsaAccountName or $SID.Value.
         [string]$SeServiceLogonRightLine = $GpoCfgFileContent | Select-String -Pattern "SeServiceLogonRight"
         if (($SeServiceLogonRightLine -match "$global:MsaAccountName") -or ($SeServiceLogonRightLine -match "$($SID.Value)")) {
-            $true
-            return
+            return $true
         }
-        $false
+        return $false
     }
 
     # If Install or Uninstall switch is set, then write the $GpoCfgFileContentNew to the $GpoCfgFile.

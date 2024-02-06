@@ -416,6 +416,11 @@ Function Update-KRBTGTPassword {
         [bool]$OverridePwd
     )
 
+    # Check if this is a Unattended job and $global:KerberosKRBTGTAudit is not true. If it is, then exit the function.
+    If ($global:Unattended -and $global:KerberosKRBTGTAudit -eq $false) {
+        return
+    }
+
     # If [bool]$OverridePwd is unset, empty, or null, set it to $false.
     If ($null -eq $OverridePwd -or $OverridePwd -eq $false -or $OverridePwd -eq "") {
         $OverridePwd = $false
