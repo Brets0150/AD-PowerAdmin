@@ -52,20 +52,30 @@ Function Get-AdGuids {
 
     .EXAMPLE
         PS> $AdGuids = Get-AdGuids
+        PS> $RightObjectGuid = "5b47d60f-6090-40b2-9f37-2a4de88f3063"
 
-        PS> $AdGuids | Where-Object { $_.GUID -eq '9432c620-033c-4db7-8b58-14ef6d0bf477' }
-            GUID                                 Name                ObjectClass
-            ----                                 ----                -----------
-            9432c620-033c-4db7-8b58-14ef6d0bf477 Refresh-Group-Cache controlAccessRight
+        PS> $AdGuids[[GUID]'52458023-ca6a-11d0-afff-0000f80367c1']
+
+            Name                           Value
+            ----                           -----
+            GUID                           52458023-ca6a-11d0-afff-0000f80367c1
+            Name                           Initial-Auth-Incoming
+            ObjectClass                    attributeSchema
+
+        PS> $AdGuids[[GUID]'52458023-ca6a-11d0-afff-0000f80367c1'].Name
+            Initial-Auth-Incoming
+
+    .OUTPUTS
+        An array of hashtables containing AD GUIDs, their human-readable name, and their objectClass.
 
     .NOTES
 
     #>
 
     # Creating an empty dictionary
-    $GuidDictionary = New-Object System.Collections.Generic.List[object]
-    $SchemaIDGuids = Get-ADObject -SearchBase (Get-ADRootDSE).SchemaNamingContext -LDAPFilter '(SchemaIDGUID=*)' -Properties Name, SchemaIDGUID, ObjectClass
-    $ExtendedRights = Get-ADObject -SearchBase "CN=Extended-Rights,$((Get-ADRootDSE).ConfigurationNamingContext)" -LDAPFilter '(ObjectClass=controlAccessRight)' -Properties Name, RightsGUID, ObjectClass
+    $GuidDictionary  = @{}
+    $SchemaIDGuids   = Get-ADObject -SearchBase (Get-ADRootDSE).SchemaNamingContext -LDAPFilter '(SchemaIDGUID=*)' -Properties Name, SchemaIDGUID, ObjectClass
+    $ExtendedRights  = Get-ADObject -SearchBase "CN=Extended-Rights,$((Get-ADRootDSE).ConfigurationNamingContext)" -LDAPFilter '(ObjectClass=controlAccessRight)' -Properties Name, RightsGUID, ObjectClass
 
     ForEach($SchemaIDGuid in $SchemaIDGuids) {
         try {
@@ -74,8 +84,7 @@ Function Get-AdGuids {
                 Name        = [string]$SchemaIDGuid.Name
                 ObjectClass = [string]$SchemaIDGuid.ObjectClass
             }
-            $GuidDictionary.Add($([PSCustomObject]$Item))
-            # Clear-Variable Item
+            $GuidDictionary[$Item.GUID] = $Item
         }
         catch {
             <# Didn't put anything here because I just want a silent error when building the hashtable. #>
@@ -90,8 +99,7 @@ Function Get-AdGuids {
                 Name        = [string]$ExtendedRight.Name
                 ObjectClass = [string]$ExtendedRight.ObjectClass
             }
-            $GuidDictionary.Add($([PSCustomObject]$Item))
-            # Clear-Variable Item
+            $GuidDictionary[$Item.GUID] = $Item
         }
         catch {
             <# Didn't put anything here because I just want a silent error when building the hashtable. #>
@@ -107,8 +115,7 @@ Function Get-AdGuids {
             Name        = [string]"All"
             ObjectClass = [string]"Any"
         }
-        $GuidDictionary.Add($([PSCustomObject]$Item))
-        #Clear-Variable Item
+        $GuidDictionary[$Item.GUID] = $Item
     }
     catch {
         <# Didn't put anything here because I just want a silent error when building the hashtable. #>
@@ -372,6 +379,10 @@ function Get-ExtendedAcl {
 
         # Set the Domain Distinquished Name.
         $DomainDistinguishedName = ((Get-ADDomain).DistinguishedName).ToString()
+
+        # Get All AD Objects in the domain.
+        $AdObjectLookup = @{}
+        Get-ADObject -Filter 'SamAccountName -like "*"' -Properties SamAccountName, DistinguishedName, ObjectClass, ObjectSid | ForEach-Object { $AdObjectLookup[$_.SamAccountName] = $_ }
     }
 
     Process {
@@ -415,6 +426,7 @@ function Get-ExtendedAcl {
             # If the $SecurityPrincipal contains the Domain SID, then get the AD object by using the ObjectSid.
             # In my experiance, if the IdentityReference is a SID, then it is a deleted object.
             If ($SecurityPrincipal -like "*$DomainSID*") {
+                # Use the $AllAdObjects variable to lookup the $SecurityPrincipal in AD and get the AD object SamAccountName, DistinguishedName, and ObjectClass and store it in the $SecurityPrincipalAdObject variable.
                 $SecurityPrincipalAdObject = Get-ADObject -Filter {ObjectSid -eq $SecurityPrincipal} -Properties SamAccountName, DistinguishedName, ObjectClass -ErrorAction SilentlyContinue
             }
 
@@ -422,7 +434,7 @@ function Get-ExtendedAcl {
             # Data Example: "Domain\AccountName"
             If ($SecurityPrincipal -notlike "*$DomainSID*") {
 
-                # If $SkipSpecialIdentity is true then skip the special accounts.
+                # If $IncludeSpecialIdentities paramater switch is set to not true then skip the special accounts.
                 if (-not $IncludeSpecialIdentities) {
                     # Skip the special accounts.
                     # 'NT AUTHORITY\*'
@@ -505,8 +517,10 @@ function Get-ExtendedAcl {
                         Write-Host "Error: Cannot determine the Domain name and Account name from `"$($SecurityPrincipal)`"." -ForegroundColor Red
                         continue
                     }
-                    # Get the AD object by using the SamAccountName.
-                    $SecurityPrincipalAdObject = Get-ADObject -Filter {SamAccountName -eq $SamAccountName} -Properties SamAccountName, DistinguishedName, ObjectClass -ErrorAction SilentlyContinue
+                    # Use the $AllAdObjects variable to lookup the $SecurityPrincipal in AD and get the AD object SamAccountName, DistinguishedName, and ObjectClass and store it in the $SecurityPrincipalAdObject variable.
+                    # $SecurityPrincipalAdObject = $AllAdObjects | Where-Object { $_.SamAccountName -eq $SamAccountName } | Select-Object -Property SamAccountName, DistinguishedName, ObjectClass -ErrorAction SilentlyContinue
+                    $SecurityPrincipalAdObject = $AdObjectLookup[$SamAccountName] | Select-Object -Property SamAccountName, DistinguishedName, ObjectClass
+                    #$SecurityPrincipalAdObject = Get-ADObject -Filter {SamAccountName -eq $SamAccountName} -Properties SamAccountName, DistinguishedName, ObjectClass -ErrorAction SilentlyContinue
                 }
             }
 
@@ -528,8 +542,8 @@ function Get-ExtendedAcl {
             if ($RightObjectGuid -eq "00000000-0000-0000-0000-000000000000") {
                 $RightObjectName = "All"
             } else {
-                # Look Up the ObjectClass name from the $PermissionGuid($ACE.ObjectType) within the $AdGuids and store it in the $PermissionName variable.
-                $RightObjectName = $AdGuids | Where-Object {$_.GUID -eq $RightObjectGuid} | Select-Object -ExpandProperty Name
+                # Look up the $RightObjectGuid in the $AdGuids and store it in the $RightObjectName variable.
+                $RightObjectName = $AdGuids[[GUID]"$($RightObjectGuid)"].Name
             }
 
             ########
@@ -538,7 +552,7 @@ function Get-ExtendedAcl {
             if ($InheritedObjectTypeGuid -eq "00000000-0000-0000-0000-000000000000") {
                 [string]$InheritedObjectTypeName = "Any"
             } else {
-                [string]$InheritedObjectTypeName = $AdGuids | Where-Object {$_.GUID -eq $InheritedObjectTypeGuid} | Select-Object -ExpandProperty Name
+                [string]$InheritedObjectTypeName = $AdGuids[[GUID]"$($InheritedObjectTypeGuid)"].Name
             }
 
             ########
@@ -551,7 +565,7 @@ function Get-ExtendedAcl {
             #    2. attributeSchema: These are the Object attributes, but confusingly, the attributes every object has(like a User will have a "Phone Number" attribute on their AD user object) are also themself objects.
             #    3. classSchema: These are the Object types(aka objectClass(es)), like User, Group, OU, etc.
 
-            switch ($AdGuids | Where-Object {$_.GUID -eq $RightObjectGuid} | Select-Object -ExpandProperty objectClass) {
+            switch ($AdGuids[[GUID]"$($RightObjectGuid)"].objectClass) {
                 'controlAccessRight' {
                     [string]$InheritanceObjectMessage = "of `"$($RightObjectName)`""
                 }
@@ -632,21 +646,23 @@ function Get-ExtendedAcl {
                     $GroupsMembershipUsers = Get-ADGroupMember -Recursive -Identity $SecurityPrincipalAdObject.DistinguishedName
                     # Foreach member of the group, get the AD object details SamAccountName, DistinguishedName, and ObjectClass.
                     foreach ($GroupMember in $GroupsMembershipUsers) {
-                        $ADData.Add($(Get-ADObject -Filter "distinguishedName -eq `'$($GroupMember.DistinguishedName)`'" -Properties SamAccountName, DistinguishedName, ObjectClass))
+                        # Use the $AllAdObjects variable to lookup the $GroupMember.DistinguishedName in AD and get the AD object SamAccountName, DistinguishedName, and ObjectClass and store it in the $ADData variable.
+                        $ADData.Add($($AdObjectLookup[$GroupMember.SamAccountName] | Select-Object -Property SamAccountName, DistinguishedName, ObjectClass))
                     }
                 }
 
                 # If the $SecurityPrincipalAdObject has a ObjectClass that is not group(Computer, MSA-Account, User, ect...), Get the object's SamAccountName, DistinguishedName, & ObjectClass and add it to the $ADData variable.
                 if ($SecurityPrincipalAdObject.ObjectClass -ne 'group') {
-                    $ADData.Add($(Get-ADObject -Filter "distinguishedName -eq `'$($SecurityPrincipalAdObject.DistinguishedName)`'" -Properties SamAccountName, DistinguishedName, ObjectClass))
+                    # Use the $AllAdObjects variable to lookup the $SecurityPrincipalAdObject.DistinguishedName in AD and get the AD object SamAccountName, DistinguishedName, and ObjectClass and store it in the $ADData variable.
+                    $ADData.Add($($AdObjectLookup[$SecurityPrincipalAdObject.SamAccountName] | Select-Object -Property SamAccountName, DistinguishedName, ObjectClass))
                 }
                 # }
 
                 # Foreach AD Object(User, Computer, ServiceAccount) in $ADData, get the object details SamAccountName, DistinguishedName, and ObjectClass, along
                 #   with the ObjectClass GUID and ObjectClass name, and add it to the $SecurityPrincipalMembers variable.
                 foreach ($User in $ADData) {
-                    # Look Up the ObjectClass name from the $PermissionGuid($ACE.ObjectType) within the $AdGuids and store it in the $RightObjectName variable.
-                    $RightObjectName = $AdGuids | Where-Object {$_.GUID -eq $RightObjectGuid} | Select-Object -ExpandProperty Name
+                    # Look Up the ObjectClass name in the $AdGuids and store it in the $RightObjectName variable.
+                    $RightObjectName = $AdGuids[[GUID]"$($RightObjectGuid)"].Name
 
                     # Create a new temporary object to store the AD object details.
                     [PSCustomObject]$ADUserData = [ordered]@{
@@ -875,8 +891,8 @@ Function Search-HighRiskAdAce {
             $ACL.ActiveDirectoryRights -like "*GenericWrite*" -or
             $ACL.ActiveDirectoryRights -like "*WriteDacl*" -or
             $ACL.ActiveDirectoryRights -like "*WriteOwner*" -or
-            $ACL.ActiveDirectoryRights -like "*WriteProperty*" -or
-            $ACL.ActiveDirectoryRights -like "*WriteMembers*" -or
+            #$ACL.ActiveDirectoryRights -like "*WriteProperty*" -or
+            #$ACL.ActiveDirectoryRights -like "*WriteMembers*" -or
             $ACL.ActiveDirectoryRights -like "*AllExtendedRights*"
             )
         ){

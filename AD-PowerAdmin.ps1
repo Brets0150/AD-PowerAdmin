@@ -65,7 +65,7 @@ Param (
 $host.UI.RawUI.WindowTitle = "AD-PowerAdmin - CyberGladius.com"
 
 # Version of this script.
-[string]$global:Version = "1.0.3 Beta"
+[string]$global:Version = "1.0.3"
 
 # Max character length of the menu options.
 [int]$global:OptionsMaxTextLength = 82
@@ -136,6 +136,8 @@ function Stop-AllTranscripts {
     <#
     .SYNOPSIS
     Function that will stop all transcripts that are currently running.
+    Yes, this is a bit of a hack, but it works. There is not a way to query the current transcript sessions,
+        so we are forced to use a while loop to stop all transcripts. Auful, I know. I am open to suggestions on how to do this better.
     #>
 
     # Check if a transcript is already running.
