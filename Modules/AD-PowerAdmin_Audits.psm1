@@ -283,7 +283,7 @@ Function Get-ADUserAudit {
         # Get the current datetime and put it in a variable.
         [string]$CurrentDateTime = (Get-Date).ToString("yyyy-MM-dd_HH-mm-ss")
         # Export the results to a CSV file.
-        $ADUsers | Export-Csv -Path "$global:ThisScriptDir\\AD-UserAudit_$CurrentDateTime.csv" -NoTypeInformation
+        $ADUsers | Export-Csv -Path "$global:ReportsPath\\AD-UserAudit_$CurrentDateTime.csv" -NoTypeInformation
         # Display a message to the user that the results were exported to a CSV file.
         Write-Host "The results were exported to a CSV file located in the same directory as this script." -ForegroundColor Green
     } else {
@@ -1173,7 +1173,7 @@ Function Test-ADSecurityBestPractices {
     # Ask the user if they want to save the results to a text file. If yes, then start the transcript and save the results to a text file current directory with the name "ADSecurityBestPracticesTestResults_<DATETIME>.txt".
     [string]$SaveResults = Read-Host "Do you want to save the results to a text file? (default=Y, Y/n)"
     if ($SaveResults -eq 'Y' -or $SaveResults -eq 'y' -or $SaveResults -eq '') {
-        Start-Transcript -Path "$global:ThisScriptDir\ADSecurityBestPracticesTestResults_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt" -Force
+        Start-Transcript -Path "$global:ReportsPath\ADSecurityBestPracticesTestResults_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt" -Force
     }
 
     # Test for the AD Password Policy.

@@ -414,7 +414,7 @@ Function Export-AdPowerAdminData {
     # Making this a variable now, so if I want to expand this funtion in the future, I can add more file types.
     $FileExtension = "CSV"
     # Set the file name.
-    $FileName = "$($global:ThisScriptDir)\\$($ReportName)_$($CurrentDateTime).$FileExtension"
+    $FileName = "$($global:ReportsPath)\\$($ReportName)_$($CurrentDateTime).$FileExtension"
 
     # Export the data to a CSV file.
     try {

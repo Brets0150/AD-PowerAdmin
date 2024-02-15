@@ -58,6 +58,9 @@ Param (
 # Set Module path
 [string]$global:ModulesPath = "$global:ThisScriptDir\\Modules"
 
+# Set the reports folder path.
+[string]$global:ReportsPath = "$global:ThisScriptDir\\Reports"
+
 # Rename the terminal window, cuz it looks cool. =P
 $host.UI.RawUI.WindowTitle = "AD-PowerAdmin - CyberGladius.com"
 
@@ -121,12 +124,29 @@ function Initialize-Debug {
     if (!$TranscriptRunning) {
         # No transcript is currently running.
         if ($global:Debug) {
-            Start-Transcript -Path "$global:ThisScriptDir\\AD-PowerAdmin_Debug.log" -Append -Force | Out-Null
+            Start-Transcript -Path "$global:ReportsPath\\AD-PowerAdmin_Debug.log" -Append -Force | Out-Null
         }
     }
 
     return
 # End of Initialize-Debug function.
+}
+
+function Stop-AllTranscripts {
+    <#
+    .SYNOPSIS
+    Function that will stop all transcripts that are currently running.
+    #>
+
+    # Check if a transcript is already running.
+    try {
+        while ($true) {
+            Stop-Transcript -ErrorAction Stop
+        }
+    } catch {
+        # Do nothing.
+        return
+    }
 }
 
 function Initialize-AllModules {
@@ -190,6 +210,13 @@ function Initialize-ADPowerAdmin {
         Please ensure that the script is being run from a PowerShell prompt (i.e. not from a script or batch file).
         The AD-PowerAdmin_settings.ps1 file needs to be located in the same directory as the main AD-PowerAdmin.ps1 file." -ForegroundColor Red
         exit 1
+    }
+
+    Stop-AllTranscripts
+
+    # Check if the Reports folder exists, if not, create it.
+    if (!(Test-Path -Path $global:ReportsPath)) {
+        New-Item -Path $global:ReportsPath -ItemType Directory -Force | Out-Null
     }
 
     # If debug, $global:Debug, is true, Start-Transcript will be called.

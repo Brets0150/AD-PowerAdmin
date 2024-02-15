@@ -63,7 +63,7 @@ Function Get-AdGuids {
     #>
 
     # Creating an empty dictionary
-    [array]$GuidDictionary = @()
+    $GuidDictionary = New-Object System.Collections.Generic.List[object]
     $SchemaIDGuids = Get-ADObject -SearchBase (Get-ADRootDSE).SchemaNamingContext -LDAPFilter '(SchemaIDGUID=*)' -Properties Name, SchemaIDGUID, ObjectClass
     $ExtendedRights = Get-ADObject -SearchBase "CN=Extended-Rights,$((Get-ADRootDSE).ConfigurationNamingContext)" -LDAPFilter '(ObjectClass=controlAccessRight)' -Properties Name, RightsGUID, ObjectClass
 
@@ -74,7 +74,7 @@ Function Get-AdGuids {
                 Name        = [string]$SchemaIDGuid.Name
                 ObjectClass = [string]$SchemaIDGuid.ObjectClass
             }
-            $GuidDictionary += [PSCustomObject]$Item
+            $GuidDictionary.Add($([PSCustomObject]$Item))
             # Clear-Variable Item
         }
         catch {
@@ -90,7 +90,7 @@ Function Get-AdGuids {
                 Name        = [string]$ExtendedRight.Name
                 ObjectClass = [string]$ExtendedRight.ObjectClass
             }
-            $GuidDictionary += [PSCustomObject]$Item
+            $GuidDictionary.Add($([PSCustomObject]$Item))
             # Clear-Variable Item
         }
         catch {
@@ -107,7 +107,7 @@ Function Get-AdGuids {
             Name        = [string]"All"
             ObjectClass = [string]"Any"
         }
-        $GuidDictionary += [PSCustomObject]$Item
+        $GuidDictionary.Add($([PSCustomObject]$Item))
         #Clear-Variable Item
     }
     catch {
@@ -183,7 +183,6 @@ Function Get-AdAcl {
         }
 
         # Get the Domain distinguished path.
-        # $AdPath = "AD:$($(Get-ADDomain).DistinguishedName)"
         $AdPath = "AD:$($AdObjectPath)"
 
         # Get the access control list (ACL) for the specified Active Directory path
@@ -195,7 +194,7 @@ Function Get-AdAcl {
         }
 
         # initialize an array to hold the ACEs HashTables.
-        [array]$AdAcl = @()
+        [object]$AdAcl = New-Object System.Collections.Generic.List[object]
     }
     Process{
         # For each ACE in the ACL, add to a Hashtable ACE, then add that hashtable to the $AdAcl array.
@@ -213,7 +212,7 @@ Function Get-AdAcl {
                 InheritanceFlags      = $ACE.InheritanceFlags
                 PropagationFlags      = $ACE.PropagationFlags
             }
-            $AdAcl += [PSCustomObject]$ACE
+            $AdAcl.Add($([PSCustomObject]$ACE))
         }
     }
     End {
@@ -369,7 +368,10 @@ function Get-ExtendedAcl {
         $AdGuids = Get-AdGuids
 
         # Define the $ExtendedAcl variable as a hashtable. This will be the output of this function.
-        [array]$ExtendedAcl = @()
+        $ExtendedAcl = New-Object System.Collections.Generic.List[object]
+
+        # Set the Domain Distinquished Name.
+        $DomainDistinguishedName = ((Get-ADDomain).DistinguishedName).ToString()
     }
 
     Process {
@@ -393,20 +395,20 @@ function Get-ExtendedAcl {
 
             # Setting the variables to the ACE properties.
             # I know this is pointless and I could just use the $ACE.<property>, but this allows me to change the variable names to ones that are not so concusing.
-            [string]$AceApplicableTo         = $ACE.AceApplicableTo # AKA: The AD object that the ACE is applied to.
-            [string]$SecurityPrincipal       = $ACE.IdentityReference # AKA: Account/ad-object name.
-            [string]$AdRights                = $ACE.ActiveDirectoryRights # AKA: WriteProperty, ReadProperty, ExtendedRight, ect...
-            [string]$RightObjectGuid         = $ACE.ObjectType # AKA: object rights attribute
-            [string]$Access                  = $ACE.AccessControlType # AKA: Allow or Deny
-            [string]$IsInherited             = $ACE.IsInherited # AKA: True or False
-            [string]$Inheritance             = $ACE.InheritanceType # AKA: None, Descendents, All, Children, SelfAndChildren
-            [string]$InheritedObjectTypeGuid = $ACE.InheritedObjectType # AKA: The object type that the ACE is inherited to; Group, User, Computer, ect...
-            [string]$InheritanceFlags        = $ACE.InheritanceFlags # Ignore this value and just use the $Inheritance(InheritanceType) variable and its definitions.
-            [string]$PropagationFlags        = $ACE.PropagationFlags # Ignore this value and just use the $Inheritance(InheritanceType) variable and its definitions.
-            [bool]$SpecialSecurityPrincipal  = $false
-            [bool]$ExpandSecurityPrincipal   = $true
-            [array]$SecurityPrincipalMembers = @() # AKA: The members of the IdentityReference that the ACE is inherited to.
-            [hashtable]$NewAce               = @{}
+            [string]$AceApplicableTo          = $ACE.AceApplicableTo # AKA: The AD object that the ACE is applied to.
+            [string]$SecurityPrincipal        = $ACE.IdentityReference # AKA: Account/ad-object name.
+            [string]$AdRights                 = $ACE.ActiveDirectoryRights # AKA: WriteProperty, ReadProperty, ExtendedRight, ect...
+            [string]$RightObjectGuid          = $ACE.ObjectType # AKA: object rights attribute
+            [string]$Access                   = $ACE.AccessControlType # AKA: Allow or Deny
+            [string]$IsInherited              = $ACE.IsInherited # AKA: True or False
+            [string]$Inheritance              = $ACE.InheritanceType # AKA: None, Descendents, All, Children, SelfAndChildren
+            [string]$InheritedObjectTypeGuid  = $ACE.InheritedObjectType # AKA: The object type that the ACE is inherited to; Group, User, Computer, ect...
+            [string]$InheritanceFlags         = $ACE.InheritanceFlags # Ignore this value and just use the $Inheritance(InheritanceType) variable and its definitions.
+            [string]$PropagationFlags         = $ACE.PropagationFlags # Ignore this value and just use the $Inheritance(InheritanceType) variable and its definitions.
+            [bool]$SpecialSecurityPrincipal   = $false
+            [bool]$ExpandSecurityPrincipal    = $true
+            [object]$SecurityPrincipalMembers = New-Object System.Collections.Generic.List[object]  # AKA: The members of the IdentityReference that the ACE is inherited to.
+            [hashtable]$NewAce                = @{}
 
             ########
             # Step 1
@@ -456,7 +458,7 @@ function Get-ExtendedAcl {
                     # The "Everyone" account is not a AD object, so we need to create a fake AD object for it.
                     [PSCustomObject]$SecurityPrincipalAdObject = @{
                         SamAccountName    = $SamAccountName
-                        DistinguishedName = "CN=$($SamAccountName),CN=Builtin,$($((Get-ADDomain).DistinguishedName).ToString())"
+                        DistinguishedName = "CN=$($SamAccountName),CN=Builtin,$($DomainDistinguishedName)"
                         ObjectClass       = 'group'
                     }
                 }
@@ -473,7 +475,7 @@ function Get-ExtendedAcl {
                     # The "Everyone" account is not a AD object, so we need to create a fake AD object for it.
                     [PSCustomObject]$SecurityPrincipalAdObject = @{
                         SamAccountName    = 'Everyone'
-                        DistinguishedName = "CN=Everyone,CN=Builtin,$($((Get-ADDomain).DistinguishedName).ToString())"
+                        DistinguishedName = "CN=Everyone,CN=Builtin,$($DomainDistinguishedName)"
                         ObjectClass       = 'group'
                     }
                 }
@@ -616,7 +618,7 @@ function Get-ExtendedAcl {
             # Expand the IdentityReference property and get all members of the IdentityReference.
 
             # Set the $ADData variable to an empty array so we can use it to store the AD object details.
-            $ADData = @()
+            $ADData = New-Object System.Collections.Generic.List[object]
 
             # If $Inheritance ne "None", then get all members of the SecurityPrincipal/IdentityReference.
             # if ($Inheritance -ne 'None') {
@@ -630,13 +632,13 @@ function Get-ExtendedAcl {
                     $GroupsMembershipUsers = Get-ADGroupMember -Recursive -Identity $SecurityPrincipalAdObject.DistinguishedName
                     # Foreach member of the group, get the AD object details SamAccountName, DistinguishedName, and ObjectClass.
                     foreach ($GroupMember in $GroupsMembershipUsers) {
-                        $ADData += Get-ADObject -Filter "distinguishedName -eq `'$($GroupMember.DistinguishedName)`'" -Properties SamAccountName, DistinguishedName, ObjectClass
+                        $ADData.Add($(Get-ADObject -Filter "distinguishedName -eq `'$($GroupMember.DistinguishedName)`'" -Properties SamAccountName, DistinguishedName, ObjectClass))
                     }
                 }
 
                 # If the $SecurityPrincipalAdObject has a ObjectClass that is not group(Computer, MSA-Account, User, ect...), Get the object's SamAccountName, DistinguishedName, & ObjectClass and add it to the $ADData variable.
                 if ($SecurityPrincipalAdObject.ObjectClass -ne 'group') {
-                    $ADData += Get-ADObject -Filter "distinguishedName -eq `'$($SecurityPrincipalAdObject.DistinguishedName)`'" -Properties SamAccountName, DistinguishedName, ObjectClass
+                    $ADData.Add($(Get-ADObject -Filter "distinguishedName -eq `'$($SecurityPrincipalAdObject.DistinguishedName)`'" -Properties SamAccountName, DistinguishedName, ObjectClass))
                 }
                 # }
 
@@ -657,7 +659,7 @@ function Get-ExtendedAcl {
                         AceApplicableTo    = $AceApplicableTo
                     }
                     # Add the temporary object to the $SecurityPrincipalMembers variable.
-                    $SecurityPrincipalMembers += [PSCustomObject]$ADUserData
+                    $SecurityPrincipalMembers.Add($([PSCustomObject]$ADUserData))
 
                     # Clear the temporary object.
                     Clear-Variable ADUserData
@@ -712,7 +714,7 @@ function Get-ExtendedAcl {
             ########
             # Step 7
             # Add the $NewAce variable to the $ExtendedAcl variable.
-            $ExtendedAcl += [PSCustomObject]$NewAce
+            $ExtendedAcl.Add([PSCustomObject]$NewAce)
 
             # Clear the temporary object.
             Clear-Variable ADData, NewAce, SecurityPrincipalMembers
@@ -772,7 +774,7 @@ function Search-DcSyncRisk {
     #>
 
     # Set the $DCSyncAcl variable to an empty array.
-    $DCSyncAcl = @()
+    $DCSyncAcl = New-Object System.Collections.Generic.List[object]
 
     foreach ($DomainAce in (Get-AdAcl)) {
         if ((
@@ -800,7 +802,7 @@ function Search-DcSyncRisk {
         ){
             #$DomainAce | Get-Member | Out-Default
             # Add the ACE to the $DCSyncAcl variable.
-            $DCSyncAcl += $DomainAce
+            $DCSyncAcl.Add($DomainAce)
         }
 
     }
@@ -813,7 +815,7 @@ function Search-DcSyncRisk {
         # Ask the user if they want to save the results to a text file.
         [string]$SaveResults = Read-Host "Do you want to save the results to a text file? (default=Y, Y/n)"
         if ($SaveResults -eq 'Y' -or $SaveResults -eq 'y' -or $SaveResults -eq '') {
-            Start-Transcript -Path "$global:ThisScriptDir\DcSyncAudit_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt" -Force
+            Start-Transcript -Path "$global:ReportsPath\DcSyncAudit_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt" -Force
         }
         # Send the $DCSyncAcl array to the Out-AclDetails function to display the results to the user.
         $DCSyncAcl | Out-AclDetails
@@ -860,7 +862,7 @@ Function Search-HighRiskAdAce {
     )
 
     # Create a dictionary of GUIDs and their names.
-    $HighPrivilegedAcl = @()
+    $HighPrivilegedAcl = New-Object System.Collections.Generic.List[object]
 
     <#
     Foreach object in the Get-AdAcl, check if the object contains a "GenericAll", "GenericWrite", "WriteOwner",
@@ -879,7 +881,7 @@ Function Search-HighRiskAdAce {
             )
         ){
             # Add the matching ACL to the $WeakAdPermissions variable.
-            $HighPrivilegedAcl += $ACL
+            $HighPrivilegedAcl.Add($ACL)
         }
     }
 
@@ -891,7 +893,7 @@ Function Search-HighRiskAdAce {
         # Ask the user if they want to save the results to a text file.
         [string]$SaveResults = Read-Host "Do you want to save the results to a text file? (default=Y, Y/n)"
         if ($SaveResults -eq 'Y' -or $SaveResults -eq 'y' -or $SaveResults -eq '') {
-            Start-Transcript -Path "$global:ThisScriptDir\HighRiskAceAudit_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt" -Force
+            Start-Transcript -Path "$global:ReportsPath\HighRiskAceAudit_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt" -Force
         }
 
         # Send the $HighPrivilegedAcl array to the Out-AclDetails function to display the results to the user.
@@ -914,15 +916,15 @@ function Out-AclDetails {
     )
 
     Begin {
-        # Confirm the $ACL is not empty.
-        if ($null -eq $ACL) {
-            return
-        }
         # Set the $Count variable to 0.
         [int]$Count = 0
     }
 
     Process{
+        # Confirm the $ACL is not empty.
+        if ($null -eq $ACL) {
+            return
+        }
 
         # Foreach ACE in the ACL array, orginized the data and output it to the user.
         ForEach ( $ACE in $ACL ) {
@@ -968,26 +970,32 @@ function Out-AclDetailsLite {
     )
 
     Begin {
+        # Set the $Count variable to 0.
+        $Count = 0
+        # Initialize a generic list for holding the member details
+        $SecurityPrincipalMembersList = New-Object System.Collections.Generic.List[object]
+    }
+
+    Process{
         # Confirm the $ACL is not empty.
         if ($null -eq $ACL) {
             return
         }
-        # Set the $Count variable to 0.
-        $Count = 0
-
-        # Set the $SecurityPrincipalMembersList variable to an empty array.
-        [array]$SecurityPrincipalMembersList = @()
-    }
-
-    Process{
-        # Foreach ACE in the ACL array, orginized the data and output it to the user.
-        ForEach ( $ACE in $ACL ) {
-            # Check if the $ACE has SecurityPrincipal.
+        # Iterate over each ACE in the ACL array
+        foreach ($ACE in $ACL) {
+            # Check if the $ACE has SecurityPrincipal
             if ($ACE.SecurityPrincipalMembers.Count -gt 0) {
-                foreach ($SecurityPrincipalMember in $($ACE.SecurityPrincipalMembers)){
-                    $MemberDetails = $SecurityPrincipalMember | Select-Object -Property SamAccountName, RightObjectName, InheritedRightFrom, AceApplicableTo
-                    $SecurityPrincipalMembersList += $MemberDetails
-                    # Increment the $Count variable by 1.
+                foreach ($SecurityPrincipalMember in $ACE.SecurityPrincipalMembers) {
+                    # Create a new PSobject with the specified properties from $SecurityPrincipalMember.
+                    $MemberDetails = [PSCustomObject][ordered]@{
+                        SamAccountName      = $SecurityPrincipalMember.SamAccountName
+                        RightObjectName     = $SecurityPrincipalMember.RightObjectName
+                        InheritedRightFrom  = $SecurityPrincipalMember.InheritedRightFrom
+                        AceApplicableTo     = $SecurityPrincipalMember.AceApplicableTo
+                    }
+                    # Add the $MemberDetails to the list
+                    $SecurityPrincipalMembersList.Add($MemberDetails)
+                    # Increment the $Count variable by 1
                     $Count++
                 }
             }
