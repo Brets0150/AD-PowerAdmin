@@ -117,6 +117,7 @@
             - Added report export to CSV functionality to reduce repetitive code.
             V1.1:
             - Added pipeline support to Export-ADPowerAdminReport.
+            - Added fucntion to convert a time string to number of minutes. Needed for checking AD password and lockout policies.
 '@
 
         } # End of PSData hashtable

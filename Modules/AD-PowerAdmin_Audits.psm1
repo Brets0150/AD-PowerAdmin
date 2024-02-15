@@ -832,7 +832,7 @@ function Search-DisabledADAccountWithGroupMembership {
         [Object]$DisabledADAccountGroupMemberships = Get-ADPrincipalGroupMembership -Identity $DisabledADAccount.DistinguishedName
 
         # Create a list variable to store the disabled AD account's groups.
-        [Object]$DisabledADAccountGroupsList = @()
+        [Object]$DisabledADAccountGroupsList = New-Object System.Collections.Generic.List[object]
         # Loop through each disabled AD account's group and add it to the $DisabledADAccountGroupsList variable if it is not the "Domain Users" group.
         foreach ($DisabledADAccountGroup in $DisabledADAccountGroupMemberships) {
 
@@ -847,7 +847,7 @@ function Search-DisabledADAccountWithGroupMembership {
 
             # For all other groups that are not the "Domain Users" group, add the group to the $DisabledADAccountGroupsList variable.
             if ($DisabledADAccountGroup.Name -ne 'Domain Users') {
-                $DisabledADAccountGroupsList += $DisabledADAccountGroup.Name
+                $DisabledADAccountGroupsList.Add($DisabledADAccountGroup.Name)
             }
         }
 
@@ -856,6 +856,7 @@ function Search-DisabledADAccountWithGroupMembership {
             # Display the disabled AD account's groups to the user.
             Write-Host "The disabled AD account '$($DisabledADAccount.Name)' is a member of the following groups:" -ForegroundColor Red
             $DisabledADAccountGroupsList | Format-List
+            Write-Host ""
         }
     }
     return
@@ -1271,18 +1272,18 @@ Function Test-PasswordPolicy {
         Write-Host "The Password Policy setting 'ComplexityEnabled' is set to $($PasswordPolicy.ComplexityEnabled). This should be set to true." -ForegroundColor Red
     }
 
-    # Check if the Password Policy setting "LockoutDuration" is set to 00:00:30.
-    if ($PasswordPolicy.LockoutDuration -le '00:30:00') {
+    # Check if the Password Policy setting "LockoutDuration" is set to 00:30:00.
+    if ($(Convert-TimeDurationString -TimeString $PasswordPolicy.LockoutDuration) -ge 30) {
         Write-Host "The Password Policy setting 'LockoutDuration' is set to $($PasswordPolicy.LockoutDuration). Good!" -ForegroundColor Green
     } else {
-        Write-Host "The Password Policy setting 'LockoutDuration' is set to $($PasswordPolicy.LockoutDuration). This should be set to 00:00:30." -ForegroundColor Red
+        Write-Host "The Password Policy setting 'LockoutDuration' is set to $($PasswordPolicy.LockoutDuration). This should be set to 30 Minutes." -ForegroundColor Red
     }
 
-    # Check if the Password Policy setting "LockoutObservationWindow" is set to 00:00:30.
-    if ($PasswordPolicy.LockoutObservationWindow -le '00:30:00') {
+    # Check if the Password Policy setting "LockoutObservationWindow" is set to 00:30:00.
+    if ($(Convert-TimeDurationString -TimeString $PasswordPolicy.LockoutObservationWindow) -ge 30) {
         Write-Host "The Password Policy setting 'LockoutObservationWindow' is set to $($PasswordPolicy.LockoutObservationWindow). Good!" -ForegroundColor Green
     } else {
-        Write-Host "The Password Policy setting 'LockoutObservationWindow' is set to $($PasswordPolicy.LockoutObservationWindow). This should be set to 00:00:30." -ForegroundColor Red
+        Write-Host "The Password Policy setting 'LockoutObservationWindow' is set to $($PasswordPolicy.LockoutObservationWindow). This should be set to 30 Minutes." -ForegroundColor Red
     }
 
     # Check if the Password Policy setting "LockoutThreshold" is set to 5.
@@ -1293,7 +1294,7 @@ Function Test-PasswordPolicy {
     }
 
     # Check if the Password Policy setting "MaxPasswordAge" is set to 42.
-    if ($PasswordPolicy.MaxPasswordAge -le '90.00:00:00') {
+    if ($(Convert-TimeDurationString -TimeString $PasswordPolicy.MaxPasswordAge) -le 90) {
         Write-Host "The Password Policy setting 'MaxPasswordAge' is set to $($PasswordPolicy.MaxPasswordAge). Good!" -ForegroundColor Green
     } else {
         Write-Host "The Password Policy setting 'MaxPasswordAge' is set to $($PasswordPolicy.MaxPasswordAge)." -ForegroundColor Yellow
@@ -1303,17 +1304,17 @@ Function Test-PasswordPolicy {
     Write-Host "    If you want to know more read here: https://cybergladius.com/password-policy-best-practices-in-2023/" -ForegroundColor Yellow
 
     # Check if the Password Policy setting "MinPasswordAge" is set to 1.
-    if ($PasswordPolicy.MinPasswordAge -ge '1.00:00:00') {
+    if ($(Convert-TimeDurationString -TimeString $PasswordPolicy.MinPasswordAge) -ge 1) {
         Write-Host "The Password Policy setting 'MinPasswordAge' is set to $($PasswordPolicy.MinPasswordAge). Good!" -ForegroundColor Green
     } else {
-        Write-Host "The Password Policy setting 'MinPasswordAge' is set to $($PasswordPolicy.MinPasswordAge). This should be set to 1." -ForegroundColor Red
+        Write-Host "The Password Policy setting 'MinPasswordAge' is set to $($PasswordPolicy.MinPasswordAge). This should be set to 1 day." -ForegroundColor Red
     }
 
     # Check if the Password Policy setting "MinPasswordLength" is set to 14.
     if ($PasswordPolicy.MinPasswordLength -ge 14) {
         Write-Host "The Password Policy setting 'MinPasswordLength' is set to $($PasswordPolicy.MinPasswordLength). Good!" -ForegroundColor Green
     } else {
-        Write-Host "The Password Policy setting 'MinPasswordLength' is set to $($PasswordPolicy.MinPasswordLength). This should be set to 14." -ForegroundColor Red
+        Write-Host "The Password Policy setting 'MinPasswordLength' is set to $($PasswordPolicy.MinPasswordLength). This should be at least 14." -ForegroundColor Red
     }
 
     # Check if the Password Policy setting "PasswordHistoryCount" is set to 24.

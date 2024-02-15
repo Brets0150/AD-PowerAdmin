@@ -456,3 +456,27 @@ Function Export-AdPowerAdminData {
     }
 # End of Export-Data function
 }
+
+Function Convert-TimeDurationString {
+    <#
+    .SYNOPSIS
+    Function that will convert a time string("01:10:00") to minutes.
+
+    #>
+    Param(
+        [Parameter(Mandatory=$True,Position=1)]
+        [string]$TimeString
+    )
+
+    # Split the time string into hours, minutes, and seconds
+    $Parts = $TimeString -split ":"
+    # Extract hours, minutes, and seconds from the parts
+    $Hours   = [int]$Parts[0]
+    $Minutes = [int]$Parts[1]
+    $Seconds = [int]$Parts[2]
+    # Calculate the total minutes
+    [int]$TotalMinutes = ($Hours * 60) + $Minutes + [math]::Floor($Seconds / 60)
+
+    # Return the time duration in a human readable format.
+    return $TotalMinutes
+}
