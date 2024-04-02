@@ -445,7 +445,7 @@ function Copy-AdPowerAdmin {
 
         try{
             # Check if the two directory contents match each other before we try to copy the data.
-            $DirCompare = Compare-Object -ReferenceObject (Get-ChildItem -Path "$global:ThisScriptDir" -Exclude ".git") -DifferenceObject (Get-ChildItem -Path "$global:InstallDirectory" -Exclude ".git") -Property Name -PassThru
+            $DirCompare = Compare-Object -ReferenceObject (Get-ChildItem -Path "$global:ThisScriptDir" -Exclude ".git","Reports") -DifferenceObject (Get-ChildItem -Path "$global:InstallDirectory" -Exclude ".git","Reports" -Exclude "Reports") -Property Name -PassThru
 
             # If the two directory contents already match, then exit the function.
             if ( $null -eq $DirCompare ) {
@@ -459,14 +459,14 @@ function Copy-AdPowerAdmin {
         }
 
         # Get a list of the files in the AD-PowerAdmin current directory. We will use this list to compare the files in the AD-PowerAdmin home directory.
-        $CurrentDirFiles = Get-ChildItem -Path "$global:ThisScriptDir" -Exclude ".git"
+        $CurrentDirFiles = Get-ChildItem -Path "$global:ThisScriptDir" -Exclude ".git","Reports"
 
         # If this script is running from the AD-PowerAdmin home directory, then move the AD-PowerAdmin home directory.
         Write-Host "Moving the AD-PowerAdmin files to the configured new home directory." -ForegroundColor Yellow
 
         try {
             # Had this as a copy command, but changed it to a move command. Reason is if someone add a large password list to the AD-PowerAdmin home directory, then it would take a long time to copy the files.
-            Move-Item -Path "$global:ThisScriptDir/*" -Destination "$global:InstallDirectory" -Force -ErrorAction SilentlyContinue
+            Move-Item -Path "$global:ThisScriptDir/*" -Destination "$global:InstallDirectory" -Exclude "Reports" -Force -ErrorAction SilentlyContinue
         }
         catch {
             # Some error happened when we tried to move the files to the new home directory. The debug file will trigger this. Silenting the error.
@@ -476,7 +476,7 @@ function Copy-AdPowerAdmin {
     # After we copied files to the new home directory, check if the two directory contents match each other.
     try {
         # Check if the two directory contents match each other.
-        $DirCompare = Compare-Object -ReferenceObject $CurrentDirFiles -DifferenceObject (Get-ChildItem -Path "$global:InstallDirectory" -Exclude ".git") -Property Name -PassThru
+        $DirCompare = Compare-Object -ReferenceObject $CurrentDirFiles -DifferenceObject (Get-ChildItem -Path "$global:InstallDirectory" -Exclude ".git","Reports") -Property Name -PassThru
 
         # Check the $InstallStatus variable for any differences.
         if ( $null -ne $DirCompare ) {

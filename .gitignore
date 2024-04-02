@@ -1,3 +1,5 @@
 junk.ps1
 AD-PowerAdmin_Debug.log
 Reports
+Modules/AD-PowerAdmin_Mgr.psd1
+Modules/AD-PowerAdmin_Mgr.psm1
