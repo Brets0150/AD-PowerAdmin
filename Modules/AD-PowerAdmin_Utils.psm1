@@ -375,28 +375,28 @@ function Get-DateFromCalendar {
 Function Export-AdPowerAdminData {
     <#
     .SYNOPSIS
-    Function that will export data to a CSV file.
+        Function that will export data to a CSV file.
 
     .DESCRIPTION
-    Export data to a CSV file.
+        Export data to a CSV file.
 
     .EXAMPLE
-    Export-AdPowerAdminData -Data $ReportData -ReportName "ADPowerAdmin"
+        Export-AdPowerAdminData -Data $ReportData -ReportName "ADPowerAdmin"
 
     .PARAMETER Data
-    The data to be exported to a file. This is a required parameter.
-    You can use the pipeline to send data to this function, or you can use the -Data parameter.
+        The data to be exported to a file. This is a required parameter.
+        You can use the pipeline to send data to this function, or you can use the -Data parameter.
 
     .PARAMETER ReportName
-    The name of the report will be part of the filename that is created with the exported data. This is a required parameter.
-    Example: "ADPowerAdmin"
-    Result: "ADPowerAdmin_2020-01-01_00-00-00.csv"
+        The name of the report will be part of the filename that is created with the exported data. This is a required parameter.
+        Example: "ADPowerAdmin"
+        Result: "ADPowerAdmin_2020-01-01_00-00-00.csv"
 
     .PARAMETER Force
-    If the $Force switch is used, then the function will not ask the user if they want to export the results to a CSV file, it will just export the results to a CSV file.
+        If the $Force switch is used, then the function will not ask the user if they want to export the results to a CSV file, it will just export the results to a CSV file.
 
     .NOTES
-    This function is used by AD-PowerAdmin_Main.ps1 to export data to a CSV file.
+        This function is used by AD-PowerAdmin_Main.ps1 to export data to a CSV file.
 
     #>
     Param(

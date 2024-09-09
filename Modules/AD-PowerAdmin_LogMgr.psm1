@@ -592,7 +592,7 @@ Function Show-AdUserLockouts {
 
     # In a until loop, ask the user if they want to view another lockout event, confirm the user input is 'y' or 'n', if 'y' then sent the $LockoutReports back to the top of the loop.
     do {
-        $Prompt = "Do you want to view another lockout event, or the LogonType Description? (d/y/N)"
+        $Prompt = "Do you want to view another lockout event, (E)xport this report to a CSV, or the LogonType (D)escription? (e/d/y/n)"
         $Confirm = Read-Host -Prompt $Prompt
         if ($Confirm -eq "Y" -or $Confirm -eq "y"){
             Show-AdUserLockouts -LockoutReports $LockoutReports
@@ -602,6 +602,11 @@ Function Show-AdUserLockouts {
         }
         if ($Confirm -eq "D" -or $Confirm -eq "d"){
             Get-LogonTypeDiscription
+        }
+        if ($Confirm -eq "E" -or $Confirm -eq "e"){
+            $UserName = $FailedLoginEvents[0].TargetUsername
+            Export-AdPowerAdminData -Data $FailedLoginEvents -ReportName "FailedLogonAttempts_$($UserName)" -Force
+            Write-Host "Report exported to `"$($global:ReportsPath)`" directory." -ForegroundColor Green
         }
     } until ($Confirm -eq "Y" -or $Confirm -eq "y")
     # End of the Show-AdUserLockout function.
@@ -667,6 +672,12 @@ Function Trace-AdUserLockout {
             if ($LockoutEvent.Id -ne 4740){
                 Write-Host "The event in the pipeline is not a lockout event." -ForegroundColor Red
                 continue
+            }
+
+            # Check is $LockoutEvent.TargetDomainName is null. If it is, then set the $LockoutEvent.TargetDomainName to the localhost.
+            if (-not $LockoutEvent.TargetDomainName){
+                $LockoutEvent.TargetDomainName = $env:COMPUTERNAME
+                Write-Host "The TargetDomainName(Authentication Requesting system) is null, setting it to the localhost." -ForegroundColor Yellow
             }
             # Get the $CallingComputer DNSHostName
             $CallingComputer = $AdServers[($LockoutEvent.TargetDomainName).Split('$')[0]]
