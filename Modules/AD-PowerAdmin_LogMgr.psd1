@@ -26,14 +26,15 @@
     CompanyName = 'CyberGladius.com'
 
     # Copyright statement for this module
-    Copyright = '(c) 2023 CyberGladius. All rights reserved.'
+    Copyright = '(c) 2024 CyberGladius. All rights reserved.'
 
     # Description of the functionality provided by this module
     Description = @'
-    AD-PowerAdmin_LogMgr is a PowerShell module that provides methods for controlling and searching Windows Event Logs.
+    AD-PowerAdmin_LogMgr is a PowerShell module that provides methods for searching Windows Event Logs.
 
-    The module includes Two function:
-    -
+    The module includes the following function:
+    - Get Currnetly locked out users accounts in the domain.
+    - Search for user account lockout events in the Security Event Log. Then get the failed logon attempts for the user account from the Security Event Log of the server that the user account was locked out on.
 '@
 
     # Minimum version of the Windows PowerShell engine required by this module
@@ -73,7 +74,7 @@
     # NestedModules = @()
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-    FunctionsToExport = @()
+    FunctionsToExport = @('Show-ADUserLockouts', 'Get-CurrentLockedoutUsers')
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
     CmdletsToExport = @()
@@ -116,7 +117,8 @@
             # ReleaseNotes of this module
             ReleaseNotes = @'
             v1.0:
-            - Migrate from old methods to new methods.
+            - Main release of the module. Base functionality is complete for future expansion. This module will contain any Windows Log searching functions.
+              The core functions are only for reasearching locked out user accounts.
 '@
 
         } # End of PSData hashtable

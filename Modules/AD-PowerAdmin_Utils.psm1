@@ -480,3 +480,137 @@ Function Convert-TimeDurationString {
     # Return the time duration in a human readable format.
     return $TotalMinutes
 }
+
+function Search-SingleAdObject {
+    <#
+    .SYNOPSIS
+    Function to search for an AD Object and return a single result object. Used to provide other function a search method to find a single object.
+
+    .DESCRIPTION
+    Function to search for an AD Object and return a single result object. Used to provide other function a search method to find a single object.
+
+    .EXAMPLE
+    Unregister-AdUser -AdUserToDisable $(Search-SingleAdObject)
+
+    #>
+
+    # Ask the user if they want to search for a computer, user or all objects.
+    [string]$SearchType = Read-Host "Do you want to search for a Computer, User or All objects? (Default:A, c/u/A)"
+    # Check if the $SearchType is not equal to 'C', 'U', or 'A', or is empty. The check should be case insensitive.
+    if ($SearchType -ne 'C' -and $SearchType -ne 'U' -and $SearchType -ne 'A' -and $SearchType -ne 'c' -and $SearchType -ne 'u' -and $SearchType -ne 'a' -or $SearchType -eq '') {
+        Write-Host "Warrning: The SearchType given was empty. Defaulting to all Objects" -ForegroundColor Yellow
+        $SearchType = 'A'
+    }
+
+    # While $AdObject is empty, ask the user for the object name to search for.
+    while ($null -eq $AdObject) {
+        # Ask the user for the obect name to search for.
+        [string]$AdObject = Read-Host "Enter the name of the User/Computer/Object to search for"
+    }
+
+    # If the user wants to search for a computer, then search for the computer.
+    if ($SearchType -eq 'C' -or $SearchType -eq 'c') {
+        # Search for the given Computer in Active Directory.
+        [Object]$SearchResults = Get-AdComputer -Filter "(Name -like '*$AdObject*') -and (Enabled -eq 'True')" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName,samAccountName
+    }
+
+    # If the user wants to search for a user, then search for the user.
+    if ($SearchType -eq 'U' -or $SearchType -eq 'u') {
+        # Search for the given User in Active Directory.
+        [Object]$SearchResults = Get-AdUser -Filter "(Name -like '*$AdObject*') -and (Enabled -eq 'True')" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName,samAccountName
+    }
+
+    # If the user wants to search for all objects, then search for the object.
+    if ($SearchType -eq 'A' -or $SearchType -eq 'a') {
+        # Search for the given Object in Active Directory.
+        [Object]$SearchResults = Get-AdObject -Filter "(Name -like '*$AdObject*')" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName,samAccountName
+    }
+
+    # Check if the $SearchResults variable is empty.
+    if ($null -eq $SearchResults) {
+        Write-Host "Error: No AD Object with a name like '$AdObject' was found in Active Directory." -ForegroundColor Red
+        return
+    }
+
+    # If more that one object in $SearchResults was found, list out each with a select number and ask the user to pick one.
+    if ($SearchResults.Count -gt 1) {
+        $SearchResults | ForEach-Object -Begin { $i = 1 } -Process {
+            Write-Host "$i. $($_.Name -f 20) $( " -- UserPrincipalName: $($_.UserPrincipalName)" -f 40) $("DistinguishedName: $($_.DistinguishedName)" -f 40)"
+            Write-Host "------------------------------------------------------------"
+            $i++
+        }
+        $Selection = 0
+        # If the user selects a number that is not in the list or a non-numeric value, prompt the user to select a valid number.
+        while ($Selection -lt 1 -or $Selection -gt $SearchResults.Count -or $Selection -notmatch "^\d+$") {
+            $Selection = Read-Host -Prompt "Select number the desired object."
+        }
+        $SearchResults = $SearchResults[$Selection - 1]
+    }
+
+    # If the user wants the results in a object format, then return the results to the user.
+    return $SearchResults
+# End of the Search-ADUser function.
+}
+
+function Enable-OldWindowsTLS12 {
+    # TLS 1.2 must be enabled on older versions of Windows.
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+}
+
+Function Get-DatePickerGui {
+    <#
+    .SYNOPSIS
+        A GUI date picker function that returns the selected date.
+
+    .DESCRIPTION
+        A GUI date picker function that returns the selected date.
+
+    .EXAMPLE
+        $Date = Get-DatePickerGui
+
+    .NOTES
+        This core code of this function was taken from https://learn.microsoft.com/en-us/powershell/scripting/samples/creating-a-graphical-date-picker?view=powershell-7.4
+
+    #>
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+
+    $form = New-Object Windows.Forms.Form -Property @{
+        StartPosition = [Windows.Forms.FormStartPosition]::CenterScreen
+        Size          = New-Object Drawing.Size 243, 230
+        Text          = 'Select a Date'
+        Topmost       = $true
+    }
+
+    $calendar = New-Object Windows.Forms.MonthCalendar -Property @{
+        ShowTodayCircle   = $false
+        MaxSelectionCount = 1
+    }
+    $form.Controls.Add($calendar)
+
+    $okButton = New-Object Windows.Forms.Button -Property @{
+        Location     = New-Object Drawing.Point 38, 165
+        Size         = New-Object Drawing.Size 75, 23
+        Text         = 'OK'
+        DialogResult = [Windows.Forms.DialogResult]::OK
+    }
+    $form.AcceptButton = $okButton
+    $form.Controls.Add($okButton)
+
+    $cancelButton = New-Object Windows.Forms.Button -Property @{
+        Location     = New-Object Drawing.Point 113, 165
+        Size         = New-Object Drawing.Size 75, 23
+        Text         = 'Cancel'
+        DialogResult = [Windows.Forms.DialogResult]::Cancel
+    }
+    $form.CancelButton = $cancelButton
+    $form.Controls.Add($cancelButton)
+
+    $result = $form.ShowDialog()
+
+    if ($result -eq [Windows.Forms.DialogResult]::OK) {
+        $date = $calendar.SelectionStart
+        return $date
+    }
+    $form.Dispose()
+}
