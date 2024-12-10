@@ -735,6 +735,11 @@ Function Search-InactiveUsers {
                 Write-Host "Disabled User: $CurrentUserObject.SamAccountName" -ForegroundColor Green
             }
         }
+        # If $ReportOnly is True, ask the user if they want to export the results to a CSV file.
+        if ($ReportOnly -eq $true) {
+            # Ask the user if they want to export the results to a CSV file.
+            Export-AdPowerAdminData -Data $InactiveUserObjects -ReportName "AD-InactiveUsersReport"
+        }
     }
 
     # Check if $InactiveUserObjects is empty. If it is, Output that no users are inactive.

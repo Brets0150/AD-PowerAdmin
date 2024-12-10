@@ -12,7 +12,7 @@
     RootModule = 'AD-PowerAdmin_Utils.psm1'
 
     # Version number of this module.
-    ModuleVersion = '1.0'
+    ModuleVersion = '1.1'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -110,10 +110,21 @@
             # A URL to an icon representing this module.
             # IconUri = ''
 
+            # Channel: Alpha, Beta, Production
+            Channel = 'Production'
+
             # ReleaseNotes of this module
             ReleaseNotes = @'
             v1.0:
             - Initial release. Only function is for decommisioning an AD user account.
+
+            v1.1:
+            - Added function that lets a user select a time and date from a GUI.
+            - Updated the export data function to create a Report folder if it doesn't exist.
+            - Added a function to enalbe TLS 1.2 in current session.
+            - Updated the Search-SingleUser function to include flags for User, Computer, and Any.
+            - Added Show-Menu function to display a menu of options.
+            - Cleaned up the code and added comments.
 '@
 
         } # End of PSData hashtable

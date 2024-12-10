@@ -32,6 +32,13 @@ Function Initialize-Module {
             Function = "Get-CurrentLockedoutUsers"
             Command  = "Get-CurrentLockedoutUsers"
         }
+        'Show-AdUserFailedLoginEvents' = @{
+            Title    = "Search Account Failed Logons"
+            Label    = "Search a specific computer, Domain Controller, or the localhost for failed logon events(ID: 4625)."
+            Module   = "AD-PowerAdmin_LogMgr"
+            Function = "Show-AdUserFailedLoginEvents"
+            Command  = "Show-AdUserFailedLoginEvents"
+        }
     }
 }
 
@@ -62,17 +69,11 @@ Function Get-ADUserLockouts {
     param ([Parameter(Mandatory=$false,Position=1)][switch]$ShowOutput)
 
     [PSCustomObject]$LockoutEvents = @()
-    # Ask the user if they want to search for locakout events in the localhost or the primary domain controller.
-    $Prompt = "Do you want to search for account lockouts on the (L)ocalhost or the primary (D)omain controller? (l/D)"
-    $Confirm = Read-Host -Prompt $Prompt
-    if ($Confirm -eq "L" -or $Confirm -eq "l"){
-        $ComputerName = $env:COMPUTERNAME
-    }
-    if ($Confirm -ne "L" -or $Confirm -ne "l"){
-        $ComputerName = (Get-ADDomain).PDCEmulator
-    }
 
-    $LockoutEvents = Search-WindowsEventLogs -LogName 'Security' -ID 4740 -ComputerName $ComputerName
+    # Get the computer name to search for lockout events.
+    $ComputerName = Get-ComputerForLogSearch
+
+    $LockoutEvents = Search-WindowsEventLogs -LogName 'Security' -ID 4740 -ComputerName ($ComputerName)
 
     # Check if $LockoutEvents is null. If it is, return null.
     if (-not $LockoutEvents){
@@ -98,7 +99,9 @@ Function Get-LogonTypeDiscription {
         Get-LogonTypeDiscription
     .NOTES
     #>
-    $Message  = 'ID#--Name----------------------Discription------------------------------------------------------------------------------------' + "`n"
+    $Message  = '------------------------------------------------------------------------------------------------------------------------------' + "`n"
+    $Message += '------------------------------------------------------------Logon-Types-------------------------------------------------------' + "`n"
+    $Message += 'ID#--Name----------------------Discription------------------------------------------------------------------------------------' + "`n"
     $Message += '2   Interactive         - A user logged on to this computer.' + "`n"
     $Message += '3   Network             - A user or computer logged on to this computer from the network.' + "`n"
     $Message += '4   Batch               - Batch logon type is used by batch servers, where processes may be executing on behalf of a user without' + "`n"
@@ -108,15 +111,79 @@ Function Get-LogonTypeDiscription {
     $Message += '8   NetworkCleartext    - A user logged on to this computer from the network. The users password was passed to the authentication' + "`n"
     $Message += '                          package in its unhashed form. The built-in authentication packages all hash credentials before sending' + "`n"
     $Message += '                          them across the network. The credentials do not traverse the network in plaintext (also called cleartext).' + "`n"
-    $Message += '9    NewCredentials     - A caller cloned its current token and specified new credentials for outbound connections. The new logon' + "`n"
+    $Message += '9   NewCredentials     -  A caller cloned its current token and specified new credentials for outbound connections. The new logon' + "`n"
     $Message += '                          session has the same local identity, but uses different credentials for other network connections.' + "`n"
-    $Message += '10   RemoteInteractive  - A user logged on to this computer remotely using Terminal Services or Remote Desktop.' + "`n"
-    $Message += '11   CachedInteractive  - A user logged on to this computer with network credentials that were stored locally on the computer.' + "`n"
+    $Message += '10  RemoteInteractive  -  A user logged on to this computer remotely using Terminal Services or Remote Desktop.' + "`n"
+    $Message += '11  CachedInteractive  -  A user logged on to this computer with network credentials that were stored locally on the computer.' + "`n"
     $Message += '                          The domain controller was not contacted to verify the credentials.' + "`n"
     $Message += '-------------------------------------------------------------------------------------------------------------------------------' + "`n"
     Write-Host $Message -ForegroundColor White
 }
 
+Function Get-LockOutEventExplaination {
+    <#
+    .SYNOPSIS
+        Get-LockOutEventExplaination
+
+    .DESCRIPTION
+        Get-LockOutEventExplaination is a function that outputs the lockout event explaination to the console.
+
+    .EXAMPLE
+        Get-LockOutEventExplaination
+
+    .NOTES
+    #>
+    $Message  = '------------------------------------------------------------------------------------------------------------------------------' + "`n"
+    $Message += '------------------------------------------------------------Lockout-Events----------------------------------------------------' + "`n"
+    $Message += 'ID#--Name----------------------Discription------------------------------------------------------------------------------------' + "`n"
+    $Message += '4740  Account Lockout      - A user account was locked out.' + "`n"
+    $Message += '4771  Kerberos pre-auth    - A Kerberos authentication ticket (TGT) was requested.' + "`n"
+    $Message += '4776  Account Unlocked     - The domain controller attempted to validate the credentials for an account.' + "`n"
+    $Message += '-------------------------------------------------------------------------------------------------------------------------------' + "`n"
+    $Message += '                                     +------------------------------+'
+    $Message += '                                     |   Lockout Event ID: 4740     |'
+    $Message += '                                     |------------------------------|'
+    $Message += '                                     | A user account was locked out|'
+    $Message += '                                     |                              |'
+    $Message += '                                     | Subject:                     |'
+    $Message += '                                     |   Security ID: SYSTEM        |'
+    $Message += '                                     |   Account Name: AdServer01$  |'
+    $Message += '                                     |   Account Domain: ACME       |'
+    $Message += '                                     |   Logon ID: 0x3e7            |'
+    $Message += '                                     |                              |'
+    $Message += '                                     | Account That Was Locked Out: |'
+    $Message += '                                     |   Security ID: ACME\bret     |'
+    $Message += '                                     |   Account Name: bret         |'
+    $Message += '                                     |                              |'
+    $Message += '                                     | Additional Information:      |'
+    $Message += '                                     |   Caller Computer Name: PC01 |'
+    $Message += '                                     +------------------------------+'
+    $Message += '                                                     ^'
+    $Message += '                                                     |'
+    $Message += '                                                     |'
+    $Message += '                                             +---------------+'
+    $Message += '+-----------------------+                    |               |'
+    $Message += '| Name: PC01            |                    |               |'
+    $Message += '| Role: Calling Computer|                    |               |'
+    $Message += '| Logged: Nothing       |                    |               |'
+    $Message += '+-----------------------+                    |               |'
+    $Message += '             |                                \             /'
+    $Message += '             |                                 \           /'
+    $Message += '             |                                  \         /'
+    $Message += '         RDP | Connection                        \       /'
+    $Message += '             |                                    \     /'
+    $Message += '             |                                     \   /'
+    $Message += '             |                                      \ /'
+    $Message += '             v                                       v'
+    $Message += '+-------------------------+              Authentication Request        +------------------------+'
+    $Message += '| Name: Server01         | ------------------------------------------> | Name: AdServer01       |'
+    $Message += '| Role: Logon Target     |                                             | Role: Active Directory |'
+    $Message += '| Logged: Failed Logon   |                                             | Logged: Lockout Event  |'
+    $Message += '| EventID: 4725          |                                             |         ID: 4740       |'
+    $Message += '+------------------------+                                             +------------------------+'
+    $Message += '-------------------------------------------------------------------------------------------------------------------------------' + "`n"
+    Write-Host $Message -ForegroundColor White
+}
 Function Get-CurrentLockedoutUsers {
     <#
     .SYNOPSIS
@@ -132,47 +199,66 @@ Function Get-CurrentLockedoutUsers {
     .NOTES
     #>
 
-    # Get the currently locked out users accounts.
-    $CurrentlyLockedAdAccount = Search-ADAccount -LockedOut
-    # Check if $CurrentlyLockedAdAccount is null. If it is, return null.
-    if (-not $CurrentlyLockedAdAccount){
-        # Tell the user that no lockout events were found.
-        Write-Host "No locked out accounts found." -ForegroundColor Yellow
-        return $null
-    }
-    # Start a count for the number of locked accounts found.
-    $CurrentlyLockedAdAccountCount = 0
-    # If locked accounts are found, output the locked accounts to the console with a index number for each account.
-    $CurrentlyLockedAdAccount | ForEach-Object -Begin { $i = 1 } -Process {
-        Write-Host "$i. $($_.SamAccountName) - DistinguishedName: $($_.DistinguishedName)" -ForegroundColor Yellow
-        $i++
-    }
-    # Ask user until they select a valid index number to unlock and account or 'q' to quit.
-    [int]$CurrentlyLockedAdAccountCount = $i
-    $i = 0
-    do{
-        $Prompt = "Enter the index number of the account to unlock or 'q' to quit"
-        $Index = Read-Host -Prompt $Prompt
-        if ($Index -eq "q"){
+    #Try catch block to catch any errors that may occur.
+    try {
+        # Get the currently locked out users accounts.
+        $CurrentlyLockedAdAccount = Search-ADAccount -LockedOut
+        # Check if $CurrentlyLockedAdAccount is null. If it is, return null.
+        if (-not $CurrentlyLockedAdAccount){
+            # Tell the user that no lockout events were found.
+            Write-Host "No accounts are currently locked out." -ForegroundColor Yellow
             return $null
         }
-        if ($Index -lt 1 -or $Index -gt $CurrentlyLockedAdAccountCount){
-            Write-Host "Invalid index number. Please enter a valid index number." -ForegroundColor Red
-        }
-    } until ($Index -ge 1 -and $Index -le $CurrentlyLockedAdAccountCount)
 
-    # Unlock the selected account.
-    $CurrentlyLockedAdAccount[$Index - 1] | Unlock-ADAccount
-    # Check if the account was unlocked.
-    $Account = Get-ADUser -Identity $CurrentlyLockedAdAccount[$Index - 1].SamAccountName
-    if ($Account.Enabled -eq $true){
-        Write-Host "Account $($Account.SamAccountName) was successfully unlocked." -ForegroundColor Green
+        # Build a case select menu for the user to select an account to unlock.
+        $Menu = @{}
+        $i = 1
+        $CurrentlyLockedAdAccount | ForEach-Object {
+            $Menu.Add($i, $_.DistinguishedName)
+            $i++
+        }
+
+        # Build a selection menu for the user to select an account to unlock.
+        $Selection = Show-Menu -MenuName "Select an account to unlock" -MenuItems $Menu
+        Write-Host "Unlocking account: $($Selection)" -ForegroundColor Green
+
+        # Unlock the selected account.
+        Unlock-ADAccount -Identity $($Selection)
+        return
     }
-    if ($Account.Enabled -eq $false){
-        Write-Host "Failed to unlock account $($Account.SamAccountName)." -ForegroundColor Red
+    catch {
+        Write-Host "Failed to load the Active Directory module." -ForegroundColor Red
+        Write-Host "Error: $_" -ForegroundColor Red
+        return
     }
-    return
-    # Return the selected account to unlock.
+}
+
+Function Get-ComputerForLogSearch {
+    # Ask the user in a "do" loop if they want to search for locakout events in the localhost or the primary domain controller.
+    do{
+        $Prompt = "Do you want to search for failed log event on, a (R)emote system, on (L)ocalhost, or the primary (D)omain controller? (r/l/D)"
+        $Confirm = $null
+        $Confirm = Read-Host -Prompt $Prompt
+        if ($Confirm -eq "L" -or $Confirm -eq "l"){
+            $ComputerName = $env:COMPUTERNAME
+        }
+        if ($Confirm -eq "D" -or $Confirm -eq "d" -or $null -eq $Confirm -or $Confirm -eq ''){
+            $ComputerName = (Get-ADDomain).PDCEmulator
+            $Confirm = "D"
+        }
+        # If the user enters the 'r' or 'R' then prompt the user for the remote system name and search for that system name in Active Directory.
+        if ($Confirm -eq "R" -or $Confirm -eq "r"){
+            $ComputerName = (Search-SingleAdObject -Computer).Name
+            # If the $AdComputer is null, then the computer name was not found in Active Directory and return to the top of the loop.
+            if (-not $ComputerName){
+                Write-Host "The computer name was not found in Active Directory, please try again." -ForegroundColor Red
+                $ComputerName = $null
+                $Confirm = $null
+                continue
+            }
+        }
+    } until ($Confirm -eq "L" -or $Confirm -eq "l" -or $Confirm -eq "D" -or $Confirm -eq "d" -or $Confirm -eq "R" -or $Confirm -eq "r")
+    return $ComputerName
 }
 
 function Add-LogonFailureReason {
@@ -396,8 +482,10 @@ Function Search-WindowsEventLogs {
         [Parameter(Mandatory=$True,Position=2)][int]$ID,
         [Parameter(Mandatory=$false,Position=3)][datetime]$StartTime,
         [Parameter(Mandatory=$false,Position=4)][datetime]$EndTime,
-        [Parameter(Mandatory=$false,Position=5)][string]$ComputerName = $env:COMPUTERNAME
+        # [Parameter(Mandatory=$false,Position=5)][string]$ComputerName = $env:COMPUTERNAME
+        [Parameter(Mandatory=$true,Position=5)][string]$ComputerName
     )
+
 
     # Default number of days to search for events. I am using 24-hours as the default because searching for more then 24-hours can take a long time.
     #     However, I put this option here for you to change if you want.
@@ -612,6 +700,84 @@ Function Show-AdUserLockouts {
     # End of the Show-AdUserLockout function.
 }
 
+Function Get-FailedLoginEvents {
+    <#
+    .SYNOPSIS
+        Get-AdUserFailedLoginEvents
+
+    .DESCRIPTION
+        Get-AdUserFailedLoginEvents is a function that searches the Windows Event Logs for failed login attempts.
+        The function will search the Security Event Log for Event ID 4625, which is the failed login attempt event.
+        The function will return an array of hash tables of the failed login attempts.
+
+    .EXAMPLE
+        $FailedLoginEvents = Get-AdUserFailedLoginEvents
+
+    .NOTES
+
+    #>
+
+    $ComputerName = Get-ComputerForLogSearch
+    # Search the Windows Event Logs for the failed login attempts.
+    $FailedLoginEvents = Search-WindowsEventLogs -LogName 'Security' -ID 4625 -ComputerName $ComputerName
+
+    # Check if $FailedLoginEvents is null. If it is, return null.
+    if (-not $FailedLoginEvents){
+        Write-Host "No failed login attempts(ID: 4625) found in the $ComputerName Security log." -ForegroundColor Yellow
+        return $null
+    }
+    return $FailedLoginEvents
+    # End of the Get-AdUserFailedLoginEvents function.
+}
+
+Function Show-AdUserFailedLoginEvents {
+    <#
+    .SYNOPSIS
+        Show-FailedLoginEvents
+
+    .DESCRIPTION
+        Show-FailedLoginEvents is a function that takes in a list of failed login events and displays them to the user.
+        The function will display the failed login events in a table format to the user.
+
+    .EXAMPLE
+        $FailedLoginEvents | Show-FailedLoginEvents
+
+    .NOTES
+
+    #>
+    # Search the Windows Event Logs for the failed login attempts.
+    $FailedLoginEvents = Get-FailedLoginEvents
+
+    # Check if $FailedLoginEvents is null. If it is, return null.
+    if (-not $FailedLoginEvents){
+        return $null
+    }
+
+    # Output the failed login attempts to the user.
+    $FailedLoginEvents | Format-List -Property TargetUsername,TargetDomainName,MachineName,TimeCreated,RequestingServerDNS,LogonTypeName,IpAddress,IpPort,ProcessName,FailureReasonText
+
+    # In a until loop, ask the user if they want, export the log, to view another lockout event, confirm the user input is 'y' or 'n', if 'y' then sent the $LockoutReports back to the top of the loop.
+    do {
+        $Prompt = "Do you want to view another lockout event, (E)xport this report to a CSV, or the LogonType (D)escription? (e/d/y/n)"
+        $Confirm = Read-Host -Prompt $Prompt
+        if ($Confirm -eq "Y" -or $Confirm -eq "y"){
+            Show-AdUserLockouts -LockoutReports $LockoutReports
+        }
+        if ($Confirm -eq "N" -or $Confirm -eq "N"){
+            return
+        }
+        if ($Confirm -eq "D" -or $Confirm -eq "d"){
+            Get-LogonTypeDiscription
+        }
+        if ($Confirm -eq "E" -or $Confirm -eq "e"){
+            $UserName = $FailedLoginEvents[0].TargetUsername
+            Export-AdPowerAdminData -Data $FailedLoginEvents -ReportName "FailedLogonAttempts_$($UserName)" -Force
+            Write-Host "Report exported to `"$($global:ReportsPath)`" directory." -ForegroundColor Green
+        }
+    } until ($Confirm -eq "Y" -or $Confirm -eq "y")
+    # End of the Show-AdUserFailedLoginEvents function.
+}
+
 Function Trace-AdUserLockout {
     <#
     .SYNOPSIS
@@ -656,8 +822,8 @@ Function Trace-AdUserLockout {
         [int]$LockoutObservationWindow = ($PasswordPolicy.lockoutObservationWindow).TotalMinutes
         # Get a list of all Server Names in AD and their DNSHostName and put them into a hashtable.
         # We will need to look up the AuthServer in the AD to get the full dns name. So we will make one call now for all the servers to avoid multiple calls later, and slowing down the script.
-        $AdServers = @{}
-        Get-ADComputer -Filter * -Properties DNSHostName | Foreach-Object {$AdServers.Add( $_.Name, $_.DNSHostName)}
+        $ServersInAd = @{}
+        Get-ADComputer -Filter * -Properties DNSHostName | Foreach-Object {$ServersInAd.Add( $_.Name, $_.DNSHostName)}
 
         Write-Host "Lockout Observation Window: $LockoutObservationWindow minutes" -ForegroundColor White
         Write-Host "Starting log search on remote system, this may take a few minutes." -ForegroundColor White
@@ -680,11 +846,29 @@ Function Trace-AdUserLockout {
                 Write-Host "The TargetDomainName(Authentication Requesting system) is null, setting it to the localhost." -ForegroundColor Yellow
             }
             # Get the $CallingComputer DNSHostName
-            $CallingComputer = $AdServers[($LockoutEvent.TargetDomainName).Split('$')[0]]
+            $CallingComputer = $ServersInAd[($LockoutEvent.TargetDomainName).Split('$')[0]]
             # Set the start time to the lockoutObservationWindow minutes before the lockout event occured and Round down to the nearest minute.
             $StartTime = $LockoutEvent.TimeCreated.AddMinutes(-$LockoutObservationWindow).AddSeconds(-($LockoutEvent.TimeCreated.Second))
             # Set the end time to the $LockoutEvent.TimeCreated lockout event and Round up to the nearest minute.
             $EndTime = $LockoutEvent.TimeCreated.AddSeconds(-($LockoutEvent.TimeCreated.Second)).AddMinutes(1)
+
+            # Check if $CallingComputer is null. If it is, return null.
+            if (-not $CallingComputer){
+                Write-Host "The Computer that initiated the lockout event is not in the AD." -ForegroundColor Red
+                Write-Host "Calling Computer: $($LockoutEvent.TargetDomainName)" -ForegroundColor Red
+                # Ask the user if they want to try and search the PDCEmulator for the failed login attempts, in a do loop until the user enters 'Y' or 'n'.
+                do {
+                    $Prompt = "Do you want to try and search the PDCEmulator for the failed login attempts? (Y/n)"
+                    $Confirm = Read-Host -Prompt $Prompt
+                    if ($Confirm -eq "Y" -or $Confirm -eq "y"){
+                        $CallingComputer = (Get-ADDomain).PDCEmulator
+                        break
+                    }
+                    if ($Confirm -eq "N" -or $Confirm -eq "n"){
+                        continue
+                    }
+                } until ($Confirm -eq "Y" -or $Confirm -eq "y" -or $Confirm -eq "N" -or $Confirm -eq "n")
+            }
 
             # Get the failed login attempts for the user account "lockoutObservationWindow" minutes before the lockout event occured.
             $FailedLoginEvents = Search-WindowsEventLogs -LogName 'Security' -ID 4625 -StartTime $StartTime -EndTime $EndTime -ComputerName $CallingComputer

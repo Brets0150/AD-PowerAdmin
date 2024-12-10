@@ -137,8 +137,15 @@ Function New-ScheduledTask {
     #End of New-ScheduledTask function
 }
 
-# A Function that takes in "TO" and "FROM" email addresses and a subject line and sends an email with the contents of the $ReportData variable.
 Function Send-Email {
+    <#
+    .SYNOPSIS
+        Function to send an email.
+
+    .DESCRIPTION
+        # A Function that takes in "TO" and "FROM" email addresses and a subject line and sends an email with the contents of the $ReportData variable.
+
+    #>
     # Parameters for this function.
     Param(
         [Parameter(Mandatory=$true,Position=1)]
@@ -229,11 +236,17 @@ Function Send-Email {
     $Smtp.Dispose();
     # Start a sleep timer for 1 second.
     Start-Sleep -Seconds 1
-}
 # End of the Send-Email function.
+}
 
-# A To ask a user for the variable for the Send-Email function. With the gathered information, the function will send an email to the user.
 Function Send-EmailTest {
+    <#
+    .SYNOPSIS
+        Function to send a test email.
+
+    .DESCRIPTION
+        A To ask a user for the variable for the Send-Email function. With the gathered information, the function will send an email to the user.
+    #>
     [string]$Subject = "ADPowerAdmin: Test Email"
     [string]$Body = "This is a test email from the ADPowerAdmin script. If you are reading this, then the email was sent successfully."
     Write-Host "You can leave any of the following fields blank and the script will use the default settings from the 'AD-PowerAdmin_settings.ps1' file." -ForegroundColor Yellow
@@ -324,11 +337,19 @@ Function Send-EmailTest {
     # Try to send the email.
     Send-Email -ToEmail "$ToEmail" -FromEmail "$FromEmail" -Subject "$Subject" -Body "$Body" @SendTestEmailParam
     return
-}
 # End of the Send-EmailTest function.
+}
 
-# The GUI calander date select function. This code was taken from the following website: https://www.powershellgallery.com/packages/Calendar/1.0.0
 function Get-DateFromCalendar {
+    <#
+    .SYNOPSIS
+        Function to get a date from a calendar GUI.
+
+    .DESCRIPTION
+        # The GUI calander date select function. This code was taken from the following website: https://www.powershellgallery.com/packages/Calendar/1.0.0
+        # The code was modified to work with the AD-PowerAdmin script.
+    #>
+
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
 
@@ -369,8 +390,8 @@ function Get-DateFromCalendar {
         $date = $calendar.SelectionStart
         return $date
     }
+    # End of the Get-DateFromCalendar function.
 }
-# End of the Get-DateFromCalendar function.
 
 Function Export-AdPowerAdminData {
     <#
@@ -415,6 +436,11 @@ Function Export-AdPowerAdminData {
     $FileExtension = "CSV"
     # Set the file name.
     $FileName = "$($global:ReportsPath)\\$($ReportName)_$($CurrentDateTime).$FileExtension"
+
+    # Check if the reports directory exists. If it does not exist, then create the directory.
+    if (-not (Test-Path -Path $global:ReportsPath)) {
+        New-Item -ItemType Directory -Path $global:ReportsPath
+    }
 
     # Export the data to a CSV file.
     try {
@@ -484,22 +510,50 @@ Function Convert-TimeDurationString {
 function Search-SingleAdObject {
     <#
     .SYNOPSIS
-    Function to search for an AD Object and return a single result object. Used to provide other function a search method to find a single object.
+        Function to search for an AD Object and return a single result object. Used to provide other function a search method to find a single object.
 
     .DESCRIPTION
-    Function to search for an AD Object and return a single result object. Used to provide other function a search method to find a single object.
+        Function to search for an AD Object and return a single result object. Used to provide other function a search method to find a single object.
+
+    .PARAMETER AllObjects
+        If the $AllObjects switch is used, then search for all objects types.
+
+    .PARAMETER Computer
+        If the $Computer switch is used, then search for a computer object.
+
+    .PARAMETER User
+        If the $User switch is used, then search for a user object.
 
     .EXAMPLE
-    Unregister-AdUser -AdUserToDisable $(Search-SingleAdObject)
+        Unregister-AdUser -AdUserToDisable $(Search-SingleAdObject)
+        $AdUser = Search-SingleAdObject -User
+        $AdComputer = Search-SingleAdObject -Computer
+        $AdObject = Search-SingleAdObject -AllObjects
 
     #>
+    Param(
+        [Parameter(Mandatory=$False,Position=1)][switch]$AllObjects,
+        [Parameter(Mandatory=$False,Position=2)][switch]$Computer,
+        [Parameter(Mandatory=$False,Position=3)][switch]$User
+    )
 
-    # Ask the user if they want to search for a computer, user or all objects.
-    [string]$SearchType = Read-Host "Do you want to search for a Computer, User or All objects? (Default:A, c/u/A)"
-    # Check if the $SearchType is not equal to 'C', 'U', or 'A', or is empty. The check should be case insensitive.
-    if ($SearchType -ne 'C' -and $SearchType -ne 'U' -and $SearchType -ne 'A' -and $SearchType -ne 'c' -and $SearchType -ne 'u' -and $SearchType -ne 'a' -or $SearchType -eq '') {
-        Write-Host "Warrning: The SearchType given was empty. Defaulting to all Objects" -ForegroundColor Yellow
-        $SearchType = 'A'
+    # Case 1: If the $AllObjects switch is used, then search for all objects. Case 2: If the $Computer switch is used, then search for a computer. Case 3: If the $User switch is used, then search for a user.
+    switch ($true) {
+        { $AllObjects } { $SearchType = 'A' }
+        { $Computer } { $SearchType = 'C' }
+        { $User } { $SearchType = 'U' }
+        Default { $SearchType = '' }
+    }
+
+    # Check if the $SearchType is not equal to 'C', 'U', or 'A', or is empty. The check should not be case insensitive.
+    if ($SearchType -ne 'C' -and $SearchType -ne 'c' -and $SearchType -ne 'U' -and $SearchType -ne 'u' -and $SearchType -ne 'A' -and $SearchType -ne 'a' -or $SearchType -eq '') {
+        # Ask the user if they want to search for a computer, user or all objects.
+        [string]$SearchType = Read-Host "Do you want to search for a Computer, User or All objects? (Default:A, c/u/A)"
+        # Check if the $SearchType is not equal to 'C', 'U', or 'A', or is empty. The check should be case insensitive.
+        if ($SearchType -ne 'C' -and $SearchType -ne 'U' -and $SearchType -ne 'A' -and $SearchType -ne 'c' -and $SearchType -ne 'u' -and $SearchType -ne 'a' -or $SearchType -eq '') {
+            Write-Host "Warrning: The SearchType given was empty. Defaulting to all Objects" -ForegroundColor Yellow
+            $SearchType = 'A'
+        }
     }
 
     # While $AdObject is empty, ask the user for the object name to search for.
@@ -535,14 +589,14 @@ function Search-SingleAdObject {
     # If more that one object in $SearchResults was found, list out each with a select number and ask the user to pick one.
     if ($SearchResults.Count -gt 1) {
         $SearchResults | ForEach-Object -Begin { $i = 1 } -Process {
-            Write-Host "$i. $($_.Name -f 20) $( " -- UserPrincipalName: $($_.UserPrincipalName)" -f 40) $("DistinguishedName: $($_.DistinguishedName)" -f 40)"
+            Write-Host "$i. $($_.Name -f 20) $( " -- samAccountName: $($_.samAccountName)" -f 40) $("DistinguishedName: $($_.DistinguishedName)" -f 40)"
             Write-Host "------------------------------------------------------------"
             $i++
         }
         $Selection = 0
         # If the user selects a number that is not in the list or a non-numeric value, prompt the user to select a valid number.
         while ($Selection -lt 1 -or $Selection -gt $SearchResults.Count -or $Selection -notmatch "^\d+$") {
-            $Selection = Read-Host -Prompt "Select number the desired object."
+            $Selection = Read-Host -Prompt "Select number the desired object"
         }
         $SearchResults = $SearchResults[$Selection - 1]
     }
@@ -613,4 +667,63 @@ Function Get-DatePickerGui {
         return $date
     }
     $form.Dispose()
+}
+
+function Show-Menu {
+    <#
+    .Synopsis
+        Show a Menu.
+    .DESCRIPTION
+        User passes in a menu name, and a dictionary of menu items. The menu item will be displayed to the user.
+        The user will be asked to select a menu item. Oncea selection has been made, the function will return the
+        selected dictonary item.
+
+    .PARAMETER MenuName
+        The name(string) of the menu to be displayed.
+
+    .PARAMETER MenuItems
+        A dictionary of menu items to be displayed.
+
+    .EXAMPLE
+        $Menu = @{}
+        $i = 1
+        $CurrentlyLockedAdAccount | ForEach-Object {
+            $Menu.Add($i, $_.DistinguishedName)
+            $i++
+        }
+        $Selection = Show-Menu -MenuName "Select an account to unlock" -MenuItems $Menu
+
+    .NOTES
+    #>
+    Param(
+        [Parameter(Mandatory=$True,Position=1)]
+        [string]$MenuName,
+        [Parameter(Mandatory=$True,Position=2)]
+        [hashtable]$MenuItems
+    )
+
+    # Display the menu name
+    Write-Host "Menu: $MenuName" -ForegroundColor Yellow
+    # Display the menu items
+    $MenuItems.GetEnumerator() | ForEach-Object {
+        Write-Host "$($_.Key): $($_.Value)"
+    }
+
+    # Ask the user in a loop to select a menu item, until a valid menu item is selected, or the user types "Q" to quit.
+    while ($true) {
+        # Ask the user to select a menu item.
+        [string]$Selection = Read-Host "Select a menu item or type 'Q' to quit."
+        # If the user types "Q" or "q", then exit the loop.
+        if ($Selection -eq "Q" -or $Selection -eq "q") {
+            break
+        }
+        # If the user selects a menu item that is not in the menu, then ask the user to select a valid menu item.
+        if (-not $MenuItems.ContainsKey([int]$Selection)) {
+            Write-Host "Error: The menu item selected is not valid." -ForegroundColor Red
+            continue
+        }
+        # If the user selects a valid menu item, then return the selected menu item.
+        $Selected = $MenuItems[[int]$Selection]
+        return $Selected
+    }
 }

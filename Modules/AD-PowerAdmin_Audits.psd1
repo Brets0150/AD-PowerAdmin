@@ -14,6 +14,7 @@
     # Version number of this module.
     ModuleVersion = '1.1'
 
+
     # Supported PSEditions
     # CompatiblePSEditions = @()
 
@@ -125,6 +126,9 @@
 
             # A URL to an icon representing this module.
             # IconUri = ''
+
+            # Channel: Alpha, Beta, Production
+            Channel = 'Production'
 
             # ReleaseNotes of this module
             ReleaseNotes = @'

@@ -35,6 +35,8 @@
             - Updated PowerShell version check to to be acurate when using PowerShell Remote(WinRM).
         - 1.0.3 Beta - 1/23/2024:
             - Moving to Beta, with soft deploy to production.
+        - 1.2.0 Production - 9/18/2024:
+            - Added new versioning method to include module versions.
 #>
 
 #=======================================================================================
@@ -65,7 +67,7 @@ Param (
 $host.UI.RawUI.WindowTitle = "AD-PowerAdmin - CyberGladius.com"
 
 # Version of this script.
-[string]$global:Version = "1.0.3"
+[System.Version]$global:Version = "1.2.0"
 
 # Max character length of the menu options.
 [int]$global:OptionsMaxTextLength = 82
@@ -97,7 +99,7 @@ function Show-Logo {
     / /| | / / / /_____/ /_/ / __ \ | /| / / _ \/ ___/ /| |/ __  / __ ``__ \/ / __ \
    / ___ |/ /_/ /_____/ ____/ /_/ / |/ |/ /  __/ /  / ___ / /_/ / / / / / / / / / /
   /_/  |_/_____/     /_/    \____/|__/|__/\___/_/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/
-  Version: $global:Version
+  Version: $(Get-ADPAVersion)
 ====================================================================================
 
 " -ForegroundColor Cyan
@@ -130,6 +132,68 @@ function Initialize-Debug {
 
     return
 # End of Initialize-Debug function.
+}
+
+Function Get-ADPAVersion {
+    <#
+    .SYNOPSIS
+        Function that will output the version of this script.
+
+    .Discrption
+        This funciton will take Count all the module .psd1 files in the Modules folder, get each modules version(ModuleVersion), add those version numbers up into a X.X, then add X.X to this scripts version numbers last two digits.
+
+    .EXAMPLE
+        PS> Get-ADPAVersion
+    #>
+    # Parameters, A flag can be passed which will output the loaded modules, their versions and Channel.
+    [CmdletBinding()]
+    Param (
+        [switch]$Detailed
+    )
+
+    $Modules = Get-ChildItem -Path $global:ModulesPath -Filter *.psd1
+    [float]$Version = 0
+    Get-Content -Path $Modules.FullName | Select-String -Pattern "ModuleVersion" | ForEach-Object {
+        $Version += ($_.ToString()).Split('=')[1].Trim().Trim("'")
+    }
+    $CumulativeModuleVersion = [System.Version]$Version
+    [System.Version]$OverallVersion = "$($global:Version.Major).$($global:Version.Minor + $CumulativeModuleVersion.Major).$($global:Version.Build + $CumulativeModuleVersion.Minor)"
+
+    # Check the file contect for the "Channel" line, and use the lowest channel as the overall channel. Alpha < Beta < Production.
+    Get-Content -Path $Modules.FullName | Select-String -Pattern "Channel" | Select-String -Pattern "=" | ForEach-Object {
+        $Channel = ($_.ToString()).Split('=')[1].Trim().Trim("'")
+        if ($Channel -eq "Alpha") {
+            $OverallChannel = "Alpha"
+        }
+        if ($Channel -eq "Beta" -and $OverallChannel -ne "Alpha") {
+            $OverallChannel = "Beta"
+        }
+        if ($Channel -eq "Production" -and $OverallChannel -ne "Alpha" -and $OverallChannel -ne "Beta") {
+            $OverallChannel = "Production"
+        }
+    }
+
+    if ($Detailed) {
+        Write-Host "AD-PowerAdmin Version: $($OverallVersion) - $($OverallChannel)" -ForegroundColor Green
+        Write-Host "Modules Version: $($CumulativeModuleVersion) - $($OverallChannel)" -ForegroundColor Green
+        Write-Host "Modules Loaded: $($Modules.Count)" -ForegroundColor Green
+        # Create a custom PSObject to store the module name, version, and channel.
+        $ModulesDetails = @()
+
+        $Modules | ForEach-Object {
+            $ModuleVersion = (Get-Content -Path $_.FullName | Select-String -Pattern "ModuleVersion" | Select-String -Pattern "=").ToString().Split('=')[1].Trim().Trim("'")
+            $ModuleChannel = (Get-Content -Path $_.FullName | Select-String -Pattern "Channel" | Select-String -Pattern "=").ToString().Split('=')[1].Trim().Trim("'")
+            # Add the module name, version, and channel to the $ModulesDetails array.
+            $ModulesDetails += [PSCustomObject]@{
+                Name = $_.Name
+                Version = $ModuleVersion
+                Channel = $ModuleChannel
+            }
+        }
+        $ModulesDetails | Format-Table -AutoSize
+    }
+
+    return $OverallVersion, $OverallChannel
 }
 
 function Stop-AllTranscripts {
@@ -455,6 +519,11 @@ function Enter-MainMenu {
         $SelectedFunction = $MenuObjects | Where-Object {$_.MenuIndex -eq $MenuChoice} | Select-Object -ExpandProperty Function
         $Help = Get-Help -Name $SelectedFunction -Full
         $Help.DESCRIPTION
+    }
+
+    # If the user inputs 'gv' then run the Get-ADPAVersion function.
+    if ($MenuChoice -eq "gv") {
+        Get-ADPAVersion -Detailed
     }
 
     Pause

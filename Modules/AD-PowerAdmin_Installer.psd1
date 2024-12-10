@@ -110,6 +110,9 @@
             # A URL to an icon representing this module.
             # IconUri = ''
 
+            # Channel: Alpha, Beta, Production
+            Channel = 'Production'
+
             # ReleaseNotes of this module
             ReleaseNotes = @'
             v1.0:
