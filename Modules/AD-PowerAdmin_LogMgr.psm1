@@ -219,7 +219,7 @@ Function Get-CurrentLockedoutUsers {
         }
 
         # Build a selection menu for the user to select an account to unlock.
-        $Selection = Show-Menu -MenuName "Select an account to unlock" -MenuItems $Menu
+        $Selection = Show-Menu -MenuName "Select an account you want to unlock" -MenuItems $Menu
         Write-Host "Unlocking account: $($Selection)" -ForegroundColor Green
 
         # Unlock the selected account.

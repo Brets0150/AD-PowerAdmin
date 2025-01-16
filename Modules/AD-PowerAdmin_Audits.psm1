@@ -150,35 +150,44 @@ Function Get-ADAdmins {
 
     #>
 
+    # A list variable of all the groups with high value targets.
+    $ADAdminGroups = @(
+        "Domain Admins",
+        "Enterprise Admins",
+        "Administrators",
+        "Schema Admins",
+        "Backup Operators",
+        "Account Operators",
+        "Server Operators",
+        "Domain Controllers",
+        "Print Operators",
+        "Replicator",
+        "Enterprise Key Admins",
+        "Key Admins"
+    )
+
     [PSCustomObject]$ADAdmins = @()
 
-    # Append $ADAdmins with members of the Domain Admins
-    $ADAdmins = Get-ADGroupMember -Identity "Domain Admins" -Recursive -ErrorAction:SilentlyContinue
-    # Append $ADAdmins with members of the Enterprise Admins
-    $ADAdmins += Get-ADGroupMember -Identity "Enterprise Admins" -Recursive -ErrorAction:SilentlyContinue
-    # Append $ADAdmins with members of the Builtin Administrators group
-    $ADAdmins += Get-ADGroupMember -Identity "Administrators" -Recursive -ErrorAction:SilentlyContinue
-    # Append $ADAdmins with members of the Builtin "Schema administrators" group
-    $ADAdmins += Get-ADGroupMember -Identity "Schema Admins" -Recursive -ErrorAction:SilentlyContinue
-    # Append $ADAdmins with members of the Builtin "Backup operators" group
-    $ADAdmins += Get-ADGroupMember -Identity "Backup Operators" -Recursive -ErrorAction:SilentlyContinue
-    # Append $ADAdmins with members of the Builtin "Account operators" group
-    $ADAdmins += Get-ADGroupMember -Identity "Account Operators" -Recursive -ErrorAction:SilentlyContinue
-    # Append $ADAdmins with members of the Builtin "Server operators" group
-    $ADAdmins += Get-ADGroupMember -Identity "Server Operators" -Recursive -ErrorAction:SilentlyContinue
-    # Append $ADAdmins with members of the Builtin "Domain controllers" group
-    $ADAdmins += Get-ADGroupMember -Identity "Domain Controllers" -Recursive -ErrorAction:SilentlyContinue
-    # Append $ADAdmins with members of the Builtin "Print operators" group
-    $ADAdmins += Get-ADGroupMember -Identity "Print Operators" -Recursive -ErrorAction:SilentlyContinue
-    # Append $ADAdmins with members of the Builtin "Replicator" group
-    $ADAdmins += Get-ADGroupMember -Identity "Replicator" -Recursive -ErrorAction:SilentlyContinue
-    # Append $ADAdmins with members of the Builtin "Enterprise key admins" group
-    $ADAdmins += Get-ADGroupMember -Identity "Enterprise Key Admins" -Recursive -ErrorAction:SilentlyContinue
-    # Append $ADAdmins with members of the Builtin "key admins" group
-    $ADAdmins += Get-ADGroupMember -Identity "Key Admins" -Recursive -ErrorAction:SilentlyContinue
+    # Loop through each group in $ADAdminGroups
+
+    ForEach ($ADAdminGroup in $ADAdminGroups) {
+        $ADAdminsTemp = @()
+        # Get the members of the group
+        $ADAdminsTemp += Get-ADGroupMember -Identity $ADAdminGroup -Recursive -ErrorAction:SilentlyContinue
+        # Append the members of the group with the group name to the $ADAdmins variable as a PSCustomObject
+        $ADAdmins += $ADAdminsTemp | ForEach-Object {
+            [PSCustomObject]@{
+                Name              = $_.Name
+                SamAccountName    = $_.SamAccountName
+                DistinguishedName = $_.DistinguishedName
+                ObjectClass       = $_.ObjectClass
+                GroupMembership   = $ADAdminGroup
+            }
+        }
+    }
 
     # Remove duplicates from $ADAdmins
-    $ADAdmins = $ADAdmins | Select-Object -Unique
+    # $ADAdmins = $ADAdmins | Select-Object -Unique
 
     # Return the list of AD Admins
     return $ADAdmins
@@ -188,7 +197,7 @@ Function Get-ADAdmins {
 Function Get-ADAdminAudit {
     <#
     .SYNOPSIS
-    Fuction to takes a list of AD Users and gets their account details.
+    Fuction to that gets all AD Objects with high risk group membership, using the Get-ADAdmins function, then expands the details of each object and exports the results to a CSV file.
 
     .DESCRIPTION
     === AD Admin Account Report. ===
@@ -225,28 +234,42 @@ Function Get-ADAdminAudit {
 
     #>
 
+    [PSCustomObject]$ADAdminsData = @()
+
+    $ADAdmins = Get-ADAdmins
     # Loop through each AD Admin User
-    $AdminData = Get-ADAdmins | ForEach-Object {
+    $ADAdminsData = $ADAdmins | ForEach-Object {
+        # unset the $TempAdminData variable
+        Clear-Variable -Name TempAdminData -ErrorAction:SilentlyContinue
         # Test if $_ is a AD User, Computer, or Group Managed Service Account.
         if ($_.ObjectClass -eq "user") {
             # Get the AD User's details
-            Get-ADUser -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
+            $TempAdminData = Get-ADUser -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
         } elseif ($_.ObjectClass -eq "computer") {
             # Get the AD Computer's details
-            Get-ADComputer -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
+            $TempAdminData = Get-ADComputer -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
         } elseif ($_.ObjectClass -like '*ManagedServiceAccount') {
             # Get the AD Group Managed Service Account's details
-            Get-ADServiceAccount -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
+            $TempAdminData = Get-ADServiceAccount -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
+        }
+        [PSCustomObject]@{
+            Name              = $_.Name
+            SamAccountName    = $_.SamAccountName
+            DistinguishedName = $_.DistinguishedName
+            ObjectClass       = $_.ObjectClass
+            GroupMembership   = $_.GroupMembership
+            LastLogonDate     = $TempAdminData.LastLogonDate
+            Enabled           = $TempAdminData.Enabled
         }
     }
     # Sort the results by the Name property and remove duplicates.
-    $AdminData = $AdminData | Sort-Object -Property Name | Select-Object -Unique | Format-List -Property Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled
+    # $ADAdminsData | Format-List -Property Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled, GroupMembership | Write-Host
 
     # Ask the user if they want to export the results to a CSV file.
-    Export-AdPowerAdminData -Data $AdminData -ReportName "AD-AdminAudit"
+    Export-AdPowerAdminData -Data $ADAdminsData -ReportName "AD-AdminAudit"
 
     # Return the list of AD Admins
-    return $AdminData
+    return $ADAdminsData
 # End of Get-ADAdminAudit function
 }
 
