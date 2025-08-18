@@ -726,6 +726,7 @@ Function Search-InactiveUsers {
                 # Display the SamName and last login date.
                 Write-Host SamName: $_.SamAccountName `-`- Last Login: $_.LastLogonDate `-`- Distinguished Name: `'$_.DistinguishedName`'
             }
+            $InactiveUserObjects
             return
         }
 
