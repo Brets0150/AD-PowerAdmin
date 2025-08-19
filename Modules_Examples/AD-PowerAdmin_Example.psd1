@@ -113,10 +113,13 @@
             # A URL to an icon representing this module.
             # IconUri = ''
 
+            # Channel: Alpha, Beta, Production
+            Channel = 'Alpha'
+
             # ReleaseNotes of this module
             ReleaseNotes = @'
             v1.0:
-            - Migrate from old methods to new methods.
+            - TODO
 '@
 
         } # End of PSData hashtable

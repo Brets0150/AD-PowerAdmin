@@ -36,6 +36,13 @@ Function Initialize-Module {
             Function = "Remove-ADPowerAdmin"
             Command  = "Remove-ADPowerAdmin"
         }
+        'Install-PowerShell7' = @{
+            Title    = "Install PowerShell 7"
+            Label    = "Install PowerShell 7 on the system."
+            Module   = "AD-PowerAdmin_Installer"
+            Function = "Install-PowerShell7"
+            Command  = "Install-PowerShell7"
+        }
     }
 }
 
@@ -180,6 +187,41 @@ Function Install-DSInternals {
     }
 
 # End of Install-DSInternals function
+}
+
+Function Install-PowerShell7 {
+    <#
+    .SYNOPSIS
+    A function to install PowerShell 7.
+
+    .DESCRIPTION
+    This function will install PowerShell Version 7 system wide.
+    It will download the PowerShell 7 installer script from Microsoft and run it.
+
+    .EXAMPLE
+    Install-PowerShell7
+
+    .NOTES
+    #>
+    # Check if PowerShell 7 is already installed.
+    if ( $null -eq (Get-Command pwsh -ErrorAction SilentlyContinue) ) {
+        Write-Host "PowerShell 7 is not installed. Installing now..." -ForegroundColor Yellow
+    } else {
+        Write-Host "PowerShell 7 is already installed." -ForegroundColor Green
+        return
+    }
+
+    # Confirm the WinGet installation
+    if ( $null -eq (Get-Command winget -ErrorAction SilentlyContinue) ) {
+        Write-Host "WinGet is not installed. Please install WinGet and try again." -ForegroundColor Red
+        Exit 1
+    }
+
+    # Download the PowerShell 7 latest version for Windows using winget.
+    winget.exe install --id Microsoft.PowerShell --source winget
+
+    # Check if PowerShell 7 is installed.
+    Test-PowerShell7-Installed
 }
 
 function New-ADPowerAdminSmsaAccount {
@@ -675,6 +717,28 @@ Function Set-ADPowerAdminGPO {
         Invoke-GPUpdate -Force
     }
 # End of the New-ADPowerAdminGPO function.
+}
+
+function Test-PowerShell7-Installed {
+    <#
+    .SYNOPSIS
+    A function to test if PowerShell 7 is installed.
+
+    .DESCRIPTION
+    Test if PowerShell 7 is installed.
+
+    .EXAMPLE
+    Test-PowerShell7-Installed
+
+    .NOTES
+
+    #>
+    if ( $null -eq (Get-Command pwsh -ErrorAction SilentlyContinue) ) {
+        Write-Host "Error: PowerShell 7 is not installed." -ForegroundColor Red
+        return $false
+    }
+    Write-Host "PowerShell 7 is installed." -ForegroundColor Green
+    return $true
 }
 
 function Test-ADPowerAdminInstall {

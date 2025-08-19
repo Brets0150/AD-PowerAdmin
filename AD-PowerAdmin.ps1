@@ -159,17 +159,23 @@ Function Get-ADPAVersion {
     $CumulativeModuleVersion = [System.Version]$Version
     [System.Version]$OverallVersion = "$($global:Version.Major).$($global:Version.Minor + $CumulativeModuleVersion.Major).$($global:Version.Build + $CumulativeModuleVersion.Minor)"
 
+    # Initialize the OverallChannel variable with a default value
+    $OverallChannel = "Unknown"
+
     # Check the file contect for the "Channel" line, and use the lowest channel as the overall channel. Alpha < Beta < Production.
     Get-Content -Path $Modules.FullName | Select-String -Pattern "Channel" | Select-String -Pattern "=" | ForEach-Object {
-        $Channel = ($_.ToString()).Split('=')[1].Trim().Trim("'")
-        if ($Channel -eq "Alpha") {
-            $OverallChannel = "Alpha"
-        }
-        if ($Channel -eq "Beta" -and $OverallChannel -ne "Alpha") {
-            $OverallChannel = "Beta"
-        }
-        if ($Channel -eq "Production" -and $OverallChannel -ne "Alpha" -and $OverallChannel -ne "Beta") {
-            $OverallChannel = "Production"
+        $ChannelLine = $_
+        if ($ChannelLine) {
+            $Channel = ($ChannelLine.ToString()).Split('=')[1].Trim().Trim("'")
+            if ($Channel -eq "Alpha") {
+                $OverallChannel = "Alpha"
+            }
+            if ($Channel -eq "Beta" -and $OverallChannel -ne "Alpha") {
+                $OverallChannel = "Beta"
+            }
+            if ($Channel -eq "Production" -and $OverallChannel -ne "Alpha" -and $OverallChannel -ne "Beta") {
+                $OverallChannel = "Production"
+            }
         }
     }
 
@@ -181,8 +187,13 @@ Function Get-ADPAVersion {
         $ModulesDetails = @()
 
         $Modules | ForEach-Object {
-            $ModuleVersion = (Get-Content -Path $_.FullName | Select-String -Pattern "ModuleVersion" | Select-String -Pattern "=").ToString().Split('=')[1].Trim().Trim("'")
-            $ModuleChannel = (Get-Content -Path $_.FullName | Select-String -Pattern "Channel" | Select-String -Pattern "=").ToString().Split('=')[1].Trim().Trim("'")
+            $ModuleVersion = (Get-Content -Path $_.FullName | Select-String -Pattern "ModuleVersion" | Select-String -Pattern "=" ).ToString().Split('=')[1].Trim().Trim("'")
+            $ChannelLine = Get-Content -Path $_.FullName | Select-String -Pattern "Channel" | Select-String -Pattern "="
+            if ($ChannelLine) {
+                $ModuleChannel = $ChannelLine.ToString().Split('=')[1].Trim().Trim("'")
+            } else {
+                $ModuleChannel = "Unknown"
+            }
             # Add the module name, version, and channel to the $ModulesDetails array.
             $ModulesDetails += [PSCustomObject]@{
                 Name = $_.Name
@@ -194,6 +205,36 @@ Function Get-ADPAVersion {
     }
 
     return $OverallVersion, $OverallChannel
+}
+
+Function Show-Diagnostics {
+    <#
+    .SYNOPSIS
+    Function that will output diagnostic information about the script and its environment.
+
+    .DESCRIPTION
+    This function will gather and display information about the script's environment, including
+    the PowerShell version, the operating system, and any relevant environment variables.
+
+    .EXAMPLE
+    Show-Diagnostics
+
+    .NOTES
+
+    #>
+
+    Write-Host "AD-PowerAdmin Diagnostics" -ForegroundColor Cyan
+    Write-Host "----------------------------------------" -ForegroundColor Cyan
+    Write-Host "PowerShell Version: $($PSVersionTable.PSVersion)" -ForegroundColor White
+    Write-Host "Operating System: $([System.Environment]::OSVersion.VersionString)" -ForegroundColor White
+    Write-Host "Current User: $($env:USERNAME)" -ForegroundColor White
+    Write-Host "Script Directory: $($PSScriptRoot)" -ForegroundColor White
+    Write-Host "Modules Path: $($global:ModulesPath)" -ForegroundColor White
+    Write-Host "----------------------------------------" -ForegroundColor Cyan
+    Write-Host "Loaded Modules:" -ForegroundColor Cyan
+    Get-ADPAVersion -Detailed
+
+    return
 }
 
 function Stop-AllTranscripts {
@@ -521,9 +562,9 @@ function Enter-MainMenu {
         $Help.DESCRIPTION
     }
 
-    # If the user inputs 'gv' then run the Get-ADPAVersion function.
-    if ($MenuChoice -eq "gv") {
-        Get-ADPAVersion -Detailed
+        # If the user inputs 'd' then run the Show-Diagnostics function.
+    if ($MenuChoice -eq "d") {
+        Show-Diagnostics
     }
 
     Pause
