@@ -5,6 +5,8 @@ Modules/haveibeenpwned-downloader.exe
 .gitignore
 Modules/.dotnet
 Modules/.store
+CLAUDE.md
+temp*
 # Not Ready for release.
 Modules/AD-PowerAdmin_HIBP_PwndPwMgr.psd1
 Modules/AD-PowerAdmin_HIBP_PwndPwMgr.psm1
@@ -12,3 +14,4 @@ Modules/AD-PowerAdmin_Mgr.psd1
 Modules/AD-PowerAdmin_Mgr.psm1
 Modules/AD-PowerAdmin_Azure.psd1
 Modules/AD-PowerAdmin_Azure.psm1
+

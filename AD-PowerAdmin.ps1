@@ -1,6 +1,7 @@
 #Requires -RunAsAdministrator
 #Requires -Version 5
 #Requires -Modules ActiveDirectory
+# NOTE: Script will automatically escalate to PowerShell 7 if available
 
 <#
 .SYNOPSIS
@@ -80,6 +81,191 @@ $host.UI.RawUI.WindowTitle = "AD-PowerAdmin - CyberGladius.com"
 
 #=======================================================================================
 # Start Local Functions Section
+
+function Test-PowerShellVersion {
+    <#
+    .SYNOPSIS
+        Tests if the script is running in PowerShell 7 and escalates if necessary.
+
+    .DESCRIPTION
+        This function checks the current PowerShell version and re-launches the script
+        in PowerShell 7 if it's not already running in version 7. It preserves all
+        command-line arguments and maintains administrator privileges.
+
+    .EXAMPLE
+        Test-PowerShellVersion
+
+    .NOTES
+        This function should be called early in script execution, before any major initialization.
+    #>
+    
+    # Get current PowerShell version
+    $currentVersion = $PSVersionTable.PSVersion
+    $targetMajorVersion = 7
+    
+    Write-Host "Current PowerShell Version: $($currentVersion.ToString())" -ForegroundColor Cyan
+    
+    # Check if we're already running PowerShell 7
+    if ($currentVersion.Major -ge $targetMajorVersion) {
+        Write-Host "Already running PowerShell $targetMajorVersion or higher. Continuing..." -ForegroundColor Green
+        return $true
+    }
+    
+    Write-Host "PowerShell $targetMajorVersion is required. Attempting to escalate..." -ForegroundColor Yellow
+    
+    try {
+        # Try to find PowerShell 7 installation paths
+        $pwsh7Paths = @(
+            "${env:ProgramFiles}\PowerShell\7\pwsh.exe",
+            "${env:ProgramFiles(x86)}\PowerShell\7\pwsh.exe",
+            "${env:LOCALAPPDATA}\Microsoft\powershell\pwsh.exe"
+        )
+        
+        # Also check PATH for pwsh.exe
+        $pwshInPath = Get-Command "pwsh" -ErrorAction SilentlyContinue
+        if ($pwshInPath) {
+            $pwsh7Paths = @($pwshInPath.Source) + $pwsh7Paths
+        }
+        
+        $pwsh7Path = $null
+        foreach ($path in $pwsh7Paths) {
+            if (Test-Path $path) {
+                Write-Host "Found PowerShell executable: $path" -ForegroundColor Cyan
+                # Verify it's actually version 7 or higher
+                try {
+                    $versionCheck = & $path -NoProfile -Command '$PSVersionTable.PSVersion.Major'
+                    Write-Host "Version check result: $versionCheck" -ForegroundColor Cyan
+                    if ([int]$versionCheck -ge $targetMajorVersion) {
+                        $pwsh7Path = $path
+                        Write-Host "✓ PowerShell $versionCheck is suitable!" -ForegroundColor Green
+                        break
+                    } else {
+                        Write-Host "✗ Version $versionCheck is too old (need $targetMajorVersion+)" -ForegroundColor Yellow
+                    }
+                } catch {
+                    Write-Host "✗ Failed to check version: $($_.Exception.Message)" -ForegroundColor Red
+                    continue
+                }
+            }
+        }
+        
+        if (-not $pwsh7Path) {
+            Write-Host "PowerShell 7 not found. Please install PowerShell 7 from:" -ForegroundColor Red
+            Write-Host "https://github.com/PowerShell/PowerShell/releases" -ForegroundColor Yellow
+            Write-Host "Or use Windows Package Manager: winget install Microsoft.PowerShell" -ForegroundColor Yellow
+            
+            # Log this as an error
+            if (Get-Command Write-ErrorLog -ErrorAction SilentlyContinue) {
+                Write-ErrorLog -ErrorMessage "PowerShell 7 not found on system. Current version: $($currentVersion.ToString())" -Source "Test-PowerShellVersion"
+            }
+            
+            Read-Host "Press Enter to exit"
+            exit 1
+        }
+        
+        Write-Host "Found PowerShell 7 at: $pwsh7Path" -ForegroundColor Green
+        Write-Host "Re-launching script in PowerShell 7..." -ForegroundColor Yellow
+        
+        # Build the command line arguments to pass to the new PowerShell instance
+        $scriptPath = $global:ThisScript
+        $argumentList = @()
+        
+        # Add execution policy
+        $argumentList += "-ExecutionPolicy", "Bypass"
+        
+        # Add NoProfile to avoid loading profiles that might interfere
+        $argumentList += "-NoProfile"
+        
+        # Add the script file
+        $argumentList += "-File", "`"$scriptPath`""
+        
+        # Preserve original command line arguments
+        if ($args.Count -gt 0) {
+            $argumentList += $args
+        }
+        
+        # Check if we're running as administrator
+        $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
+        
+        if ($isAdmin) {
+            # We're already admin, launch PowerShell 7 as admin
+            try {
+                $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+                $processInfo.FileName = $pwsh7Path
+                $processInfo.Arguments = $argumentList -join " "
+                $processInfo.UseShellExecute = $true
+                $processInfo.Verb = "runas"  # This ensures admin privileges are maintained
+                
+                Write-Host "Launching: $pwsh7Path $($argumentList -join ' ')" -ForegroundColor Cyan
+                
+                $process = [System.Diagnostics.Process]::Start($processInfo)
+                
+                if ($process) {
+                    Write-Host "Successfully launched in PowerShell 7. Exiting current session..." -ForegroundColor Green
+                    exit 0
+                } else {
+                    throw "Failed to start PowerShell 7 process"
+                }
+            } catch {
+                Write-Host "Failed to launch PowerShell 7 as administrator: $($_.Exception.Message)" -ForegroundColor Red
+                
+                # Log this as an error
+                if (Get-Command Write-ErrorLog -ErrorAction SilentlyContinue) {
+                    Write-ErrorLog -ErrorMessage "Failed to launch PowerShell 7 as administrator" -ErrorObject $_ -Source "Test-PowerShellVersion"
+                }
+                
+                Read-Host "Press Enter to exit"
+                exit 1
+            }
+        } else {
+            # Not running as admin, need to elevate and switch to PowerShell 7
+            try {
+                $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+                $processInfo.FileName = $pwsh7Path
+                $processInfo.Arguments = $argumentList -join " "
+                $processInfo.UseShellExecute = $true
+                $processInfo.Verb = "runas"  # This will prompt for elevation
+                
+                Write-Host "Launching: $pwsh7Path $($argumentList -join ' ')" -ForegroundColor Cyan
+                Write-Host "You may be prompted for administrator privileges..." -ForegroundColor Yellow
+                
+                $process = [System.Diagnostics.Process]::Start($processInfo)
+                
+                if ($process) {
+                    Write-Host "Successfully launched in PowerShell 7 with elevation. Exiting current session..." -ForegroundColor Green
+                    exit 0
+                } else {
+                    throw "Failed to start PowerShell 7 process"
+                }
+            } catch {
+                Write-Host "Failed to launch PowerShell 7 with elevation: $($_.Exception.Message)" -ForegroundColor Red
+                Write-Host "Please run this script as Administrator or install PowerShell 7." -ForegroundColor Yellow
+                
+                # Log this as an error
+                if (Get-Command Write-ErrorLog -ErrorAction SilentlyContinue) {
+                    Write-ErrorLog -ErrorMessage "Failed to launch PowerShell 7 with elevation" -ErrorObject $_ -Source "Test-PowerShellVersion"
+                }
+                
+                Read-Host "Press Enter to exit"
+                exit 1
+            }
+        }
+        
+    } catch {
+        Write-Host "Error during PowerShell version escalation: $($_.Exception.Message)" -ForegroundColor Red
+        
+        # Log this as an error
+        if (Get-Command Write-ErrorLog -ErrorAction SilentlyContinue) {
+            Write-ErrorLog -ErrorMessage "Error during PowerShell version escalation" -ErrorObject $_ -Source "Test-PowerShellVersion"
+        }
+        
+        Read-Host "Press Enter to exit"
+        exit 1
+    }
+    
+    # This point should never be reached, but just in case
+    return $false
+}
 
 function Show-Logo {
     <#
@@ -575,6 +761,10 @@ function Enter-MainMenu {
 #=======================================================================================
 # Main Script Section
 #=======================================================================================
+
+# Check and escalate to PowerShell 7 if necessary
+# This must be done before any other initialization
+Test-PowerShellVersion
 
 # Initialize the script.
 Initialize-ADPowerAdmin

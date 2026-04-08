@@ -993,7 +993,7 @@ function Remove-AdPowerAdmin {
     # Ask the user if they want to delete the AD-PowerAdmin home directory.
     $DeleteHomeDirectory = Read-Host "Do you want to delete the AD-PowerAdmin home directory? (Y/N)"
     # If the user does not want to delete the AD-PowerAdmin home directory, then exit the function.
-    if ($DeleteHomeDirectory -ne 'Y' -or $DeleteHomeDirectory -ne 'y') {
+    if ($DeleteHomeDirectory -eq 'Y' -or $DeleteHomeDirectory -eq 'y') {
         # Check if the AD-PowerAdmin home directory exists at C:\Scripts\AD-PowerAdmin, if it exists then delete it.
         if (Test-Path -Path "$global:InstallDirectory") {
             Write-Host "Deleting the existing AD-PowerAdmin home directory." -ForegroundColor Yellow
