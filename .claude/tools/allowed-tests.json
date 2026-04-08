@@ -1,0 +1,12 @@
+{
+  "tests": {
+    "Smoke-AdConnection":    "C:\\ApprovedTests\\Smoke-AdConnection.ps1",
+    "Test-UserAudit":        "C:\\ApprovedTests\\Test-UserAudit.ps1",
+    "Test-ComputerAudit":    "C:\\ApprovedTests\\Test-ComputerAudit.ps1",
+    "Test-PasswordAudit":    "C:\\ApprovedTests\\Test-PasswordAudit.ps1",
+    "Test-AdminAudit":       "C:\\ApprovedTests\\Test-AdminAudit.ps1",
+    "Test-AclRights":        "C:\\ApprovedTests\\Test-AclRights.ps1",
+    "Test-KrbtgtAge":        "C:\\ApprovedTests\\Test-KrbtgtAge.ps1",
+    "Test-InstallVerify":    "C:\\ApprovedTests\\Test-InstallVerify.ps1"
+  }
+}
