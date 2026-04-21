@@ -6,6 +6,7 @@ Modules/haveibeenpwned-downloader.exe
 Modules/.dotnet
 Modules/.store
 temp*
+*/run-win-test.ps1
 # Not Ready for release.
 Modules/AD-PowerAdmin_HIBP_PwndPwMgr.psd1
 Modules/AD-PowerAdmin_HIBP_PwndPwMgr.psm1

@@ -36,8 +36,8 @@ $ErrorActionPreference = 'Stop'
 # ==============================================================================
 # CONFIGURATION — edit these values before first use
 # ==============================================================================
-[string]$TargetServer   = 'WIN-TEST-DC01'          # Hostname or IP of the Windows test server
-[string]$ServiceAccount = 'TESTDOMAIN\svc_adtest'  # Domain\Username for remoting
+[string]$TargetServer   = 'FL-222'          # Hostname or IP of the Windows test server
+[string]$ServiceAccount = 'TDCME.LOC\Bret.admin'  # Domain\Username for remoting
 [int]   $WinRmPort      = 5985                      # 5985 = HTTP (default), 5986 = HTTPS
 
 # Optional SSL remoting — uncomment both lines and set $WinRmPort = 5986 to enable
