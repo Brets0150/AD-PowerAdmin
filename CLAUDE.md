@@ -406,7 +406,7 @@ Adding a new module will increment the computed version automatically.
 6. **Use `$global:ReportsPath` for output.** Never hardcode paths.
 7. **Check `$global:Debug`** for conditional verbose or transcript output.
 8. **Email uses `Send-Email` from Utils module.** Parameters first, global settings as fallback.
-
+9. **Never use non-ASCII or multi-byte Unicode characters in any `.ps1` or `.psm1` file.** Characters such as `✓`, `✗`, emoji, smart quotes (`"` `"`), or any symbol outside the standard ASCII range (0x00–0x7F) cause encoding-related parse failures in the PowerShell interpreter, especially when scripts are transferred between machines or executed in environments with different default encodings. Use only plain ASCII text — for example, replace `✓` with `[OK]` and `✗` with `[FAIL]`.
 ---
 
 ## .gitignore Highlights
