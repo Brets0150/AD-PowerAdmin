@@ -18,6 +18,7 @@ Here is a quick list of features
 - Rotate the Kerberos KRBTGT Active Directory user password automatically. Golden Ticket attack defense.
 - Audit Active Directory security settings. This includes checking for weak settings and misconfigurations.
 - AD Searching tools.
+- Decommission AD user accounts on demand: strips all group memberships (preserving a record of former groups in the account description), rotates the password, disables the account, and moves it to the disabled OU.
 
 [See the wiki for more details of each feature](https://github.com/Brets0150/AD-PowerAdmin/wiki)
 

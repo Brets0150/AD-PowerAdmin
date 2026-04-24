@@ -79,6 +79,10 @@ $host.UI.RawUI.WindowTitle = "AD-PowerAdmin - CyberGladius.com"
 # Set the $global:UnattendedJobs variable to be used later.
 [PSCustomObject]$global:UnattendedJobs = @{}
 
+# Modules present in the Modules folder but skipped at load time due to a PS version
+# requirement that exceeds the current session. Populated by Get-IncompatibleModules.
+[array]$global:IncompatibleModules = @()
+
 #=======================================================================================
 # Start Local Functions Section
 
@@ -257,12 +261,86 @@ function Stop-AllTranscripts {
     }
 }
 
+function Get-IncompatibleModules {
+    <#
+    .SYNOPSIS
+        Scans the Modules folder and identifies modules whose minimum required PowerShell
+        version exceeds the version of the current session.
+
+    .DESCRIPTION
+        Reads each .psd1 manifest in $global:ModulesPath via Import-PowerShellDataFile,
+        extracts the PowerShellVersion field, and compares it against the running
+        $PSVersionTable.PSVersion. The result is stored in $global:IncompatibleModules
+        so other functions can reference it without re-scanning. When $global:Debug is
+        enabled the findings are also written to the active debug transcript.
+        This function does not import, alter, or remove any module.
+
+    .OUTPUTS
+        [PSCustomObject[]] Each object has:
+            Name            - BaseName of the incompatible .psd1 file
+            RequiredVersion - [System.Version] declared in the manifest
+            CurrentVersion  - [System.Version] of the running PS session
+
+    .EXAMPLE
+        Get-IncompatibleModules
+        $global:IncompatibleModules | ForEach-Object { Write-Host $_.Name }
+    #>
+
+    [array]$incompatible = @()
+    [System.Version]$currentVersion = $PSVersionTable.PSVersion
+
+    Get-ChildItem -Path $global:ModulesPath -Filter '*.psd1' | ForEach-Object {
+        try {
+            $manifest = Import-PowerShellDataFile -Path $_.FullName -ErrorAction Stop
+            if ($manifest.PowerShellVersion) {
+                [System.Version]$required = $manifest.PowerShellVersion
+                if ($currentVersion -lt $required) {
+                    $incompatible += [PSCustomObject]@{
+                        Name            = $_.BaseName
+                        RequiredVersion = $required
+                        CurrentVersion  = $currentVersion
+                    }
+                }
+            }
+        } catch {
+            # Manifest unreadable; treat as compatible and let Import-Module surface any error.
+        }
+    }
+
+    # Persist result globally so Enter-MainMenu can display the banner without re-scanning.
+    $global:IncompatibleModules = $incompatible
+
+    # Debug transcript output. Initialize-Debug is called before Initialize-AllModules,
+    # so the transcript is already active when this runs. Output is conditional on the
+    # debug flag to avoid polluting the console in non-debug runs.
+    if ($global:Debug) {
+        if ($incompatible.Count -gt 0) {
+            Write-Host "DEBUG: Module compatibility scan (PS $currentVersion) - $($incompatible.Count) module(s) skipped:" -ForegroundColor DarkYellow
+            $incompatible | ForEach-Object {
+                Write-Host "  DEBUG: '$($_.Name)' requires PS $($_.RequiredVersion) - not loaded in this session." -ForegroundColor DarkYellow
+            }
+        } else {
+            Write-Host "DEBUG: Module compatibility scan (PS $currentVersion) - all modules compatible." -ForegroundColor DarkGray
+        }
+    }
+
+    return $incompatible
+}
+
 function Initialize-AllModules {
+    # Detect incompatible modules before loading anything. Results are stored in
+    # $global:IncompatibleModules and optionally written to the debug transcript.
+    Get-IncompatibleModules | Out-Null
+    [array]$incompatibleNames = $global:IncompatibleModules | Select-Object -ExpandProperty Name
+
     # Try to import the models from the Modules folder and catch any errors.
     try {
         # We only want to import the module manifests. This ensures the modules are loaded in the correct order and only things we want are loaded.
         # Do not change this to import the modules directly(".psm1"). Don't be lazy, write the module manifest.
-        Get-ChildItem -Path $global:ModulesPath -Filter *.psd1 | ForEach-Object {Import-Module "$global:ModulesPath\\$($_.Name)" -Force -Verbose}
+        Get-ChildItem -Path $global:ModulesPath -Filter *.psd1 | ForEach-Object {
+            if ($incompatibleNames -contains $_.BaseName) { return }
+            Import-Module "$global:ModulesPath\\$($_.Name)" -Force -Verbose
+        }
         clear-host
     } catch {
         Write-Host "Error: Could not import the modules from the Modules folder.
@@ -447,8 +525,21 @@ function Enter-MainMenu {
     Initialize-Debug
 
     # Call the Show-Logo function to display the logo.
-    Clear-Host
+    try { Clear-Host } catch { Write-Host ([char]27 + "[2J" + [char]27 + "[H") -NoNewline }
     Show-Logo
+
+    # Yellow banner listing any modules that were skipped due to PS version mismatch.
+    # $global:IncompatibleModules is populated by Get-IncompatibleModules during
+    # Initialize-AllModules, so no re-scan is needed here.
+    if ($global:IncompatibleModules.Count -gt 0) {
+        Write-Host ""
+        Write-Host "[!] Running under PowerShell $($PSVersionTable.PSVersion.Major). The following modules require a newer version and are not available:" -ForegroundColor Yellow
+        $global:IncompatibleModules | ForEach-Object {
+            Write-Host "    - $($_.Name)  (requires PS $($_.RequiredVersion))" -ForegroundColor Yellow
+        }
+        Write-Host "    Launch a PowerShell 7 console and run AD-PowerAdmin directly to use these modules." -ForegroundColor Yellow
+        Write-Host ""
+    }
 
     [array]$MenuObjects = @()
     [int]$MenuIndex = 0
@@ -576,10 +667,6 @@ function Enter-MainMenu {
 #=======================================================================================
 # Main Script Section
 #=======================================================================================
-
-# Check and escalate to PowerShell 7 if necessary
-# This must be done before any other initialization
-Test-PowerShellVersion
 
 # Initialize the script.
 Initialize-ADPowerAdmin

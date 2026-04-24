@@ -414,7 +414,6 @@ Adding a new module will increment the computed version automatically.
 These are intentionally excluded:
 - `Reports/` — runtime output, not source
 - `Modules/AD-PowerAdmin_HIBP_PwndPwMgr.*` — Alpha, not ready
-- `Modules/AD-PowerAdmin_Mgr.*` — Alpha, not ready
 - `Modules/AD-PowerAdmin_Azure.*` — Alpha, not ready
 - `AD-PowerAdmin_Debug.log` — debug transcript
 - `junk.ps1` — scratch file
