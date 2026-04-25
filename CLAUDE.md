@@ -59,6 +59,7 @@ The main script auto-detects PowerShell version and re-launches itself under Pow
 | `$global:OptionsMaxTextLength` | int | Menu display width (82 chars) |
 | `$global:Menu` | PSCustomObject | Hashtable of all menu items (populated by modules) |
 | `$global:UnattendedJobs` | PSCustomObject | Hashtable of all scheduled jobs (populated by modules) |
+| `$global:SubMenus` | hashtable | Hashtable of submenus contributed by modules; dispatched by `Enter-SubMenu` |
 
 Settings from `AD-PowerAdmin_settings.ps1` are sourced into additional `$global:*` variables.
 
@@ -216,6 +217,36 @@ Function Initialize-Module {
             Module   = "AD-PowerAdmin_MyModule"
             Function = "My-MainFunction"
             Command  = "My-MainFunction"       # Executed via Invoke-Expression
+        }
+    }
+
+    # Register a submenu (optional — use when the module has multiple user actions).
+    # ONE main-menu entry points to Enter-SubMenu; all sub-actions go in $global:SubMenus.
+    $global:SubMenus += @{
+        'MyModuleMenu' = @{
+            Title = "My Module Actions"
+            Items = @{
+                'Action1' = @{
+                    Title   = "Do Thing One"
+                    Label   = "Description of the first action."
+                    Command = "My-MainFunction"
+                }
+                'Action2' = @{
+                    Title   = "Do Thing Two"
+                    Label   = "Description of the second action."
+                    Command = "My-OtherFunction"
+                }
+            }
+        }
+    }
+    # The main menu entry that opens the submenu:
+    $global:Menu += @{
+        'MyModuleEntry' = @{
+            Title    = "My Module"
+            Label    = "Manage things provided by My Module."
+            Module   = "AD-PowerAdmin_MyModule"
+            Function = "Enter-SubMenu"
+            Command  = "Enter-SubMenu 'MyModuleMenu'"
         }
     }
 
@@ -399,14 +430,15 @@ Adding a new module will increment the computed version automatically.
 ## Key Design Rules
 
 1. **Modules are self-registering.** `Initialize-Module` + `Initialize-AllModules` in main script — no manual wiring.
-2. **`$global:Menu` and `$global:UnattendedJobs` are the integration points.** Everything a module exposes goes through these two hashtables.
+2. **`$global:Menu`, `$global:UnattendedJobs`, and `$global:SubMenus` are the integration points.** Everything a module exposes goes through these three hashtables.
 3. **`Invoke-Expression` executes commands.** The `Command` string in a menu/job entry is passed directly; it can contain PowerShell expressions.
 4. **Settings are read-only from modules.** Modules only read `$global:` settings; they never write to them.
 5. **Export every public function.** Missing from `FunctionsToExport` = invisible.
 6. **Use `$global:ReportsPath` for output.** Never hardcode paths.
 7. **Check `$global:Debug`** for conditional verbose or transcript output.
 8. **Email uses `Send-Email` from Utils module.** Parameters first, global settings as fallback.
-9. **Never use non-ASCII or multi-byte Unicode characters in any `.ps1` or `.psm1` file.** Characters such as `✓`, `✗`, emoji, smart quotes (`"` `"`), or any symbol outside the standard ASCII range (0x00–0x7F) cause encoding-related parse failures in the PowerShell interpreter, especially when scripts are transferred between machines or executed in environments with different default encodings. Use only plain ASCII text — for example, replace `✓` with `[OK]` and `✗` with `[FAIL]`.
+9. **Never use non-ASCII or multi-byte Unicode characters in any `.ps1` or `.psm1` file.** Characters such as `✓`, `✗`, emoji, smart quotes (`"` `"`), or any symbol outside the standard ASCII range (0x00–0x7F) cause encoding-related parse failures in the PowerShell interpreter, especially when scripts are transferred between machines or executed in environments with different default encodings. Use only plain ASCII text — for example, replace `✓` with `[OK]` and `[FAIL]`.
+10. **Use submenus to keep the main menu uncluttered.** When a module has multiple user-facing actions, register ONE entry in `$global:Menu` with `Command = "Enter-SubMenu 'MyKey'"` and register all sub-actions in `$global:SubMenus['MyKey'].Items`. `Enter-SubMenu` in `AD-PowerAdmin.ps1` handles display and dispatch with consistent styling.
 ---
 
 ## .gitignore Highlights

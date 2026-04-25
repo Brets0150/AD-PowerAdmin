@@ -7,8 +7,7 @@ Modules/.dotnet
 Modules/.store
 temp*
 */run-win-test.ps1
+pwned-passwords-ntlm-ordered-by-hash-v8.txt
 # Not Ready for release.
-Modules/AD-PowerAdmin_HIBP_PwndPwMgr.psd1
-Modules/AD-PowerAdmin_HIBP_PwndPwMgr.psm1
 Modules/AD-PowerAdmin_Azure.psd1
 Modules/AD-PowerAdmin_Azure.psm1

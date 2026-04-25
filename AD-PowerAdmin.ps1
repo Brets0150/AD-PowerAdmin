@@ -79,6 +79,10 @@ $host.UI.RawUI.WindowTitle = "AD-PowerAdmin - CyberGladius.com"
 # Set the $global:UnattendedJobs variable to be used later.
 [PSCustomObject]$global:UnattendedJobs = @{}
 
+# Registry of submenus contributed by modules. Modules register here in Initialize-Module;
+# Enter-SubMenu dispatches from this table. Same self-registration pattern as $global:Menu.
+[hashtable]$global:SubMenus = @{}
+
 # Modules present in the Modules folder but skipped at load time due to a PS version
 # requirement that exceeds the current session. Populated by Get-IncompatibleModules.
 [array]$global:IncompatibleModules = @()
@@ -661,6 +665,101 @@ function Enter-MainMenu {
 
     Pause
     Enter-MainMenu
+}
+
+function Enter-SubMenu {
+    <#
+    .SYNOPSIS
+        Display and dispatch a module-defined submenu.
+
+    .DESCRIPTION
+        Reads the submenu registered under $SubMenuKey in $global:SubMenus and presents
+        it with the same numbering, label formatting, and Invoke-Expression dispatch used
+        by Enter-MainMenu. Loops until the user presses Q to return to the caller.
+
+        Modules register submenus in Initialize-Module:
+            $global:SubMenus += @{
+                'MyKey' = @{
+                    Title = "My Submenu"
+                    Items = @{
+                        'Item1' = @{ Title = "Do Thing"; Label = "Description."; Command = "My-Function" }
+                    }
+                }
+            }
+        Then point the main menu entry at: Command = "Enter-SubMenu 'MyKey'"
+
+    .PARAMETER SubMenuKey
+        Key in $global:SubMenus that identifies which submenu to display.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$SubMenuKey
+    )
+
+    $SubMenuDef = $global:SubMenus[$SubMenuKey]
+    if (-not $SubMenuDef) {
+        Write-Host "Error: Submenu '$SubMenuKey' is not registered in `$global:SubMenus." -ForegroundColor Red
+        return
+    }
+
+    while ($true) {
+        try { Clear-Host } catch { Write-Host ([char]27 + "[2J" + [char]27 + "[H") -NoNewline }
+        Show-Logo
+
+        Write-Host "  === $($SubMenuDef.Title) ===" -ForegroundColor Cyan
+        Write-Host ""
+
+        # Number the items alphabetically by Title, same approach as Enter-MainMenu.
+        [int]$idx = 1
+        [array]$SubMenuObjects = $SubMenuDef.Items.GetEnumerator() |
+            Sort-Object { $_.Value.Title } |
+            ForEach-Object {
+                [PSCustomObject]@{
+                    Index   = $idx++
+                    Title   = $_.Value.Title
+                    Label   = $_.Value.Label
+                    Command = $_.Value.Command
+                }
+            }
+
+        [int]$MaxLabelLength = $global:OptionsMaxTextLength - 25
+        $SubMenuObjects | ForEach-Object {
+            [string]$NewLabel = " "
+            if ($_.Label.Length -gt $MaxLabelLength) {
+                $NewLabel += $_.Label.Substring(0, $MaxLabelLength) + "..."
+            } else {
+                $NewLabel += $_.Label
+            }
+            Write-Host "$($_.Index). $($_.Title)" -ForegroundColor Green -NoNewline
+            Write-Host " -$NewLabel"
+        }
+
+        Write-Host ""
+        Write-Host "=================================================================================="
+        Write-Host "q. Back to Main Menu"
+        Write-Host "=================================================================================="
+        Write-Host ""
+
+        [string]$Choice = Read-Host "Input the option # you want to run"
+
+        if ($Choice -eq 'q' -or $Choice -eq 'Q') { return }
+
+        [Int32]$OutNum = 0
+        if ([Int32]::TryParse($Choice, [ref]$OutNum)) {
+            $Selected = $SubMenuObjects | Where-Object { $_.Index -eq $OutNum }
+            if ($Selected) {
+                Write-Host "==================================================================================" -ForegroundColor Green
+                Invoke-Expression "$($Selected.Command)"
+                Write-Host "==================================================================================" -ForegroundColor Green
+            } else {
+                Write-Host "Error: Invalid selection. Please select a number from the menu." -ForegroundColor Red
+            }
+        } else {
+            Write-Host "Error: Invalid input. Please enter a number or Q." -ForegroundColor Red
+        }
+
+        Pause
+    }
 }
 
 # End Local Functions Section
