@@ -48,6 +48,7 @@
     - Search-ObjectWithDCSyncRisk
     - Test-PasswordPolicy
     - Get-ADUserNestedGroups
+    - Get-MachineAccountQuotaAudit
 '@
 
     # Minimum version of the Windows PowerShell engine required by this module
@@ -87,7 +88,7 @@
     # NestedModules = @()
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-    FunctionsToExport = @('Get-ADAdminAudit', 'Search-MultipleInactiveComputers', 'Get-ADUserAudit','Search-MultipleInactiveUsers','Search-AD','Test-ADSecurityBestPractices', 'Start-DailyInactiveUserAudit', 'Start-DailyInactiveComputerAudit', 'Test-Test','Get-DomainAcl','Get-ExtendedAcl')
+    FunctionsToExport = @('Get-ADAdminAudit', 'Search-MultipleInactiveComputers', 'Get-ADUserAudit','Search-MultipleInactiveUsers','Search-AD','Test-ADSecurityBestPractices', 'Start-DailyInactiveUserAudit', 'Start-DailyInactiveComputerAudit', 'Test-Test','Get-DomainAcl','Get-ExtendedAcl','Get-MachineAccountQuotaAudit')
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
     CmdletsToExport = @()
@@ -142,6 +143,8 @@
                 v1.2:
                     - Optomized the DefaultComputer Folder search.
                     - Added save report option to Test-ADSecurityBestPractices.
+                v1.3:
+                    - Added Get-MachineAccountQuotaAudit. Audits ms-DS-MachineAccountQuota, finds computer accounts created by non-admin users (ms-DS-CreatorSID), and flags computers with Resource-Based Constrained Delegation configured (msDS-AllowedToActOnBehalfOfOtherIdentity).
 '@
 
         } # End of PSData hashtable

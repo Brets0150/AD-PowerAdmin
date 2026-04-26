@@ -25,6 +25,7 @@ Here is a quick list of features
 - AD Searching tools.
 - Download and manage the Have I Been Pwned NTLM password hash database used for breach detection, with automated install of the required .NET SDK and downloader tool. Supports both single-file and incremental directory modes; directory mode only re-downloads changed hash ranges, making weekly updates far more efficient than the full 70 GB dataset.
 - Decommission AD user accounts on demand: strips all group memberships (preserving a record of former groups in the account description), rotates the password, disables the account, and moves it to the disabled OU.
+- Machine Account Quota audit: checks ms-DS-MachineAccountQuota, finds computer accounts created by non-admin users via ms-DS-CreatorSID, and flags computers with Resource-Based Constrained Delegation configured (msDS-AllowedToActOnBehalfOfOtherIdentity).
 
 [See the wiki for more details of each feature](https://github.com/Brets0150/AD-PowerAdmin/wiki)
 

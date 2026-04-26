@@ -66,6 +66,11 @@ Function Initialize-Module {
                     Label   = "Test AD security best practices and report on misconfigurations."
                     Command = 'Test-ADSecurityBestPractices'
                 }
+                'MachineAccountQuotaAudit' = @{
+                    Title   = "MAQ Audit"
+                    Label   = "Audit the Machine Account Quota (ms-DS-MachineAccountQuota), find computer accounts created by normal users (ms-DS-CreatorSID), and flag computers with Resource-Based Constrained Delegation configured."
+                    Command = "Get-MachineAccountQuotaAudit"
+                }
             }
         }
     }
@@ -355,6 +360,141 @@ Function Get-ADComputerInDefaultFolder {
         Write-Host "No AD Computers were found in the default 'Computers' folder." -ForegroundColor Green
     }
  # End of Search-ADComputerInDefaultFolder function
+}
+
+Function Get-MachineAccountQuotaAudit {
+    <#
+    .SYNOPSIS
+    Audits the Machine Account Quota setting and related computer account risks in Active Directory.
+
+    .DESCRIPTION
+    === Machine Account Quota (MAQ) Audit. ===
+        This function performs three related checks:
+
+        1. Reads the domain attribute ms-DS-MachineAccountQuota.
+           A value of 0 is the hardened state. Any value above 0 means ordinary
+           authenticated users can create computer accounts in the domain, which
+           enables Kerberos abuse, NTLM relay, and RBCD attack chains.
+
+        2. Searches for computer accounts that carry the ms-DS-CreatorSID attribute.
+           This attribute is populated when a computer is joined by a non-administrator
+           via the machine account quota. Each result is reported with its name,
+           creation date, last logon date, and the SID of the user who created it.
+
+        3. Searches for computer accounts with the msDS-AllowedToActOnBehalfOfOtherIdentity
+           attribute populated, indicating Resource-Based Constrained Delegation (RBCD)
+           is configured. RBCD on unexpected machines is a high-risk indicator.
+
+        Reference: AD-PowerAdmin.wiki/Vulnerabilities/ad_machine_account_quota_audit.md
+
+    .EXAMPLE
+    Get-MachineAccountQuotaAudit
+
+    .INPUTS
+    Get-MachineAccountQuotaAudit does not take pipeline input.
+
+    .OUTPUTS
+    None. All results are written to the console via Write-Host.
+
+    .NOTES
+    Requires the Active Directory PowerShell module and read access to the domain.
+
+    ms-DS-MachineAccountQuota is not in the fixed property set returned by Get-ADDomain.
+    This function uses Get-ADObject -Properties to retrieve it directly from LDAP.
+
+    Remediation command to set MAQ to 0:
+        Set-ADDomain -Identity (Get-ADDomain).DistinguishedName -Replace @{'ms-DS-MachineAccountQuota'='0'}
+
+    #>
+
+    # -------------------------------------------------------------------------
+    # Part 1: Check ms-DS-MachineAccountQuota on the domain object.
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host "  [Part 1] ms-DS-MachineAccountQuota" -ForegroundColor White
+
+    # Get-ADDomain returns a typed ADDomain object with a fixed property set that does not
+    # include ms-DS-MachineAccountQuota. Get-ADObject with -Properties sends the attribute
+    # name directly to LDAP and always retrieves it regardless of the typed wrapper.
+    $DomainDN = $null
+    try { $DomainDN = (Get-ADDomain).DistinguishedName } catch {}
+
+    if ($null -eq $DomainDN) {
+        Write-Host "  [FAIL] Unable to retrieve the domain Distinguished Name via Get-ADDomain." -ForegroundColor Red
+    } else {
+        $DomainObject = Get-ADObject -Identity $DomainDN -Properties 'ms-DS-MachineAccountQuota' -ErrorAction SilentlyContinue
+        $MAQRaw = $DomainObject.'ms-DS-MachineAccountQuota'
+
+        if ($null -eq $MAQRaw) {
+            Write-Host "  [WARN] ms-DS-MachineAccountQuota could not be read from the domain object ($DomainDN)." -ForegroundColor Yellow
+        } elseif ([int]$MAQRaw -eq 0) {
+            Write-Host "  [OK] ms-DS-MachineAccountQuota is 0. Non-admin users cannot create computer accounts." -ForegroundColor Green
+        } else {
+            Write-Host "  [FAIL] ms-DS-MachineAccountQuota is set to $MAQRaw." -ForegroundColor Red
+            Write-Host "         Any authenticated user can create up to $MAQRaw computer accounts in this domain." -ForegroundColor Red
+            Write-Host "         This enables Kerberos abuse, NTLM relay, and Resource-Based Constrained Delegation attacks." -ForegroundColor Red
+            Write-Host "  Remediation: Run the following command as a Domain Admin:" -ForegroundColor Yellow
+            Write-Host "    Set-ADDomain -Identity '$DomainDN' -Replace @{'ms-DS-MachineAccountQuota'='0'}" -ForegroundColor Yellow
+        }
+    }
+
+    # -------------------------------------------------------------------------
+    # Part 2: Find computer accounts created by normal users via ms-DS-CreatorSID.
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host "  [Part 2] Computer accounts with ms-DS-CreatorSID (created via Machine Account Quota)" -ForegroundColor White
+
+    $CreatorSIDComputers = Get-ADComputer -LDAPFilter '(ms-DS-CreatorSID=*)' `
+        -Properties Name, SamAccountName, Enabled, whenCreated, LastLogonDate, 'ms-DS-CreatorSID' `
+        -ErrorAction SilentlyContinue
+
+    if ($null -eq $CreatorSIDComputers -or @($CreatorSIDComputers).Count -eq 0) {
+        Write-Host "  [OK] No computer accounts found with ms-DS-CreatorSID. No MAQ-created machine accounts detected." -ForegroundColor Green
+    } else {
+        [int]$CreatorCount = @($CreatorSIDComputers).Count
+        Write-Host "  [WARN] $CreatorCount computer account(s) found with ms-DS-CreatorSID." -ForegroundColor Red
+        Write-Host "         These were created by non-administrator users via the Machine Account Quota." -ForegroundColor Red
+        Write-Host "         Review each entry to confirm it is legitimate and authorized." -ForegroundColor Red
+        Write-Host ""
+
+        foreach ($Computer in ($CreatorSIDComputers | Sort-Object whenCreated -Descending)) {
+            Write-Host "  Computer    : $($Computer.Name)" -ForegroundColor Red
+            Write-Host "  SAM Account : $($Computer.SamAccountName)" -ForegroundColor Red
+            Write-Host "  Enabled     : $($Computer.Enabled)" -ForegroundColor Red
+            Write-Host "  whenCreated : $($Computer.whenCreated)" -ForegroundColor Red
+            Write-Host "  LastLogon   : $($Computer.LastLogonDate)" -ForegroundColor Red
+            Write-Host "  CreatorSID  : $($Computer.'ms-DS-CreatorSID')" -ForegroundColor Red
+            Write-Host ""
+        }
+    }
+
+    # -------------------------------------------------------------------------
+    # Part 3: Find computer accounts with RBCD configured.
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host "  [Part 3] Computer accounts with msDS-AllowedToActOnBehalfOfOtherIdentity (RBCD)" -ForegroundColor White
+
+    $RBCDComputers = Get-ADComputer -LDAPFilter '(msDS-AllowedToActOnBehalfOfOtherIdentity=*)' `
+        -Properties Name, SamAccountName, Enabled, 'msDS-AllowedToActOnBehalfOfOtherIdentity' `
+        -ErrorAction SilentlyContinue
+
+    if ($null -eq $RBCDComputers -or @($RBCDComputers).Count -eq 0) {
+        Write-Host "  [OK] No computer accounts found with msDS-AllowedToActOnBehalfOfOtherIdentity configured." -ForegroundColor Green
+    } else {
+        [int]$RBCDCount = @($RBCDComputers).Count
+        Write-Host "  [WARN] $RBCDCount computer account(s) found with Resource-Based Constrained Delegation configured." -ForegroundColor Red
+        Write-Host "         Review each entry. Unauthorized RBCD is a high-risk privilege escalation path." -ForegroundColor Red
+        Write-Host ""
+
+        foreach ($Computer in ($RBCDComputers | Sort-Object Name)) {
+            Write-Host "  Computer    : $($Computer.Name)" -ForegroundColor Red
+            Write-Host "  SAM Account : $($Computer.SamAccountName)" -ForegroundColor Red
+            Write-Host "  Enabled     : $($Computer.Enabled)" -ForegroundColor Red
+            Write-Host ""
+        }
+    }
+
+# End of Get-MachineAccountQuotaAudit function
 }
 
 Function Get-ADUserMemberOf {
@@ -1234,6 +1374,11 @@ Function Test-ADSecurityBestPractices {
     Write-Host "Testing for Computers in the default 'Computers' folder" -ForegroundColor Yellow
     Write-Host "Systems in the default 'Computers' folder are likely missing GPOs since they are not organized into a specific OU; thus, security holes." -ForegroundColor Yellow
     Get-ADComputerInDefaultFolder
+    Write-Host "======================================================================================" -ForegroundColor White
+
+    # Test the Machine Account Quota and related computer account risks.
+    Write-Host "Testing Machine Account Quota (ms-DS-MachineAccountQuota) and related computer account risks" -ForegroundColor Yellow
+    Get-MachineAccountQuotaAudit
     Write-Host "======================================================================================" -ForegroundColor White
 
     # Test for inactive users.
