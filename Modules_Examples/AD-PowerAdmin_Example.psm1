@@ -17,13 +17,21 @@ Function Initialize-Module {
     # Any function you want to use in the "Command" property must be exported by adding the function to the "FunctionsToExport" property in the module manifest(the .psd1 file).
     # The main script cannot see any functions in the module unless they are exported in the module manifest(the .psd1 file).
 
-    # Append $global:Menu with the menu items to be displayed.
+    # Remove stale entries if module is reloaded.
+    $global:Menu.Remove('Get-Example1')
+    $global:Menu.Remove('Get-Example2')
+    $global:Menu.Remove('ExampleSubMenu')
+    $global:SubMenus.Remove('ExampleSubMenu')
+
+    # --- PATTERN 1: Direct main menu entries ---
+    # Use this pattern when your module exposes only one or two actions and a sub-menu
+    # would add unnecessary navigation depth.
     $global:Menu += @{
-        'Get-Example1' = @{ # Must be a unique name. You have have multiple menu items that run the same "command", but they must have unique names.
+        'Get-Example1' = @{ # Must be a unique name. You can have multiple menu items that run the same "command", but they must have unique names.
             Title    = "Example 1 Title" # This is the title that will be displayed in the menu. PLEASE keep this short, like 20 characters or less.
-            Label    = "Run Example 1 Command Label" # This is the label that will be displayed in the menu. Try keep this short, like 150-250 characters or less.
+            Label    = "Run Example 1 Command Label" # This is the label that will be displayed in the menu. Try to keep this short, like 150-250 characters or less.
             Module   = "AD-PowerAdmin_Example" # This is the name of the module in which the function resides. Not really used(for now), but it is here for reference and in case it is needed in the future.
-            Function = "Get-Example1" # This is the name of function that will be run. Not realy used(for now), but is here for reference and incase it is needed in the future.
+            Function = "Get-Example1" # This is the name of function that will be run. Not really used(for now), but is here for reference and in case it is needed in the future.
             Command  = "Get-Example1" # This is the command(a function from this module) that will be run.
         }
         'Get-Example2' = @{
@@ -34,6 +42,43 @@ Function Initialize-Module {
             Command  = 'Get-Example2 -Parameter "This is a test"'
         }
     }
+
+    # --- PATTERN 2: Sub-menu ---
+    # Use this pattern when your module exposes three or more actions. A single main
+    # menu entry opens a dedicated sub-menu, keeping the main menu uncluttered.
+    # The key used in $global:SubMenus must match the key passed to Enter-SubMenu below.
+    $global:SubMenus += @{
+        'ExampleSubMenu' = @{
+            Title = "Example Sub-Menu"   # Displayed as the sub-menu heading.
+            Items = @{
+
+                # Each item key must be unique within this sub-menu.
+                'ExampleSubAction1' = @{
+                    Title   = "Example Sub Action 1"   # ~20 characters or less.
+                    Label   = "Run Example Sub Action 1. Calls Get-Example3 with no parameters."
+                    Command = "Get-Example3"            # Executed via Invoke-Expression.
+                }
+                'ExampleSubAction2' = @{
+                    Title   = "Example Sub Action 2"
+                    Label   = "Run Example Sub Action 2. Calls Get-Example4 with a parameter."
+                    Command = 'Get-Example4 -Parameter "This is a sub-menu test"'
+                }
+            }
+        }
+    }
+
+    # Register a single main menu entry that opens the sub-menu.
+    # Command must be "Enter-SubMenu '<key>'" where <key> matches the $global:SubMenus key above.
+    $global:Menu += @{
+        'ExampleSubMenu' = @{
+            Title    = "Example Sub-Menu"
+            Label    = "Open the example sub-menu to run Example Sub Action 1 or Example Sub Action 2."
+            Module   = "AD-PowerAdmin_Example"
+            Function = "Enter-SubMenu"
+            Command  = "Enter-SubMenu 'ExampleSubMenu'"
+        }
+    }
+
     # Append the $global:UnattendedJobs with the jobs to be run unattended from this module.
     $global:UnattendedJobs += @{
 
@@ -158,5 +203,61 @@ Function Start-ExampleJob {
 
     Write-Host $JobVar1
     Get-Example2 -Parameter $JobVar1
-# End of Get-ADAdmins function
+}
+
+Function Get-Example3 {
+    <#
+    .SYNOPSIS
+    Example function for sub-menu Pattern 2 — action 1.
+
+    .DESCRIPTION
+    === Example Sub Action 1. ===
+        This function is registered as a sub-menu item in Initialize-Module under
+        $global:SubMenus['ExampleSubMenu']. It is reached by selecting the
+        "Example Sub-Menu" entry in the main menu and then choosing "Example Sub Action 1".
+
+    .EXAMPLE
+    Get-Example3
+
+    .INPUTS
+    None.
+
+    .OUTPUTS
+    A string confirming the function ran.
+
+    .NOTES
+
+    #>
+    Write-Host "Example Sub Action 1 (Get-Example3)"
+}
+
+Function Get-Example4 {
+    <#
+    .SYNOPSIS
+    Example function for sub-menu Pattern 2 — action 2.
+
+    .DESCRIPTION
+    === Example Sub Action 2. ===
+        This function is registered as a sub-menu item in Initialize-Module under
+        $global:SubMenus['ExampleSubMenu']. It is reached by selecting the
+        "Example Sub-Menu" entry in the main menu and then choosing "Example Sub Action 2".
+
+    .EXAMPLE
+    Get-Example4 -Parameter "some value"
+
+    .INPUTS
+    None.
+
+    .OUTPUTS
+    A string echoing the supplied parameter.
+
+    .NOTES
+
+    #>
+    Param(
+    [Parameter(Mandatory=$true,Position=1)]
+    [string]$Parameter
+    )
+    $Parameter = $Parameter.Trim()
+    Write-Host "Example Sub Action 2 (Get-Example4): $Parameter"
 }

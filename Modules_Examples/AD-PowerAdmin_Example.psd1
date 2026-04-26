@@ -75,7 +75,7 @@
     # NestedModules = @()
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-    FunctionsToExport = @('Get-Example1', 'Get-Example2', 'Start-ExampleJob')
+    FunctionsToExport = @('Get-Example1', 'Get-Example2', 'Start-ExampleJob', 'Get-Example3', 'Get-Example4')
     # IF YOU DO NOT EXPORT THE FUNCTIONS, THEN THE FUNCTIONS WILL NOT BE AVAILABLE TO THE MAIN SCRIPT.
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
