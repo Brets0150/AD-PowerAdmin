@@ -13,78 +13,71 @@ Function Initialize-Module {
     Initialize-Module is called by AD-PowerAdmin_Main.ps1 to initialize the module.
 
     #>
-    # Unload $global:Menu keys, so they can be reloaded.
-    $global:Menu.Remove('Get-ADAdminAudit')
-    $global:Menu.Remove('Get-ADUserAudit')
-    $global:Menu.Remove('Search-InactiveComputers')
-    $global:Menu.Remove('Search-InactiveComputersAndDisable')
-    $global:Menu.Remove('Search-InactiveUsers')
-    $global:Menu.Remove('Search-InactiveUsersAndDisable')
-    $global:Menu.Remove('Search-AD')
-    $global:Menu.Remove('Test-ADSecurityBestPractices')
-    $global:Menu.Remove('Test-Test')
+    # Remove stale entries if module is reloaded.
+    $global:Menu.Remove('AuditsMenu')
+    $global:SubMenus.Remove('AuditsMenu')
 
     # Unload $global:UnattendedJobs keys, so they can be reloaded.
     $global:UnattendedJobs.Remove('Start-DailyInactiveUserAudit')
     $global:UnattendedJobs.Remove('Start-DailyInactiveComputerAudit')
 
-    # Append $global:Menu with the menu items to be displayed.
+    # Register the sub-menu items.
+    $global:SubMenus += @{
+        'AuditsMenu' = @{
+            Title = "AD Audits"
+            Items = @{
+                'GetADAdminAudit' = @{
+                    Title   = "AD Admins Report"
+                    Label   = "Searches AD for accounts in high privileged AD groups and creates a report that can be exported to a CSV file."
+                    Command = "Get-ADAdminAudit"
+                }
+                'GetADUserAudit' = @{
+                    Title   = "AD Users Report"
+                    Label   = "Searches AD for all AD Users and their last login and password last set date, then exports the results to a CSV file."
+                    Command = "Get-ADUserAudit"
+                }
+                'SearchInactiveComputers' = @{
+                    Title   = "Search Inactive Computers"
+                    Label   = "Search for inactive computers and generate a report only. No changes are made."
+                    Command = 'Search-MultipleInactiveComputers -InactiveComputersLocations $global:InactiveComputersLocations -InactiveDays $($global:InactiveDays) -ReportOnly $true'
+                }
+                'DisableInactiveComputers' = @{
+                    Title   = "Disable Inactive Computers"
+                    Label   = "Search for inactive computers and disable them."
+                    Command = 'Search-MultipleInactiveComputers -InactiveComputersLocations $global:InactiveComputersLocations -InactiveDays $global:InactiveDays -ReportOnly $false'
+                }
+                'SearchInactiveUsers' = @{
+                    Title   = "Search Inactive Users"
+                    Label   = "Search for inactive users and generate a report only. No changes are made."
+                    Command = 'Search-MultipleInactiveUsers -InactiveUsersLocations $global:InactiveUsersLocations -InactiveDays $global:InactiveDays -ReportOnly $true'
+                }
+                'DisableInactiveUsers' = @{
+                    Title   = "Disable Inactive Users"
+                    Label   = "Search for inactive users and disable them."
+                    Command = 'Search-MultipleInactiveUsers -InactiveUsersLocations $global:InactiveUsersLocations -InactiveDays $global:InactiveDays -ReportOnly $false'
+                }
+                'SearchAD' = @{
+                    Title   = "Search AD"
+                    Label   = "Search AD for a User, Computer, or all Objects."
+                    Command = 'Search-AD -TextResults $true'
+                }
+                'ADSecurityCheck' = @{
+                    Title   = "AD Security Check"
+                    Label   = "Test AD security best practices and report on misconfigurations."
+                    Command = 'Test-ADSecurityBestPractices'
+                }
+            }
+        }
+    }
+
+    # Register a single main menu entry that opens the sub-menu.
     $global:Menu += @{
-        'Get-ADAdminAudit' = @{
-            Title    = "AD Admins Report"
-            Label    = "Searches AD for accounts in high privileged AD groups and create a report that can be exported to a CSV file."
+        'AuditsMenu' = @{
+            Title    = "AD Audits"
+            Label    = "Run AD security audits, inactive account searches, and AD reporting tools."
             Module   = "AD-PowerAdmin_Audits"
-            Function = "Get-ADAdminAudit"
-            Command  = "Get-ADAdminAudit"
-        }
-        'Get-ADUserAudit' = @{
-            Title    = "AD Users Report"
-            Label    = "Searches AD for all AD Users and their last login and password last set date, then export the results to a CSV file."
-            Module   = "AD-PowerAdmin_Audits"
-            Function = "Get-ADUserAudit"
-            Command  = "Get-ADUserAudit"
-        }
-        'Search-InactiveComputers' = @{
-            Title    = "Search Inactive Computers"
-            Label    = "Search for inactive computers report only."
-            Module   = "AD-PowerAdmin_Audits"
-            Function = "Search-MultipleInactiveComputers"
-            Command  = 'Search-MultipleInactiveComputers -InactiveComputersLocations $global:InactiveComputersLocations -InactiveDays $($global:InactiveDays) -ReportOnly $true'
-        }
-        'Search-InactiveComputersAndDisable' = @{
-            Title    = "Disable Inactive Computers"
-            Label    = "Search for inactive computers and disable them."
-            Module   = "AD-PowerAdmin_Audits"
-            Function = "Search-MultipleInactiveComputers"
-            Command  = 'Search-MultipleInactiveComputers -InactiveComputersLocations $global:InactiveComputersLocations -InactiveDays $global:InactiveDays -ReportOnly $false'
-        }
-        'Search-InactiveUsers' = @{
-            Title    = "Search Inactive Users"
-            Label    = "Search for inactive users report only."
-            Module   = "AD-PowerAdmin_Audits"
-            Function = "Search-MultipleInactiveUsers"
-            Command  = 'Search-MultipleInactiveUsers -InactiveUsersLocations $global:InactiveUsersLocations -InactiveDays $global:InactiveDays -ReportOnly $true'
-        }
-        'Search-InactiveUsersAndDisable' = @{
-            Title    = "Disable Inactive Users"
-            Label    = "Search for inactive users and disable them."
-            Module   = "AD-PowerAdmin_Audits"
-            Function = "Search-MultipleInactiveUsers"
-            Command  = 'Search-MultipleInactiveUsers -InactiveUsersLocations $global:InactiveUsersLocations -InactiveDays $global:InactiveDays -ReportOnly $false'
-        }
-        'Search-AD' = @{
-            Title    = "Search AD"
-            Label    = "Search AD for a User, Computer, or all Objects."
-            Module   = "AD-PowerAdmin_Audits"
-            Function = "Search-AD"
-            Command  = 'Search-AD -TextResults $true'
-        }
-        'Test-ADSecurityBestPractices' = @{
-            Title    = "AD Security Check"
-            Label    = "Test AD Security Best Practices."
-            Module   = "AD-PowerAdmin_Audits"
-            Function = "Test-ADSecurityBestPractices"
-            Command  = 'Test-ADSecurityBestPractices'
+            Function = "Enter-SubMenu"
+            Command  = "Enter-SubMenu 'AuditsMenu'"
         }
     }
 

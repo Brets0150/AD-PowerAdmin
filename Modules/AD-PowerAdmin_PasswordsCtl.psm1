@@ -13,35 +13,53 @@ Function Initialize-Module {
     Initialize-Module is called by AD-PowerAdmin_Main.ps1 to initialize the module.
 
     #>
-    # Append $global:Menu with the menu items to be displayed.
+    # Remove stale entries if module is reloaded.
+    $global:Menu.Remove('PasswordsCtlMenu')
+    $global:SubMenus.Remove('PasswordsCtlMenu')
+
+    # Unload $global:UnattendedJobs keys, so they can be reloaded.
+    $global:UnattendedJobs.Remove('krbtgt-RotateKey')
+    $global:UnattendedJobs.Remove('Test-krbtgtPwdAge')
+    $global:UnattendedJobs.Remove('PwUserFollowup')
+    $global:UnattendedJobs.Remove('Start-MonthlyPasswordAudit')
+
+    # Register the sub-menu items.
+    $global:SubMenus += @{
+        'PasswordsCtlMenu' = @{
+            Title = "Password Management"
+            Items = @{
+                'UpdateKRBTGTPassword' = @{
+                    Title   = 'Update KRBTGT Password'
+                    Label   = 'Update the KRBTGT password in the Active Directory Domain if the password is older than the preset.'
+                    Command = 'Update-KRBTGTPassword'
+                }
+                'UpdateKRBTGTPasswordForce' = @{
+                    Title   = 'Update KRBTGT Password - Force'
+                    Label   = 'Force a password change to the KRBTGT account. The password will be updated now and a scheduled task will be created to update the password again in 10 hours.'
+                    Command = 'Update-KRBTGTPassword -OverridePwd $true'
+                }
+                'GetPasswordAuditAdminReport' = @{
+                    Title   = 'Password Audit Report'
+                    Label   = 'Get a report of all users with breached or weak passwords.'
+                    Command = 'Get-PasswordAuditAdminReport'
+                }
+                'GetPasswordAuditAdminReportAndEmail' = @{
+                    Title   = 'Password Audit Report and Email'
+                    Label   = 'Get a report of all users with breached or weak passwords and email the report to the administrator.'
+                    Command = 'Get-PasswordAuditAdminReport -EmailReport'
+                }
+            }
+        }
+    }
+
+    # Register a single main menu entry that opens the sub-menu.
     $global:Menu += @{
-        'Update-KRBTGTPassword' = @{
-            Title    = 'Update KRBTGT Password'
-            Label    = 'Update the KRBTGT password in the Active Directory Domain if the password is older than the preset.'
+        'PasswordsCtlMenu' = @{
+            Title    = 'Password Management'
+            Label    = 'Manage KRBTGT password rotation and run breached or weak password audit reports.'
             Module   = 'AD-PowerAdmin_PasswordsCtl'
-            Function = 'Update-KRBTGTPassword'
-            Command  = 'Update-KRBTGTPassword'
-        }
-        'Update-KRBTGTPasswordForce' = @{
-            Title    = 'Update KRBTGT Password - Force'
-            Label    = 'Force a password change to the KRBTGT account. The password will be updated now and a scheduled task will be created to update the password again in 10 hours.'
-            Module   = 'AD-PowerAdmin_PasswordsCtl'
-            Function = 'Update-KRBTGTPassword'
-            Command  = 'Update-KRBTGTPassword -OverridePwd $true'
-        }
-        'Get-PasswordAuditAdminReport' = @{
-            Title    = 'Password Audit Report'
-            Label    = 'Get a report of all users with breached or weak passwords.'
-            Module   = 'AD-PowerAdmin_PasswordsCtl'
-            Function = 'Get-PasswordAuditAdminReport'
-            Command  = 'Get-PasswordAuditAdminReport'
-        }
-        'Get-PasswordAuditAdminReportAndEmail' = @{
-            Title    = 'Password Audit Report & Email'
-            Label    = 'Get a report of all users with breached or weak passwords and email the report to the administrator.'
-            Module   = 'AD-PowerAdmin_PasswordsCtl'
-            Function = 'Get-PasswordAuditAdminReport'
-            Command  = 'Get-PasswordAuditAdminReport -EmailReport'
+            Function = 'Enter-SubMenu'
+            Command  = "Enter-SubMenu 'PasswordsCtlMenu'"
         }
     }
 
@@ -117,6 +135,80 @@ Function Get-ADUserPasswordAge {
 # End of Get-ADUserPasswordAge function
 }
 
+Function Test-NtlmHashesInDirectory {
+    <#
+    .SYNOPSIS
+        Check AD account NTLM hashes against the HIBP range-file directory.
+
+    .DESCRIPTION
+        Groups the supplied AD accounts by their 5-character NTLM hash prefix, then reads the
+        corresponding range file (PREFIX.txt) from $HashDirectory once per prefix. Each range
+        file contains SUFFIX:count lines; if an account's hash suffix appears in the file the
+        account is considered breached. Returns the SamAccountName of each breached account.
+
+        This function is called automatically by Get-PasswordAudit when $global:NtlmHashDataDir
+        is configured. It is an alternative to the DSInternals -WeakPasswordHashesSortedFile
+        check which requires a single sorted flat file.
+
+    .PARAMETER AdAccounts
+        Objects returned by Get-ADReplAccount. Must include SamAccountName and NTHash (byte[16]).
+
+    .PARAMETER HashDirectory
+        Path to the directory containing HIBP NTLM range files in PREFIX.txt format.
+
+    .OUTPUTS
+        [string[]] SamAccountName of each account whose NTLM hash was found in the directory.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [object[]]$AdAccounts,
+        [Parameter(Mandatory=$true)]
+        [string]$HashDirectory
+    )
+
+    if (-not (Test-Path $HashDirectory -PathType Container)) {
+        Write-Host "Warning: HIBP hash directory not found: $HashDirectory" -ForegroundColor Yellow
+        return @()
+    }
+
+    [System.Collections.Generic.List[string]]$Breached = [System.Collections.Generic.List[string]]::new()
+
+    # Group accounts by 5-char prefix so each range file is read at most once.
+    [hashtable]$PrefixGroups = @{}
+    foreach ($Account in $AdAccounts) {
+        if ($null -eq $Account.NTHash -or $Account.NTHash.Length -ne 16) { continue }
+        [string]$FullHash = [System.BitConverter]::ToString($Account.NTHash).Replace('-', '').ToUpper()
+        [string]$Prefix   = $FullHash.Substring(0, 5)
+        [string]$Suffix   = $FullHash.Substring(5)
+        if (-not $PrefixGroups.ContainsKey($Prefix)) {
+            $PrefixGroups[$Prefix] = [System.Collections.Generic.List[object]]::new()
+        }
+        $PrefixGroups[$Prefix].Add([PSCustomObject]@{ Sam = $Account.SamAccountName; Suffix = $Suffix })
+    }
+
+    foreach ($Prefix in $PrefixGroups.Keys) {
+        [string]$RangeFile = Join-Path $HashDirectory "$Prefix.txt"
+        if (-not (Test-Path $RangeFile)) { continue }
+
+        [hashtable]$FileSuffixes = @{}
+        foreach ($Line in (Get-Content $RangeFile)) {
+            [string[]]$Parts = $Line.Split(':')
+            if ($Parts.Length -ge 1 -and $Parts[0].Length -gt 0) {
+                $FileSuffixes[$Parts[0]] = $true
+            }
+        }
+
+        foreach ($Entry in $PrefixGroups[$Prefix]) {
+            if ($FileSuffixes.ContainsKey($Entry.Suffix)) {
+                $Breached.Add($Entry.Sam)
+            }
+        }
+    }
+
+    return , $Breached.ToArray()
+# End of Test-NtlmHashesInDirectory function
+}
+
 Function Get-PasswordAudit {
     <#
     .SYNOPSIS
@@ -131,11 +223,16 @@ Function Get-PasswordAudit {
     .PARAMETER NtlmHashDataFile
     The file to use to check the password quality. This file should be a sorted list of NTLM hashes. If this parameter is not used, then the NtlmHashDataFile in the AD-PowerAdmin_settings.ps1 file will be used.
 
+    .PARAMETER NtlmHashDataDir
+    Path to the HIBP NTLM range-file directory for directory-mode breach detection. When provided
+    and the directory exists, Test-NtlmHashesInDirectory is called after Test-PasswordQuality and
+    the results are merged into the returned result's WeakPasswordHashes property.
+
     .PARAMETER WeakPassDictFile
     The file to use to check the password quality. This file should be a list of weak passwords. If this parameter is not used, then the WeakPassDictFile in the AD-PowerAdmin_settings.ps1 file will be used.
 
     .EXAMPLE
-    [object]$AdPwTestData = Get-PasswordAudit -SearchOUbase $global:PasswordQualityTestSearchOUbase -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile
+    [object]$AdPwTestData = Get-PasswordAudit -SearchOUbase $global:PasswordQualityTestSearchOUbase -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile -NtlmHashDataDir $global:NtlmHashDataDir
 
     .NOTES
 
@@ -148,7 +245,9 @@ Function Get-PasswordAudit {
         [Parameter(Mandatory=$false,Position=2)]
         [string]$NtlmHashDataFile,
         [Parameter(Mandatory=$false,Position=3)]
-        [string]$WeakPassDictFile
+        [string]$WeakPassDictFile,
+        [Parameter(Mandatory=$false,Position=4)]
+        [string]$NtlmHashDataDir
     )
 
     # Check if the DSInternals PowerShell module is installed. If not, then install it.
@@ -210,6 +309,42 @@ Function Get-PasswordAudit {
     if ($null -eq $ADPasswordTestData) {
         Write-Host "Error: No users were found in active directory." -ForegroundColor Red
         return
+    }
+
+    # Directory-mode HIBP check: look up each account's NT hash in the range-file directory and
+    # merge breached accounts into WeakPasswordHashes so they appear in the report and trigger
+    # the notification workflow in Invoke-WeakPwdProcess.
+    if ($NtlmHashDataDir -ne '' -and $null -ne $NtlmHashDataDir -and (Test-Path $NtlmHashDataDir -PathType Container)) {
+        Write-Host "Checking HIBP hash directory for breached passwords..." -ForegroundColor Yellow
+        [string[]]$DirectoryBreached = Test-NtlmHashesInDirectory -AdAccounts $AllAdAccountData -HashDirectory $NtlmHashDataDir
+        if ($DirectoryBreached.Count -gt 0) {
+            # WeakPasswordHashes is only initialized by DSInternals when -WeakPasswordHashesSortedFile
+            # is passed to Test-PasswordQuality. In directory mode no hash file is passed, so the
+            # property is null. Initialize it via reflection before calling .Add().
+            if ($null -eq $ADPasswordTestData.WeakPasswordHashes) {
+                try {
+                    [System.Reflection.BindingFlags]$RFlags = 'Public,NonPublic,Instance'
+                    $WHProp = $ADPasswordTestData.GetType().GetProperty('WeakPasswordHashes', $RFlags)
+                    if ($WHProp) {
+                        $WHProp.SetValue($ADPasswordTestData, [System.Collections.Generic.SortedSet[string]]::new())
+                    }
+                } catch { }
+            }
+
+            [string]$DomainName = $env:USERDOMAIN
+            if ($null -ne $ADPasswordTestData.WeakPasswordHashes) {
+                foreach ($Sam in $DirectoryBreached) {
+                    $ADPasswordTestData.WeakPasswordHashes.Add("$DomainName\$Sam") | Out-Null
+                }
+                Write-Host "Found $($DirectoryBreached.Count) breached account(s) via HIBP directory lookup." -ForegroundColor Yellow
+            } else {
+                Write-Host "Warning: WeakPasswordHashes unavailable; merging HIBP results into WeakPassword." -ForegroundColor Yellow
+                foreach ($Sam in $DirectoryBreached) {
+                    $ADPasswordTestData.WeakPassword.Add("$DomainName\$Sam") | Out-Null
+                }
+                Write-Host "Found $($DirectoryBreached.Count) breached account(s) via HIBP directory lookup." -ForegroundColor Yellow
+            }
+        }
     }
 
     # If the $ADPasswordTestData is not empty, then return the $ADPasswordTestData.
@@ -285,7 +420,7 @@ Function Get-PasswordAuditAdminReport {
 
     # If the $AdPwTestData is empty, then use the Get-PasswordAudit function to get the $AdPwTestData.
     if ($null -eq $AdPwTestData) {
-        [object]$AdPwTestData = Get-PasswordAudit -SearchOUbase $global:PasswordQualityTestSearchOUbase -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile
+        [object]$AdPwTestData = Get-PasswordAudit -SearchOUbase $global:PasswordQualityTestSearchOUbase -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile -NtlmHashDataDir $global:NtlmHashDataDir
     }
     # Convert the $ADPasswordTestData to an output string.
     $ADPasswordTestDataString = $AdPwTestData | Out-String
@@ -548,11 +683,20 @@ Function Invoke-WeakPwdProcess {
     )
     # If the $AdPwTestData is empty, then use the Get-PasswordAudit function to get the $AdPwTestData.
     if ($null -eq $AdPwTestData) {
-        [object]$AdPwTestData = Get-PasswordAudit -SearchOUbase $global:PasswordQualityTestSearchOUbase -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile
+        [object]$AdPwTestData = Get-PasswordAudit -SearchOUbase $global:PasswordQualityTestSearchOUbase -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile -NtlmHashDataDir $global:NtlmHashDataDir
     }
 
-    # Filter the $ADPasswordTestData to only include users with a breached password.
-    $BreachedUsers = $AdPwTestData | Select-Object WeakPassword | Select-Object -ExpandProperty *
+    # Combine dictionary-matched (WeakPassword) and HIBP hash-matched (WeakPasswordHashes) accounts.
+    # Using a List to deduplicate accounts that appear in both sets.
+    [System.Collections.Generic.List[string]]$BreachedUsers = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $AdPwTestData.WeakPassword) {
+        foreach ($Entry in $AdPwTestData.WeakPassword) { $BreachedUsers.Add($Entry) }
+    }
+    if ($null -ne $AdPwTestData.WeakPasswordHashes) {
+        foreach ($Entry in $AdPwTestData.WeakPasswordHashes) {
+            if (-not $BreachedUsers.Contains($Entry)) { $BreachedUsers.Add($Entry) }
+        }
+    }
 
     # If the $BreachedUsers is not empty, then email the user with the breached password with the Subject "ADPowerAdmin: Password Breached or Weak - ACTION REQUIRED" and the email Body will tell the User to change their password in 72-hour.
     if ($null -ne $BreachedUsers) {

@@ -16,28 +16,42 @@ Function Initialize-Module {
     Initialize-Module is called by AD-PowerAdmin_Main.ps1 to initialize the module.
 
     #>
-    # Append $global:Menu with the menu items to be displayed.
+    # Remove stale entries if module is reloaded.
+    $global:Menu.Remove('LogMgrMenu')
+    $global:SubMenus.Remove('LogMgrMenu')
+
+    # Register the sub-menu items.
+    $global:SubMenus += @{
+        'LogMgrMenu' = @{
+            Title = "Event Log Manager"
+            Items = @{
+                'ShowADUserLockouts' = @{
+                    Title   = "Search Account Lockouts"
+                    Label   = "Search the Event Log for account lockout events (ID: 4740)."
+                    Command = "Show-ADUserLockouts"
+                }
+                'GetCurrentLockedoutUsers' = @{
+                    Title   = "Get Current Locked Out Users"
+                    Label   = "Search Active Directory for currently locked out users and select an account to unlock."
+                    Command = "Get-CurrentLockedoutUsers"
+                }
+                'ShowAdUserFailedLoginEvents' = @{
+                    Title   = "Search Account Failed Logons"
+                    Label   = "Search a specific computer, Domain Controller, or the localhost for failed logon events (ID: 4625)."
+                    Command = "Show-AdUserFailedLoginEvents"
+                }
+            }
+        }
+    }
+
+    # Register a single main menu entry that opens the sub-menu.
     $global:Menu += @{
-        'Show-ADUserLockouts' = @{
-            Title    = "Search Account Lockouts"
-            Label    = "Search Event Log for Account Lockouts"
+        'LogMgrMenu' = @{
+            Title    = "Event Log Manager"
+            Label    = "Search Event Logs for account lockouts, currently locked out users, and failed logon events."
             Module   = "AD-PowerAdmin_LogMgr"
-            Function = "Show-ADUserLockouts"
-            Command  = "Show-ADUserLockouts"
-        }
-        'Get-CurrentLockedoutUsers' = @{
-            Title    = "Get Current Lockedout Users"
-            Label    = "Search Active Directory for currently locked out users and select an account to unlock."
-            Module   = "AD-PowerAdmin_LogMgr"
-            Function = "Get-CurrentLockedoutUsers"
-            Command  = "Get-CurrentLockedoutUsers"
-        }
-        'Show-AdUserFailedLoginEvents' = @{
-            Title    = "Search Account Failed Logons"
-            Label    = "Search a specific computer, Domain Controller, or the localhost for failed logon events(ID: 4625)."
-            Module   = "AD-PowerAdmin_LogMgr"
-            Function = "Show-AdUserFailedLoginEvents"
-            Command  = "Show-AdUserFailedLoginEvents"
+            Function = "Enter-SubMenu"
+            Command  = "Enter-SubMenu 'LogMgrMenu'"
         }
     }
 }

@@ -7,6 +7,8 @@ Modules/.dotnet
 Modules/.store
 temp*
 */run-win-test.ps1
+hibp-ntlm-hashes*/*
+weak-passwords.txt
 pwned-passwords-ntlm-ordered-by-hash-v8.txt
 # Not Ready for release.
 Modules/AD-PowerAdmin_Azure.psd1

@@ -13,35 +13,47 @@ Function Initialize-Module {
     Initialize-Module is called by AD-PowerAdmin_Main.ps1 to initialize the module.
 
     #>
-    # Append $global:Menu with the menu items to be displayed.
+    # Remove stale entries if module is reloaded.
+    $global:Menu.Remove('InstallerMenu')
+    $global:SubMenus.Remove('InstallerMenu')
+
+    # Register the sub-menu items.
+    $global:SubMenus += @{
+        'InstallerMenu' = @{
+            Title = "AD-PowerAdmin Management"
+            Items = @{
+                'InstallADPowerAdmin' = @{
+                    Title   = "Install AD-PowerAdmin"
+                    Label   = "Install AD-PowerAdmin to run daily tasks as a scheduled task using a managed service account."
+                    Command = "Install-ADPowerAdmin"
+                }
+                'TestADPowerAdminInstall' = @{
+                    Title   = "Test Installation"
+                    Label   = "Test if the AD-PowerAdmin script is installed correctly and all components are functioning."
+                    Command = "Test-ADPowerAdminInstall"
+                }
+                'RemoveADPowerAdmin' = @{
+                    Title   = "Remove AD-PowerAdmin"
+                    Label   = "Remove the AD-PowerAdmin script and all related objects, including the scheduled task and sMSA account."
+                    Command = "Remove-ADPowerAdmin"
+                }
+                'InstallPowerShell7' = @{
+                    Title   = "Install PowerShell 7"
+                    Label   = "Install PowerShell 7 on the system using WinGet."
+                    Command = "Install-PowerShell7"
+                }
+            }
+        }
+    }
+
+    # Register a single main menu entry that opens the sub-menu.
     $global:Menu += @{
-        'Install-ADPowerAdmin' = @{
-            Title    = "Install AD-PowerAdmin"
-            Label    = "Install AD-PowereAdmin to run daily tasts as a scheduled task."
+        'InstallerMenu' = @{
+            Title    = "AD-PowerAdmin Management"
+            Label    = "Install, test, or remove AD-PowerAdmin and its dependencies."
             Module   = "AD-PowerAdmin_Installer"
-            Function = "Install-ADPowerAdmin"
-            Command  = "Install-ADPowerAdmin"
-        }
-        'Test-ADPowerAdminInstall' = @{
-            Title    = "Test AD-PowerAdmin Install"
-            Label    = "Test if the AD-PowerAdmin script is installed correctly."
-            Module   = "AD-PowerAdmin_Installer"
-            Function = "Test-ADPowerAdminInstall"
-            Command  = "Test-ADPowerAdminInstall"
-        }
-        'Remove-ADPowerAdmin' = @{
-            Title    = "Uninstall AD-PowerAdmin"
-            Label    = "Remove the AD-PowerAdmin script and all related objects."
-            Module   = "AD-PowerAdmin_Installer"
-            Function = "Remove-ADPowerAdmin"
-            Command  = "Remove-ADPowerAdmin"
-        }
-        'Install-PowerShell7' = @{
-            Title    = "Install PowerShell 7"
-            Label    = "Install PowerShell 7 on the system."
-            Module   = "AD-PowerAdmin_Installer"
-            Function = "Install-PowerShell7"
-            Command  = "Install-PowerShell7"
+            Function = "Enter-SubMenu"
+            Command  = "Enter-SubMenu 'InstallerMenu'"
         }
     }
 }

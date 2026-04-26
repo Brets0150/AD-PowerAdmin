@@ -105,7 +105,7 @@ function Show-Logo {
         /____/   Presents
       ___    ____        ____                          ___       __          _
      /   |  / __ \      / __ \____ _      _____  _____/   | ____/ /___ ___  (_)___
-    / /| | / / / /_____/ /_/ / __ \ | /| / / _ \/ ___/ /| |/ __  / __ --__ \/ / __ \
+    / /| | / / / /_____/ /_/ / __ \ | /| / / _ \/ ___/ /| |/ __  / __ -__ \/ / __ \
    / ___ |/ /_/ /_____/ ____/ /_/ / |/ |/ /  __/ /  / ___ / /_/ / / / / / / / / / /
   /_/  |_/_____/     /_/    \____/|__/|__/\___/_/  /_/  |_\__,_/_/ /_/ /_/_/_/ /_/
   Version: $(Get-ADPAVersion)
@@ -722,16 +722,36 @@ function Enter-SubMenu {
                 }
             }
 
-        [int]$MaxLabelLength = $global:OptionsMaxTextLength - 25
+        # Find the widest (title + index digits) combination so every title can be
+        # padded to the same column width, matching how Enter-MainMenu aligns labels.
+        [int]$SubMaxTitleLen = 0
         $SubMenuObjects | ForEach-Object {
-            [string]$NewLabel = " "
-            if ($_.Label.Length -gt $MaxLabelLength) {
-                $NewLabel += $_.Label.Substring(0, $MaxLabelLength) + "..."
-            } else {
-                $NewLabel += $_.Label
+            [int]$Combined = $_.Title.Length + $_.Index.ToString().Length
+            if ($Combined -gt $SubMaxTitleLen) { $SubMaxTitleLen = $Combined }
+        }
+        [int]$SubMaxLabelLength = $global:OptionsMaxTextLength - $SubMaxTitleLen
+
+        $SubMenuObjects | ForEach-Object {
+            # Pad each title so labels start at the same column regardless of title length.
+            [int]$TitlePad = $SubMaxTitleLen - ($_.Title.Length + $_.Index.ToString().Length)
+            [string]$PaddedTitle = $_.Title + (' ' * $TitlePad)
+
+            # Word-wrap the label at word boundaries, same approach as Enter-MainMenu.
+            [string]$RemainingLabel = $_.Label
+            [string]$NewLabel = ""
+            [string]$IndentSpaces = " " * ($SubMaxTitleLen + 3)
+
+            while ($RemainingLabel.Length -gt $SubMaxLabelLength) {
+                [int]$BreakAt = $RemainingLabel.Substring(0, $SubMaxLabelLength).LastIndexOf(" ")
+                if ($BreakAt -le 0) { $BreakAt = $SubMaxLabelLength }
+                $NewLabel += "$($RemainingLabel.Substring(0, $BreakAt))`n$IndentSpaces"
+                $RemainingLabel = $RemainingLabel.Substring($BreakAt).TrimStart()
             }
-            Write-Host "$($_.Index). $($_.Title)" -ForegroundColor Green -NoNewline
+            $NewLabel += $RemainingLabel
+
+            Write-Host "$($_.Index). $PaddedTitle" -ForegroundColor Green -NoNewline
             Write-Host " -$NewLabel"
+            $NewLabel = $null
         }
 
         Write-Host ""

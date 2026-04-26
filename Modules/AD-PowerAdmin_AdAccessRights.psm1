@@ -13,25 +13,37 @@ Function Initialize-Module {
     Initialize-Module is called by AD-PowerAdmin_Main.ps1 to initialize the module.
 
     #>
-    # Unload $global:Menu keys, so they can be reloaded.
-    $global:Menu.Remove('HighRiskAd-AceAudit')
-    $global:Menu.Remove('DCSyncRiskAclAudit')
+    # Remove stale entries if module is reloaded.
+    $global:Menu.Remove('AdAccessRightsMenu')
+    $global:SubMenus.Remove('AdAccessRightsMenu')
 
-    # Append $global:Menu with the menu items to be displayed.
-    $global:Menu += @{
-        'HighRiskAd-AceAudit' = @{
-            Title    = "Audit High Risk Ad-ACEs"
-            Label    = "Audit AD objects with high risk ACEs on the root domain."
-            Module   = "AD-PowerAdmin_AdAccessRights"
-            Function = "Search-HighRiskAdAce"
-            Command  = "Search-HighRiskAdAce"
+    # Register the sub-menu items.
+    $global:SubMenus += @{
+        'AdAccessRightsMenu' = @{
+            Title = "AD Access Rights Audits"
+            Items = @{
+                'HighRiskAdAceAudit' = @{
+                    Title   = "Audit High Risk AD ACEs"
+                    Label   = "Audit AD objects with high risk ACEs on the root domain."
+                    Command = "Search-HighRiskAdAce"
+                }
+                'DCSyncRiskAclAudit' = @{
+                    Title   = "Audit DCSync Risk ACEs"
+                    Label   = "Audit AD objects with DCSync rights ACEs on the root domain."
+                    Command = "Search-DcSyncRisk"
+                }
+            }
         }
-        'DCSyncRiskAclAudit' = @{
-            Title    = "Audit DCSync Risk ACEs"
-            Label    = "Audit AD objects with DCSync rights ACEs on the root domain."
+    }
+
+    # Register a single main menu entry that opens the sub-menu.
+    $global:Menu += @{
+        'AdAccessRightsMenu' = @{
+            Title    = "AD Access Rights Audits"
+            Label    = "Audit high risk AD ACEs and DCSync delegation risks on the root domain."
             Module   = "AD-PowerAdmin_AdAccessRights"
-            Function = 'Search-DcSyncRisk'
-            Command  = 'Search-DcSyncRisk'
+            Function = "Enter-SubMenu"
+            Command  = "Enter-SubMenu 'AdAccessRightsMenu'"
         }
     }
 }

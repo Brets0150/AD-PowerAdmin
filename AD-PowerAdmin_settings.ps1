@@ -123,15 +123,74 @@
 
 ##############################################################################################
 # Password Quality Test Settings
-# The password quality test is used to check the password quality of all user accounts in AD.
-
-# If you want to test for known breached passwords, you will need to download the breached password list from https://haveibeenpwned.com/Passwords.
-# The file is a 7z compressed file. You will need to extract the file and save it to the same directory as the AD-PowerAdmin.ps1 script.
-# The file name should be "pwned-passwords-ntlm-ordered-by-hash-v8.txt" and the file size should be 28.5GB.
-# The file is updated every 12 months. You will need to download the new file and replace the old file when it is updated.
-
-# Set the file path to the breached password list file.
+# The password quality test checks every AD user account for breached or weak passwords using
+# the Have I Been Pwned (HIBP) NTLM hash database and an optional weak-password dictionary.
+#
+# The HIBP hash data can be stored in one of two ways -- as a single sorted file or as a
+# directory of per-range files. Choose the mode that matches how you downloaded the data:
+#
+# -----------------------------------------------------------------------------------------
+# OPTION A: SINGLE-FILE MODE
+# -----------------------------------------------------------------------------------------
+# The downloader produces one large sorted flat file containing all NTLM hashes.
+# As of 2026 this file is approximately 70 GB.
+#
+# Use single-file mode when:
+#   - You are doing an initial setup and have not yet chosen a long-term approach.
+#   - Storage is not a concern and you are comfortable re-downloading 70 GB on each update.
+#
+# How the audit uses it:
+#   DSInternals Test-PasswordQuality reads the file directly via -WeakPasswordHashesSortedFile.
+#   This is fast because the file is sorted and can be binary-searched.
+#
+# To use single-file mode:
+#   1. Set $global:NtlmHashDataDir = ''  (leave it empty, see below)
+#   2. Set $global:NtlmHashDataFile to the filename of the sorted hash file.
+#   3. Run "Update HIBP Database" from the HIBP submenu to download the file.
+#
+# Example:
+#   [string]$global:NtlmHashDataFile = 'pwned-passwords-ntlm-ordered-by-hash-v8.txt'
+#   [string]$global:NtlmHashDataDir  = ''
+#
+# -----------------------------------------------------------------------------------------
+# OPTION B: DIRECTORY MODE  (recommended for ongoing use)
+# -----------------------------------------------------------------------------------------
+# The downloader writes hashes as individual range files named by their 5-character hex
+# prefix (e.g. A3B4C.txt). Each file contains SUFFIX:count lines for that prefix range.
+# There are roughly 1 million range files covering all possible prefixes.
+#
+# On the first run all range files are downloaded (~70 GB total).
+# On subsequent runs the tool compares each file's ETag with the server and downloads only
+# the files that have changed -- typically a small fraction of the full dataset. This makes
+# weekly updates far more efficient than replacing the entire single file.
+#
+# Use directory mode when:
+#   - You want efficient incremental weekly updates (strongly recommended).
+#   - You have already completed the first 70 GB download.
+#
+# How the audit uses it:
+#   A custom function (Test-NtlmHashesInDirectory) groups AD accounts by hash prefix, reads
+#   only the matching range files, and merges breached accounts into the audit results. The
+#   outcome is identical to single-file mode -- breached users are notified and follow-up
+#   tasks are scheduled.
+#
+# To use directory mode:
+#   1. Set $global:NtlmHashDataDir to a folder name (relative to the script directory).
+#   2. Leave $global:NtlmHashDataFile at its default value (it is not used in this mode).
+#   3. Run "Update HIBP Database" from the HIBP submenu to download the range files.
+#
+# Example:
+#   [string]$global:NtlmHashDataFile = 'pwned-passwords-ntlm-ordered-by-hash-v8.txt'
+#   [string]$global:NtlmHashDataDir  = 'hibp-ntlm-hashes'
+#
+# -----------------------------------------------------------------------------------------
+# ACTIVE CONFIGURATION
+# -----------------------------------------------------------------------------------------
+# $global:NtlmHashDataFile -- filename for single-file mode (always set; used when NtlmHashDataDir is empty)
 [string]$global:NtlmHashDataFile = 'pwned-passwords-ntlm-ordered-by-hash-v8.txt'
+
+# $global:NtlmHashDataDir -- directory name for directory mode. Set to '' to use single-file mode.
+[string]$global:NtlmHashDataDir = 'hibp-ntlm-hashes'
 
 # If you want to test for weak passwords, you can add a plain text file with a list of weak passwords. One password per line.
 # The file is a plain text file. You will need to save it to the same directory as the AD-PowerAdmin.ps1 script.

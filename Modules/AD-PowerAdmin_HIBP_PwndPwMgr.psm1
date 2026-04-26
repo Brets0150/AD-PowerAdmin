@@ -48,6 +48,11 @@ Function Initialize-Module {
                     Label   = "Remove the Have I Been Pwned downloader and the local .NET SDK installation from this system."
                     Command = "Uninstall-HibpTools"
                 }
+                'HibpTroubleshoot' = @{
+                    Title   = "Troubleshooting Guide"
+                    Label   = "Display a step-by-step guide for diagnosing and resolving HIBP downloader failures, including reinstall procedures and an explanation of single-file vs directory mode."
+                    Command = "Show-HibpTroubleshootingGuide"
+                }
             }
         }
     }
@@ -320,31 +325,38 @@ Function Get-WeakPasswordsList {
 Function Get-HibpPasswordHashesFiles {
     <#
     .SYNOPSIS
-        Download or update the Have I Been Pwned NTLM password hash file and weak password list.
+        Download or update the Have I Been Pwned NTLM password hash data and weak password list.
 
     .DESCRIPTION
-        Ensures the HIBP downloader tool is installed, then runs it to download or
-        incrementally update the NTLM hash list into $global:ThisScriptDir. The output
-        filename matches $global:NtlmHashDataFile so AD-PowerAdmin_PasswordsCtl finds it.
+        Ensures the HIBP downloader tool is installed, then downloads or incrementally
+        updates the NTLM hash data into $global:ThisScriptDir.
+
+        Two modes are supported, selected by the $global:NtlmHashDataDir setting:
+
+        SINGLE-FILE MODE ($global:NtlmHashDataDir is empty):
+            Downloads all hashes into one sorted text file named by $global:NtlmHashDataFile.
+            The full initial download is approximately 70 GB. Subsequent runs overwrite the
+            entire file (-o flag), so every update re-downloads the full dataset.
+
+        DIRECTORY MODE ($global:NtlmHashDataDir is set to a directory name):
+            Downloads hashes as individual range files (PREFIX.txt) inside the named directory.
+            Only changed range files are fetched on subsequent runs -- making weekly updates
+            far more efficient than replacing the full single file. Recommended for ongoing use.
 
         After the HIBP download completes, also calls Get-WeakPasswordsList to refresh
         the weak password dictionary from weakpasswords.net.
 
-        WARNING: As of 2026 the full NTLM hash database is approximately 70 GB. The
-        haveibeenpwned-downloader tool performs incremental updates after the first
-        download, so subsequent weekly runs only fetch changed hash ranges.
-
         Tool usage reference (from haveibeenpwned-downloader --help):
             haveibeenpwned-downloader [outputFile] [OPTIONS]
-            -n  Fetch NTLM hashes (default is SHA1)
-            -o  Overwrite existing output file
-            -s  Write to a single file (default: true)
-            -p  Parallelism (default: 8 * processor count)
+            -n             Fetch NTLM hashes (default is SHA1)
+            -o             Overwrite existing output file (single-file mode)
+            --single false Write range files to a directory instead of a single file
+            -p             Parallelism (default: 8 * processor count)
 
     .OUTPUTS
         [bool] $true when both downloads succeed, $false if either fails.
     #>
-    [string]$HibpExecutable = "$global:ModulesPath\haveibeenpwned-downloader.exe"
+    [string]$HibpExecutable    = "$global:ModulesPath\haveibeenpwned-downloader.exe"
     [string]$OriginalWorkingDir = (Get-Location).Path
 
     try {
@@ -353,45 +365,97 @@ Function Get-HibpPasswordHashesFiles {
             return $false
         }
 
-        # Warn about download size on first run (file does not exist yet).
-        [string]$HashFilePath = "$global:ThisScriptDir\$global:NtlmHashDataFile"
-        if (-not (Test-Path $HashFilePath)) {
-            Write-Host ""
-            Write-Host "WARNING: As of 2026, the full HIBP NTLM hash database is approximately 70 GB." -ForegroundColor Yellow
-            Write-Host "Subsequent weekly updates are incremental and much smaller." -ForegroundColor Yellow
-            Write-Host ""
-            $confirm = Read-Host "This is a large download. Continue? (y/N)"
-            if ($confirm -ne 'y' -and $confirm -ne 'Y') {
-                Write-Host "Download cancelled." -ForegroundColor Yellow
+        # Determine mode based on whether a directory name has been configured.
+        [bool]$DirectoryMode = ($global:NtlmHashDataDir -ne '' -and $null -ne $global:NtlmHashDataDir)
+
+        # Get free disk space on the drive where the hash data will be stored.
+        try {
+            [string]$DriveRoot = [System.IO.Path]::GetPathRoot($global:ThisScriptDir)
+            $DriveInfo = [System.IO.DriveInfo]::new($DriveRoot)
+            [string]$FreeSpaceStr = "$([math]::Round($DriveInfo.AvailableFreeSpace / 1GB, 2)) GB free on $($DriveInfo.Name)"
+        } catch {
+            [string]$FreeSpaceStr = "disk space unknown"
+        }
+
+        if ($DirectoryMode) {
+            # --- DIRECTORY MODE (incremental range files) ---
+            [string]$TargetDir = "$global:ThisScriptDir\$global:NtlmHashDataDir"
+
+            # First-run: directory missing or empty of range files.
+            [bool]$IsFirstRun = (-not (Test-Path $TargetDir -PathType Container)) -or
+                                 ((Get-ChildItem -Path $TargetDir -Filter '*.txt' -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0)
+
+            if ($IsFirstRun) {
+                Write-Host ""
+                Write-Host "WARNING: As of 2026, the full HIBP NTLM hash database is approximately 70 GB." -ForegroundColor Yellow
+                Write-Host "Subsequent incremental updates will only download changed ranges (much smaller)." -ForegroundColor Yellow
+                Write-Host "Available disk space: $FreeSpaceStr" -ForegroundColor Yellow
+                Write-Host ""
+                [string]$Confirm = Read-Host "This is a large first-time download. Continue? (y/N)"
+                if ($Confirm -ne 'y' -and $Confirm -ne 'Y') {
+                    Write-Host "Download cancelled." -ForegroundColor Yellow
+                    return $false
+                }
+            }
+
+            Set-Location -Path $global:ThisScriptDir
+
+            Write-Host "Downloading HIBP NTLM hash range files (directory mode)..." -ForegroundColor Yellow
+            Write-Host "Output directory: $TargetDir" -ForegroundColor Yellow
+
+            & "$HibpExecutable" $global:NtlmHashDataDir --single false -n
+
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "The HIBP downloader exited with code $LASTEXITCODE." -ForegroundColor Red
+                Set-Location -Path $OriginalWorkingDir
                 return $false
             }
+
+            Write-Host "HIBP NTLM hash range files updated successfully." -ForegroundColor Green
+
+        } else {
+            # --- SINGLE-FILE MODE (full sorted file) ---
+            [string]$HashFilePath = "$global:ThisScriptDir\$global:NtlmHashDataFile"
+
+            if (-not (Test-Path $HashFilePath)) {
+                Write-Host ""
+                Write-Host "WARNING: As of 2026, the full HIBP NTLM hash database is approximately 70 GB." -ForegroundColor Yellow
+                Write-Host "Subsequent updates will re-download the entire file. Consider enabling directory" -ForegroundColor Yellow
+                Write-Host "mode via `$global:NtlmHashDataDir in AD-PowerAdmin_settings.ps1 for incremental updates." -ForegroundColor Yellow
+                Write-Host "Available disk space: $FreeSpaceStr" -ForegroundColor Yellow
+                Write-Host ""
+                [string]$Confirm = Read-Host "This is a large download. Continue? (y/N)"
+                if ($Confirm -ne 'y' -and $Confirm -ne 'Y') {
+                    Write-Host "Download cancelled." -ForegroundColor Yellow
+                    return $false
+                }
+            }
+
+            # The tool appends .txt automatically; strip the extension from the global setting.
+            [string]$OutputBaseName = [System.IO.Path]::GetFileNameWithoutExtension($global:NtlmHashDataFile)
+
+            Set-Location -Path $global:ThisScriptDir
+
+            Write-Host "Downloading HIBP NTLM password hash file (single-file mode)..." -ForegroundColor Yellow
+            Write-Host "Output file: $HashFilePath" -ForegroundColor Yellow
+
+            & "$HibpExecutable" $OutputBaseName -n -o
+
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "The HIBP downloader exited with code $LASTEXITCODE." -ForegroundColor Red
+                Set-Location -Path $OriginalWorkingDir
+                return $false
+            }
+
+            Write-Host "The HIBP password hash file has been downloaded and updated." -ForegroundColor Green
         }
 
-        # The tool appends .txt to the output name automatically.
-        # Strip the extension from the global setting so the produced filename matches exactly.
-        [string]$outputBaseName = [System.IO.Path]::GetFileNameWithoutExtension($global:NtlmHashDataFile)
-
-        # Change to the script root so the file lands where PasswordsCtl expects it.
-        Set-Location -Path $global:ThisScriptDir
-
-        Write-Host "Downloading HIBP NTLM password hash file. This may take a long time..." -ForegroundColor Yellow
-        Write-Host "Output file: $HashFilePath" -ForegroundColor Yellow
-
-        & "$HibpExecutable" $outputBaseName -n -o
-
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "The HIBP downloader exited with code $LASTEXITCODE." -ForegroundColor Red
-            Set-Location -Path $OriginalWorkingDir
-            return $false
-        }
-
-        Write-Host "The HIBP password hash file has been downloaded and updated." -ForegroundColor Green
         Set-Location -Path $OriginalWorkingDir
 
         # Also refresh the weak password list as part of the combined update.
         Write-Host ""
-        [bool]$weakPwOk = Get-WeakPasswordsList
-        return $weakPwOk
+        [bool]$WeakPwOk = Get-WeakPasswordsList
+        return $WeakPwOk
     }
     catch {
         Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
@@ -532,4 +596,196 @@ Function Uninstall-DotnetSdk {
             Write-Host "No uninstall string found for $($sdk.DisplayName). Skipping." -ForegroundColor Red
         }
     }
+}
+
+Function Show-HibpTroubleshootingGuide {
+    <#
+    .SYNOPSIS
+        Display a troubleshooting guide for the HIBP downloader toolchain.
+
+    .DESCRIPTION
+        Prints a structured plain-text guide covering:
+          - Common failure scenarios and their root causes
+          - Step-by-step removal, reinstall, and test procedures
+          - Why the module uses directory-based incremental downloads
+            instead of a single monolithic file
+          - Environment variables used internally by the module
+
+        Intended as a built-in reference for administrators and future
+        contributors who were not involved in developing this module.
+    #>
+
+    [string]$Sep  = "=" * 78
+    [string]$Sep2 = "-" * 78
+
+    Write-Host ""
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host "  HIBP DOWNLOADER -- TROUBLESHOOTING GUIDE" -ForegroundColor Cyan
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "This guide covers common failures with the Have I Been Pwned (HIBP) NTLM"
+    Write-Host "password hash downloader, procedures for removing and reinstalling the"
+    Write-Host "toolchain, and the rationale for the directory-based download model."
+    Write-Host ""
+
+    Write-Host $Sep2 -ForegroundColor Yellow
+    Write-Host "  SECTION 1: COMMON FAILURES AND ROOT CAUSES" -ForegroundColor Yellow
+    Write-Host $Sep2 -ForegroundColor Yellow
+    Write-Host ""
+
+    Write-Host "1. 'dotnet' is not recognized as a command"
+    Write-Host "   CAUSE: Install-DotnetSdk installs .NET locally under Modules\.dotnet\,"
+    Write-Host "   which is not on the system PATH. New PowerShell sessions started after"
+    Write-Host "   the install do not inherit the updated PATH automatically."
+    Write-Host "   FIX: The module sets PATH, DOTNET_ROOT, and DOTNET_ROLL_FORWARD at"
+    Write-Host "   runtime whenever it detects the local install. Running Install-HibpHash-"
+    Write-Host "   Downloader or Test-HibpToolsInstalled triggers this environment setup."
+    Write-Host ""
+
+    Write-Host "2. haveibeenpwned-downloader.exe fails: '.NET location: Not found'"
+    Write-Host "   CAUSE: The exe is a .NET application host. It searches standard system"
+    Write-Host "   registry locations for the runtime. A locally installed .NET (not in the"
+    Write-Host "   system registry) is invisible to the app host unless DOTNET_ROOT is set."
+    Write-Host "   FIX: The module sets DOTNET_ROOT to Modules\.dotnet\ for the current"
+    Write-Host "   session. Re-run Install-HibpHashDownloader to ensure DOTNET_ROOT is set."
+    Write-Host ""
+
+    Write-Host "3. 'Framework: Microsoft.NETCore.App 9.0.0 not found' (version mismatch)"
+    Write-Host "   CAUSE: The HIBP exe was compiled against .NET 9. The module installs the"
+    Write-Host "   latest .NET LTS (currently 10). By default .NET does not allow an app"
+    Write-Host "   compiled for version 9 to run on a higher major version."
+    Write-Host "   FIX: The module sets DOTNET_ROLL_FORWARD=Major, which permits a .NET 9"
+    Write-Host "   application to run on .NET 10+. No manual action is required."
+    Write-Host ""
+
+    Write-Host "4. NuGet source registration error during install"
+    Write-Host "   CAUSE: 'dotnet nuget add source' returns an error when nuget.org is"
+    Write-Host "   already registered. This is a known dotnet CLI behavior, not a failure."
+    Write-Host "   FIX: The installer checks for an existing nuget.org source and skips the"
+    Write-Host "   add step when it is already present. No manual action is required."
+    Write-Host ""
+
+    Write-Host "5. 'dotnet tool install' exits with code 1 and says 'already installed'"
+    Write-Host "   CAUSE: The dotnet CLI exits with code 1 when the tool is already present."
+    Write-Host "   This is expected behavior, not an error."
+    Write-Host "   FIX: The installer recognises the 'already installed' message and treats"
+    Write-Host "   it as success. Environment variables are still configured correctly."
+    Write-Host ""
+
+    Write-Host $Sep2 -ForegroundColor Yellow
+    Write-Host "  SECTION 2: STEP-BY-STEP RESOLUTION PROCEDURE" -ForegroundColor Yellow
+    Write-Host $Sep2 -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Follow these steps in order when the downloader is not functioning."
+    Write-Host ""
+
+    Write-Host "  Step 1 -- Check current state"
+    Write-Host "    Select 'Test HIBP Installation' from this submenu."
+    Write-Host "    This runs Test-HibpToolsInstalled and reports whether dotnet and the"
+    Write-Host "    downloader exe are present and working. Note which component fails."
+    Write-Host ""
+
+    Write-Host "  Step 2 -- Uninstall everything cleanly"
+    Write-Host "    Select 'Uninstall HIBP Tools' from this submenu."
+    Write-Host "    Removes haveibeenpwned-downloader.exe and the local .NET directories"
+    Write-Host "    (.dotnet\, .store\, .config\) from the Modules folder. Also clears"
+    Write-Host "    DOTNET_ROOT, DOTNET_ROLL_FORWARD, and the local path from PATH."
+    Write-Host "    You are asked separately whether to delete the ~70 GB hash data."
+    Write-Host ""
+
+    Write-Host "  Step 3 -- Reinstall the toolchain"
+    Write-Host "    Select 'Install HIBP Tools' from this submenu."
+    Write-Host "    Installs the .NET SDK locally and then installs the downloader exe via"
+    Write-Host "    dotnet tool install. PATH, DOTNET_ROOT, and DOTNET_ROLL_FORWARD are"
+    Write-Host "    configured automatically for the current session."
+    Write-Host ""
+
+    Write-Host "  Step 4 -- Verify the installation"
+    Write-Host "    Select 'Test HIBP Installation' again."
+    Write-Host "    Both dotnet and the exe should now be reported as ready."
+    Write-Host ""
+
+    Write-Host "  Step 5 (advanced) -- Remove a conflicting system-wide .NET SDK"
+    Write-Host "    If a system-wide .NET installation is causing conflicts, run from an"
+    Write-Host "    elevated PowerShell prompt:"
+    Write-Host "      Uninstall-DotnetSdk"
+    Write-Host "    This queries the registry for installed .NET SDK MSI packages and"
+    Write-Host "    removes each one via msiexec. Then repeat Steps 2-4."
+    Write-Host ""
+
+    Write-Host $Sep2 -ForegroundColor Yellow
+    Write-Host "  SECTION 3: SINGLE-FILE VS DIRECTORY MODE (WHY WE CHANGED)" -ForegroundColor Yellow
+    Write-Host $Sep2 -ForegroundColor Yellow
+    Write-Host ""
+
+    Write-Host "SINGLE-FILE MODE (original)"
+    Write-Host "  The downloader was originally run with the -o flag, producing one large"
+    Write-Host "  sorted flat file (e.g. pwned-passwords-ntlm-ordered-by-hash-v8.txt)."
+    Write-Host "  As of 2026 this file is approximately 70 GB. The password audit module"
+    Write-Host "  passed it to DSInternals via Test-PasswordQuality -WeakPasswordHashesSorted-"
+    Write-Host "  File for breach detection."
+    Write-Host ""
+    Write-Host "  PROBLEM: Every weekly update re-downloads the entire 70 GB file even when"
+    Write-Host "  only a small fraction of hashes have changed. This is highly inefficient."
+    Write-Host ""
+
+    Write-Host "DIRECTORY MODE (current, recommended)"
+    Write-Host "  The downloader's --single false flag writes hashes as individual range"
+    Write-Host "  files named by their 5-character hex prefix (e.g. A3B4C.txt). Each file"
+    Write-Host "  contains SUFFIX:count lines for all hashes in that prefix range."
+    Write-Host ""
+    Write-Host "  On subsequent runs the tool compares each range file's ETag with the"
+    Write-Host "  server and downloads only the files that have changed. A typical weekly"
+    Write-Host "  refresh transfers a small fraction of the total 70 GB dataset."
+    Write-Host ""
+    Write-Host "  To enable directory mode, set this in AD-PowerAdmin_settings.ps1:"
+    Write-Host "    `$global:NtlmHashDataDir = 'hibp-ntlm-hashes'"
+    Write-Host "  Leave `$global:NtlmHashDataDir = '' to stay in single-file mode."
+    Write-Host "  Both modes are fully supported; the module auto-detects based on the"
+    Write-Host "  setting."
+    Write-Host ""
+
+    Write-Host "AUDIT LOGIC IN DIRECTORY MODE"
+    Write-Host "  DSInternals Test-PasswordQuality requires a single sorted file, so it"
+    Write-Host "  cannot be used directly with directory-mode range files. A custom function"
+    Write-Host "  (Test-NtlmHashesInDirectory in AD-PowerAdmin_PasswordsCtl.psm1) handles"
+    Write-Host "  directory-mode lookups."
+    Write-Host ""
+    Write-Host "  That function groups all AD accounts by their 5-character NTLM hash"
+    Write-Host "  prefix, reads each corresponding range file exactly once, and returns the"
+    Write-Host "  SamAccountName of each breached account. Results are merged into the"
+    Write-Host "  PasswordQualityTestResult object's WeakPasswordHashes property so that"
+    Write-Host "  Invoke-WeakPwdProcess sends notification emails and schedules follow-up"
+    Write-Host "  tasks identically in both modes."
+    Write-Host ""
+
+    Write-Host $Sep2 -ForegroundColor Yellow
+    Write-Host "  SECTION 4: ENVIRONMENT VARIABLES REFERENCE" -ForegroundColor Yellow
+    Write-Host $Sep2 -ForegroundColor Yellow
+    Write-Host ""
+
+    Write-Host "  DOTNET_ROOT"
+    Write-Host "    Tells .NET application hosts where the runtime is installed. Required"
+    Write-Host "    when using a locally installed .NET that is not in the system registry."
+    Write-Host "    Set by Test-DotnetInstalled and Install-DotnetSdk."
+    Write-Host ""
+
+    Write-Host "  DOTNET_ROLL_FORWARD=Major"
+    Write-Host "    Allows a .NET 9-compiled application to run on a .NET 10 (or later)"
+    Write-Host "    runtime. Without this flag the app host rejects a higher major version."
+    Write-Host "    Set by Test-DotnetInstalled and Install-DotnetSdk."
+    Write-Host ""
+
+    Write-Host "  PATH"
+    Write-Host "    Must include the dotnet executable directory for 'dotnet' commands to"
+    Write-Host "    resolve. Updated for the current session by Test-DotnetInstalled and"
+    Write-Host "    Install-DotnetSdk. System-wide PATH changes require a system-level"
+    Write-Host "    installer or a manual registry edit."
+    Write-Host ""
+
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host "  End of troubleshooting guide." -ForegroundColor Cyan
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host ""
+# End of Show-HibpTroubleshootingGuide function
 }

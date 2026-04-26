@@ -79,7 +79,8 @@
         'Test-DotnetInstalled',
         'Test-HibpToolsInstalled',
         'Uninstall-HibpTools',
-        'Uninstall-DotnetSdk'
+        'Uninstall-DotnetSdk',
+        'Show-HibpTroubleshootingGuide'
     )
     # IF YOU DO NOT EXPORT THE FUNCTIONS, THEN THE FUNCTIONS WILL NOT BE AVAILABLE TO THE MAIN SCRIPT.
 
