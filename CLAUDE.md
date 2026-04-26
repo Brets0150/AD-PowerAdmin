@@ -1,8 +1,13 @@
-# AD-PowerAdmin — Project Guide for Claude
+# AD-PowerAdmin -- Project Guide for Claude
 
 ## Project Overview
 
-**AD-PowerAdmin** is a modular PowerShell framework for Active Directory administrators to automate security checks, password audits, and account lifecycle management. It runs interactively via a numbered menu or unattended via scheduled tasks.
+**AD-PowerAdmin** is a modular PowerShell framework for Active Directory administrators. It is built around two core goals:
+
+1. **Audit and maintain Active Directory security** -- identify misconfigurations, weak credentials, stale accounts, excessive privileges, and known attack vectors before adversaries exploit them.
+2. **Automate day-to-day administrative tasks securely and consistently** -- remove human variability from sensitive operations by encoding best practices directly into scripts.
+
+Automation here is not simply about saving time. It is about enforcing secure, repeatable processes every single time. A manually run offboarding checklist gets skipped or done inconsistently. A scripted user decommissioning workflow disables the account, revokes group memberships, resets the password, and archives the mailbox in the same order, with the same checks, without exception. The script is the policy.
 
 - **Author:** Bret.s (CyberGladius)
 - **License:** MIT
@@ -11,25 +16,94 @@
 
 ---
 
+## Documentation Model
+
+### README.md -- High-Level Summary Only
+
+`README.md` is the public face of the project. It contains:
+
+- Project purpose and what problem it solves
+- Feature overview (one line per feature, user-facing language)
+- Quick-start and installation instructions
+
+`README.md` does **not** contain implementation details, architectural explanations, or methodology writeups. Keep it oriented toward a reader deciding whether to adopt the tool.
+
+**README must be updated with every change.** Whenever a function, feature, or module is added, modified, or removed:
+
+- **New feature or function:** add a bullet to the Features list in plain, user-facing terms.
+- **Modified feature:** update the existing description if behavior, scope, or name changed.
+- **Removed feature:** remove the corresponding bullet.
+- **New module:** if it introduces a user-visible capability, it earns a Features entry.
+
+```
+# AD-PowerAdmin Overview   <- project summary, do not change
+# Features                 <- bulleted list, update here for every change
+# Installation             <- do not change unless install process changes
+```
+
+### AD-PowerAdmin.wiki/ -- All Detailed Documentation
+
+Everything beyond the high-level summary belongs in the wiki. The wiki has two distinct purposes:
+
+**`AD-PowerAdmin.wiki/Vulnerabilities/`** contains generalized dossiers on known Active Directory vulnerabilities -- what the vulnerability is, how it works, why it matters, and what mitigations exist. These dossiers are reference material independent of this project's implementation. Examples: Kerberoasting, Pass-the-Hash, DCSync, AS-REP Roasting, KRBTGT compromise.
+
+**The rest of `AD-PowerAdmin.wiki/`** documents AD-PowerAdmin-specific content:
+- Module methodologies and implementation rationale
+- Audit design and what each audit detects
+- Automation workflows and the best practices they enforce
+- Architectural decisions and the reasoning behind them
+- Operational guidance for administrators running the tool
+
+The wiki is the authoritative source for "why does this exist and how does it work."
+
+---
+
+## Feature Justification Policy
+
+Every audit, test, automation, and feature in AD-PowerAdmin must be grounded in at least one of the following:
+
+- A known Active Directory vulnerability
+- A known weakness or misconfiguration pattern
+- An operational best practice
+- An administrative security requirement
+
+**This is not optional.** AD-PowerAdmin exists to address real threats. A feature that cannot be traced to one of the above has no place in the project.
+
+### Wiki Requirement for Every Change
+
+When adding or changing any audit, test, automation, or feature, a corresponding wiki page must be created or updated. The page must answer:
+
+1. **What was built or changed** -- a clear description of the functionality.
+2. **Why it was built** -- the threat, weakness, operational need, or best practice that motivated it.
+3. **Which vulnerability, weakness, operational need, or best practice it addresses** -- link to the relevant `Vulnerabilities/` dossier if applicable.
+4. **How it integrates with the broader AD-PowerAdmin framework** -- which module it lives in, how it appears in the menu or scheduler, and any dependencies on other modules.
+
+A code change without a corresponding wiki update is an incomplete change.
+
+---
+
 ## Project Structure
 
 ```
 AD-PowerAdmin/
-├── AD-PowerAdmin.ps1              # Main entry point (menu, module loader, scheduler)
-├── AD-PowerAdmin_settings.ps1     # All global configuration variables
-├── README.md
-├── .gitignore
-├── Modules/                       # All production modules go here
-│   ├── AD-PowerAdmin_Utils.psm1/.psd1
-│   ├── AD-PowerAdmin_LogMgr.psm1/.psd1
-│   ├── AD-PowerAdmin_Installer.psm1/.psd1
-│   ├── AD-PowerAdmin_Audits.psm1/.psd1
-│   ├── AD-PowerAdmin_PasswordsCtl.psm1/.psd1
-│   └── AD-PowerAdmin_AdAccessRights.psm1/.psd1
-├── Modules_Examples/              # Reference/template module
-│   ├── AD-PowerAdmin_Example.psm1
-│   └── AD-PowerAdmin_Example.psd1
-└── Reports/                       # Auto-created; holds CSV exports and debug log
+|-- AD-PowerAdmin.ps1              # Main entry point (menu, module loader, scheduler)
+|-- AD-PowerAdmin_settings.ps1     # All global configuration variables
+|-- README.md                      # High-level summary only
+|-- .gitignore
+|-- Modules/                       # All production modules go here
+|   |-- AD-PowerAdmin_Utils.psm1/.psd1
+|   |-- AD-PowerAdmin_LogMgr.psm1/.psd1
+|   |-- AD-PowerAdmin_Installer.psm1/.psd1
+|   |-- AD-PowerAdmin_Audits.psm1/.psd1
+|   |-- AD-PowerAdmin_PasswordsCtl.psm1/.psd1
+|   `-- AD-PowerAdmin_AdAccessRights.psm1/.psd1
+|-- Modules_Examples/              # Reference/template module
+|   |-- AD-PowerAdmin_Example.psm1
+|   `-- AD-PowerAdmin_Example.psd1
+|-- AD-PowerAdmin.wiki/            # All detailed documentation
+|   |-- Vulnerabilities/           # Generalized AD vulnerability dossiers
+|   `-- ...                        # AD-PowerAdmin methodology, architecture, operational docs
+`-- Reports/                       # Auto-created; holds CSV exports and debug log
 ```
 
 ---
@@ -42,7 +116,7 @@ AD-PowerAdmin/
 #Requires -Modules ActiveDirectory
 ```
 
-The main script auto-detects PowerShell version and re-launches itself under PowerShell 7 if available.
+The main script detects the running PowerShell version at startup. If a module's manifest declares a minimum `PowerShellVersion` that exceeds the current session, that module is silently skipped and listed in a warning banner. No automatic re-launch occurs; to access PS7-only modules, run AD-PowerAdmin directly from a PowerShell 7 console.
 
 ---
 
@@ -65,11 +139,11 @@ Settings from `AD-PowerAdmin_settings.ps1` are sourced into additional `$global:
 
 ---
 
-## AD-PowerAdmin.ps1 — The Orchestrator
+## AD-PowerAdmin.ps1 -- The Orchestrator
 
-`AD-PowerAdmin.ps1` is not a library of AD functions. It is the **orchestration shell** — it owns the startup sequence, the menu system, the unattended job dispatcher, and the global state that every module writes into. It contains no AD business logic of its own. All AD functionality lives in the modules.
+`AD-PowerAdmin.ps1` is not a library of AD functions. It is the **orchestration shell** -- it owns the startup sequence, the menu system, the unattended job dispatcher, and the global state that every module writes into. It contains no AD business logic of its own. All AD functionality lives in the modules.
 
-### What the main script does NOT contain
+### What the Main Script Does NOT Contain
 
 - No AD audit logic
 - No password management logic
@@ -82,38 +156,43 @@ All of that lives exclusively in the modules. The main script's only job is to l
 
 ```
 AD-PowerAdmin.ps1 is executed
-│
-├─ 1. Global variables declared at script scope
-│     $global:ThisScript, $global:ThisScriptDir, $global:ModulesPath,
-│     $global:ReportsPath, $global:Version, $global:OptionsMaxTextLength
-│     $global:Menu = @{}          ← empty hashtable, modules will fill this
-│     $global:UnattendedJobs = @{}  ← empty hashtable, modules will fill this
-│
-├─ 2. Test-PowerShellVersion
-│     If not PS7+, re-launches the entire script under pwsh.exe and exits
-│
-├─ 3. Initialize-ADPowerAdmin
-│     ├─ Validates prerequisites (script path, settings file exists)
-│     ├─ dot-sources AD-PowerAdmin_settings.ps1
-│     │     → populates all $global:* config variables
-│     ├─ Creates Reports/ directory if missing
-│     ├─ Initialize-Debug  (starts transcript if $global:Debug = $true)
-│     └─ Initialize-AllModules
-│           Get-ChildItem Modules\ -Filter *.psd1 | ForEach-Object {
-│               Import-Module <module.psd1> -Force -Verbose
-│           }
-│           ↓ for each .psd1 PowerShell also loads its RootModule (.psm1)
-│           ↓ the .psm1 calls Initialize-Module at the bottom of the file
-│           ↓ Initialize-Module adds entries to $global:Menu and $global:UnattendedJobs
-│
-└─ 4. Branch on -Unattended parameter
-      ├─ -Unattended present → Start-Automation  (scheduled/headless path)
-      └─ -Unattended absent  → Enter-MainMenu    (interactive path)
+|
+|-- 1. Global variables declared at script scope
+|     $global:ThisScript, $global:ThisScriptDir, $global:ModulesPath,
+|     $global:ReportsPath, $global:Version, $global:OptionsMaxTextLength
+|     $global:Menu = @{}            <- empty hashtable, modules will fill this
+|     $global:UnattendedJobs = @{}  <- empty hashtable, modules will fill this
+|
+|-- 2. Get-IncompatibleModules (called by Initialize-AllModules)
+|     Reads each .psd1 manifest in Modules/ and compares its PowerShellVersion
+|     field against $PSVersionTable.PSVersion. Any module requiring a higher
+|     version than the running session is recorded in $global:IncompatibleModules
+|     and excluded from loading. No re-launch occurs. If incompatible modules
+|     exist, a yellow warning banner is shown in the interactive menu listing
+|     which modules were skipped and why.
+|
+|-- 3. Initialize-ADPowerAdmin
+|     |-- Validates prerequisites (script path, settings file exists)
+|     |-- dot-sources AD-PowerAdmin_settings.ps1
+|     |     -> populates all $global:* config variables
+|     |-- Creates Reports/ directory if missing
+|     |-- Initialize-Debug  (starts transcript if $global:Debug = $true)
+|     `-- Initialize-AllModules
+|           Get-ChildItem Modules\ -Filter *.psd1 | ForEach-Object {
+|               Import-Module <module.psd1> -Force -Verbose
+|           }
+|           v for each .psd1 PowerShell also loads its RootModule (.psm1)
+|           v the .psm1 calls Initialize-Module at the bottom of the file
+|           v Initialize-Module adds entries to $global:Menu and $global:UnattendedJobs
+|
+`-- 4. Branch on -Unattended parameter
+      |-- -Unattended present -> Start-Automation  (scheduled/headless path)
+      `-- -Unattended absent  -> Enter-MainMenu    (interactive path)
 ```
 
 ### How Dynamic Module Loading Works
 
-`Initialize-AllModules` (lines 445–458 of AD-PowerAdmin.ps1) does exactly this:
+`Initialize-AllModules` (lines 445-458 of AD-PowerAdmin.ps1) does exactly this:
 
 ```powershell
 Get-ChildItem -Path $global:ModulesPath -Filter *.psd1 | ForEach-Object {
@@ -121,18 +200,18 @@ Get-ChildItem -Path $global:ModulesPath -Filter *.psd1 | ForEach-Object {
 }
 ```
 
-- It scans `Modules/` for every `.psd1` file — **no hardcoded list, no registration required**.
+- It scans `Modules/` for every `.psd1` file -- **no hardcoded list, no registration required**.
 - Importing a `.psd1` manifest causes PowerShell to load the `.psm1` named in `RootModule`.
 - When the `.psm1` is loaded, its top-level code runs. Every module ends with a bare call to `Initialize-Module`, so that function runs immediately on import.
 - `Initialize-Module` writes into `$global:Menu` and `$global:UnattendedJobs`.
 
-After `Initialize-AllModules` returns, those two global hashtables contain every menu item and every scheduled job contributed by every module. The main script then uses those hashtables — it never needs to know which modules exist.
+After `Initialize-AllModules` returns, those two global hashtables contain every menu item and every scheduled job contributed by every module. The main script then uses those hashtables -- it never needs to know which modules exist.
 
 **Consequence:** dropping a valid `.psm1`/`.psd1` pair into `Modules/` is sufficient to add new functionality. No changes to `AD-PowerAdmin.ps1` are ever needed.
 
 ### How the Interactive Menu Is Built (Enter-MainMenu)
 
-`Enter-MainMenu` (lines 613–758) reads `$global:Menu` at runtime — it does not have a hardcoded list of options:
+`Enter-MainMenu` (lines 613-758) reads `$global:Menu` at runtime -- it does not have a hardcoded list of options:
 
 1. Iterates `$global:Menu.GetEnumerator()` sorted by `Title`.
 2. Assigns sequential numbers (`MenuIndex`) to each entry.
@@ -150,13 +229,13 @@ Special menu inputs: `q` = quit, `h` = show help for a function (calls `Get-Help
 
 ### How the Unattended Job Dispatcher Works (Start-Automation)
 
-`Start-Automation` (lines 524–611) reads `$global:UnattendedJobs` the same way:
+`Start-Automation` (lines 524-611) reads `$global:UnattendedJobs` the same way:
 
 1. Flattens the hashtable into an array of objects.
 2. If `-JobName 'Daily'`: iterates all jobs where `Daily = $true` and calls `Invoke-Expression` on each `Command`.
 3. If `-JobName '<specific key>'`: finds the matching entry, optionally appends `-JobVar1 "<value>"` to the command string, then calls `Invoke-Expression`.
 
-The `$JobVar1` substitution allows parameterized jobs — e.g., passing a username for a password follow-up check without changing the module code.
+The `$JobVar1` substitution allows parameterized jobs -- e.g., passing a username for a password follow-up check without changing the module code.
 
 ### Execution Modes
 
@@ -164,13 +243,13 @@ The `$JobVar1` substitution allows parameterized jobs — e.g., passing a userna
 # Interactive menu (default)
 .\AD-PowerAdmin.ps1
 
-# Unattended — run a specific registered job
+# Unattended -- run a specific registered job
 .\AD-PowerAdmin.ps1 -Unattended -JobName 'krbtgt-RotateKey'
 
-# Unattended — run a job with a parameter
+# Unattended -- run a job with a parameter
 .\AD-PowerAdmin.ps1 -Unattended -JobName 'PwUserFollowup' -JobVar1 'jsmith'
 
-# Unattended — run ALL jobs flagged Daily = $true
+# Unattended -- run ALL jobs flagged Daily = $true
 .\AD-PowerAdmin.ps1 -Unattended -JobName 'Daily'
 ```
 
@@ -182,8 +261,8 @@ Every module consists of exactly two files:
 
 | File | Purpose |
 |---|---|
-| `AD-PowerAdmin_<Name>.psm1` | Implementation — functions + `Initialize-Module` |
-| `AD-PowerAdmin_<Name>.psd1` | Manifest — metadata, exports, channel designation |
+| `AD-PowerAdmin_<Name>.psm1` | Implementation -- functions + `Initialize-Module` |
+| `AD-PowerAdmin_<Name>.psd1` | Manifest -- metadata, exports, channel designation |
 
 The main script discovers and imports **all `.psd1` files** in `Modules/` at startup. No wiring in the main script is needed for new modules.
 
@@ -191,14 +270,27 @@ The main script discovers and imports **all `.psd1` files** in `Modules/` at sta
 
 ```
 Import-Module AD-PowerAdmin_MyModule.psd1
-  └─ PowerShell reads RootModule = 'AD-PowerAdmin_MyModule.psm1'
-       └─ Loads and executes the .psm1 top-level code
-            └─ Initialize-Module is called (bare call at bottom of file)
-                 ├─ Writes to $global:Menu      → appears in interactive menu
-                 └─ Writes to $global:UnattendedJobs → available as scheduled job
+  `-- PowerShell reads RootModule = 'AD-PowerAdmin_MyModule.psm1'
+       `-- Loads and executes the .psm1 top-level code
+            `-- Initialize-Module is called (bare call at bottom of file)
+                 |-- Writes to $global:Menu           -> appears in interactive menu
+                 `-- Writes to $global:UnattendedJobs -> available as scheduled job
 ```
 
 The `.psm1` must call `Initialize-Module` at module scope (outside any function) so it runs automatically on import. This is what connects the module's functions to the main script's menu and job systems.
+
+### Framework Consistency Requirement
+
+All new functions, audits, modules, and automations must conform to the existing project infrastructure:
+
+- **Menu methodology** -- register items in `$global:Menu` using the established key/Title/Label/Command structure.
+- **Sub-menu architecture** -- when a module exposes multiple user actions, use `$global:SubMenus` and `Enter-SubMenu` rather than cluttering the main menu.
+- **Testing patterns** -- test scripts go in `temp/`, follow `test_<topic>.ps1` naming, and use the remote test runner for Windows AD validation.
+- **Configuration handling** -- all tunable values belong in `AD-PowerAdmin_settings.ps1` as `$global:*` variables; modules read but never write them.
+- **Coding conventions** -- `Verb-Noun` PascalCase functions, ASCII-only source files, comment-based help on every exported function, `$global:ReportsPath` for all output.
+- **Module organization** -- one `.psm1`/`.psd1` pair per functional area; no business logic in the main script.
+
+After any architectural change, both `CLAUDE.md` and relevant wiki pages must be reviewed and updated to reflect the new state.
 
 ---
 
@@ -213,14 +305,14 @@ Function Initialize-Module {
     $global:Menu += @{
         'UniqueKey' = @{
             Title    = "Short Title"           # ~20 chars; shown in menu
-            Label    = "Longer description."   # ~150–250 chars; shown below title
+            Label    = "Longer description."   # ~150-250 chars; shown below title
             Module   = "AD-PowerAdmin_MyModule"
             Function = "My-MainFunction"
             Command  = "My-MainFunction"       # Executed via Invoke-Expression
         }
     }
 
-    # Register a submenu (optional — use when the module has multiple user actions).
+    # Register a submenu (use when the module has multiple user actions).
     # ONE main-menu entry points to Enter-SubMenu; all sub-actions go in $global:SubMenus.
     $global:SubMenus += @{
         'MyModuleMenu' = @{
@@ -330,7 +422,7 @@ Function Start-MyDailyJob {
 
 ## Settings File (AD-PowerAdmin_settings.ps1)
 
-All configuration lives here. Modules read these as `$global:*` variables — never write to them from a module.
+All configuration lives here. Modules read these as `$global:*` variables -- never write to them from a module.
 
 Key settings groups:
 
@@ -342,7 +434,7 @@ Key settings groups:
 | Feature flags | `$global:KerberosKRBTGTAudit`, `$global:InactiveComputerAudit`, `$global:InactiveUserAudit`, `$global:WeakPasswordAudit` |
 | Inactive accounts | `$global:InactiveDays`, `$global:InactiveComputersLocations[]`, `$global:InactiveUsersLocations[]` |
 | Password audit | `$global:NtlmHashDataFile`, `$global:WeakPassDictFile`, `$global:PwAuditPwChangeGracePeriod` |
-| Debug | `$global:Debug` (bool) — if true, transcript written to Reports/ |
+| Debug | `$global:Debug` (bool) -- if true, transcript written to Reports/ |
 
 ---
 
@@ -354,7 +446,7 @@ Shared utilities used by all other modules.
 Key exports: `Get-DownloadFile`, `New-ScheduledTask`, `Send-Email`, `Send-EmailTest`, `Get-DateFromCalendar`, `Export-AdPowerAdminData`, `Search-SingleAdObject`, `Show-Menu`
 
 ### AD-PowerAdmin_LogMgr (v1.0, Beta)
-Windows Security Event Log searching — lockout events (4740) and failed logons (4625).
+Windows Security Event Log searching -- lockout events (4740) and failed logons (4625).
 
 Key exports: `Show-ADUserLockouts`, `Get-CurrentLockedoutUsers`, `Show-AdUserFailedLoginEvents`, `Get-FailedLoginEvents`
 
@@ -386,26 +478,48 @@ Key exports: `Get-AdAcl`, `Get-ExtendedAcl`, `Get-AdGuids`, `Search-DcSyncRisk`,
 
 ## How to Create a New Module
 
-1. **Copy the example files:**
-   ```
-   Modules_Examples/AD-PowerAdmin_Example.psm1  →  Modules/AD-PowerAdmin_<Name>.psm1
-   Modules_Examples/AD-PowerAdmin_Example.psd1  →  Modules/AD-PowerAdmin_<Name>.psd1
-   ```
+Building a new module is the standard way to extend AD-PowerAdmin. The framework is designed so that a valid `.psm1`/`.psd1` pair dropped into `Modules/` is all that is needed -- no changes to the main script are required.
 
-2. **Update the `.psd1` manifest:** new GUID (`New-Guid`), correct `RootModule`, list all exported functions in `FunctionsToExport`, set `Channel`.
+### Step 1 -- Copy the example files
 
-3. **Implement the `.psm1`:**
-   - Write `Initialize-Module` to add menu/job entries.
-   - Call `Initialize-Module` at the **bottom of the file** (not inside a function).
-   - Implement all exported functions with comment-based help.
+```
+Modules_Examples/AD-PowerAdmin_Example.psm1  ->  Modules/AD-PowerAdmin_<Name>.psm1
+Modules_Examples/AD-PowerAdmin_Example.psd1  ->  Modules/AD-PowerAdmin_<Name>.psd1
+```
 
-4. **No changes to `AD-PowerAdmin.ps1` are needed** — the module is auto-discovered.
+### Step 2 -- Update the manifest (.psd1)
 
-5. **Test:**
-   ```powershell
-   .\AD-PowerAdmin.ps1              # Verify menu item appears
-   .\AD-PowerAdmin.ps1 -Unattended -JobName 'MyJobKey'  # Verify job runs
-   ```
+- Generate a new GUID with `New-Guid`.
+- Set `RootModule` to the correct `.psm1` filename.
+- List all exported functions in `FunctionsToExport`.
+- Set `Channel` to `Alpha`, `Beta`, or `Production`.
+
+### Step 3 -- Implement the module (.psm1)
+
+- Write `Initialize-Module` to add menu and/or job entries.
+- Call `Initialize-Module` at the **bottom of the file** (not inside a function).
+- Implement all exported functions with comment-based help.
+- Abstract any logic used in more than one place (or likely to be reused) into a dedicated helper function -- see Code Reusability Standards below.
+
+### Step 4 -- Create or update the wiki page
+
+Before the module is considered complete, create a wiki page that covers:
+
+1. What the module does
+2. Why it was built -- the vulnerability, weakness, operational need, or best practice it addresses
+3. Which `Vulnerabilities/` dossier is relevant (if any)
+4. How it integrates with the rest of the framework
+
+### Step 5 -- Test
+
+```powershell
+.\AD-PowerAdmin.ps1                                     # Verify menu item appears
+.\AD-PowerAdmin.ps1 -Unattended -JobName 'MyJobKey'    # Verify job runs
+```
+
+### Step 6 -- Update README.md
+
+Add a bullet to the Features list for every user-visible capability the new module introduces.
 
 ---
 
@@ -429,51 +543,61 @@ Adding a new module will increment the computed version automatically.
 
 ## Key Design Rules
 
-1. **Modules are self-registering.** `Initialize-Module` + `Initialize-AllModules` in main script — no manual wiring.
+1. **Modules are self-registering.** `Initialize-Module` + `Initialize-AllModules` in the main script -- no manual wiring.
+
 2. **`$global:Menu`, `$global:UnattendedJobs`, and `$global:SubMenus` are the integration points.** Everything a module exposes goes through these three hashtables.
+
 3. **`Invoke-Expression` executes commands.** The `Command` string in a menu/job entry is passed directly; it can contain PowerShell expressions.
+
 4. **Settings are read-only from modules.** Modules only read `$global:` settings; they never write to them.
+
 5. **Export every public function.** Missing from `FunctionsToExport` = invisible.
+
 6. **Use `$global:ReportsPath` for output.** Never hardcode paths.
+
 7. **Check `$global:Debug`** for conditional verbose or transcript output.
-8. **Email uses `Send-Email` from Utils module.** Parameters first, global settings as fallback.
-9. **Never use non-ASCII or multi-byte Unicode characters in any `.ps1` or `.psm1` file.** Characters such as `✓`, `✗`, emoji, smart quotes (`"` `"`), or any symbol outside the standard ASCII range (0x00–0x7F) cause encoding-related parse failures in the PowerShell interpreter, especially when scripts are transferred between machines or executed in environments with different default encodings. Use only plain ASCII text — for example, replace `✓` with `[OK]` and `[FAIL]`.
+
+8. **Email uses `Send-Email` from the Utils module.** Parameters first, global settings as fallback.
+
+9. **Never use non-ASCII or multi-byte Unicode characters in any `.ps1` or `.psm1` file.** Characters such as Unicode checkmarks, cross marks, emoji, smart quotes, or any symbol outside the standard ASCII range (0x00-0x7F) cause encoding-related parse failures in the PowerShell interpreter, especially when scripts are transferred between machines or executed in environments with different default encodings. Use only plain ASCII text -- replace Unicode symbols with ASCII equivalents such as `[OK]` and `[FAIL]`.
+
 10. **Use submenus to keep the main menu uncluttered.** When a module has multiple user-facing actions, register ONE entry in `$global:Menu` with `Command = "Enter-SubMenu 'MyKey'"` and register all sub-actions in `$global:SubMenus['MyKey'].Items`. `Enter-SubMenu` in `AD-PowerAdmin.ps1` handles display and dispatch with consistent styling.
+
+11. **Every feature must have a justification.** No audit, test, automation, or feature is added without a clear link to a known vulnerability, weakness, operational best practice, or security requirement. That justification is documented in the wiki.
+
+12. **After any architectural change, update both `CLAUDE.md` and the relevant wiki pages.** These documents are the authoritative reference for contributors and must stay current.
+
+---
+
+## Code Reusability Standards
+
+AD-PowerAdmin is a framework shared across modules. Redundant code fragments the codebase, increases maintenance burden, and creates inconsistency in behavior.
+
+**Rules:**
+
+- If logic is used in more than one place, abstract it into a dedicated function.
+- If logic is likely to be reused by another module or future feature, abstract it.
+- Shared utility functions belong in `AD-PowerAdmin_Utils.psm1` unless they are tightly scoped to a single module's domain.
+- Helper functions within a module that are not part of the public interface should be kept private (omit from `FunctionsToExport`).
+
+The test for whether to abstract: if you copy-paste a block from one function to another, stop and write a function instead.
+
 ---
 
 ## .gitignore Highlights
 
 These are intentionally excluded:
-- `Reports/` — runtime output, not source
-- `Modules/AD-PowerAdmin_HIBP_PwndPwMgr.*` — Alpha, not ready
-- `Modules/AD-PowerAdmin_Azure.*` — Alpha, not ready
-- `AD-PowerAdmin_Debug.log` — debug transcript
-- `junk.ps1` — scratch file
+
+- `Reports/` -- runtime output, not source
+- `Modules/AD-PowerAdmin_HIBP_PwndPwMgr.*` -- Alpha, not ready
+- `Modules/AD-PowerAdmin_Azure.*` -- Alpha, not ready
+- `AD-PowerAdmin_Debug.log` -- debug transcript
+- `junk.ps1` -- scratch file
+- `temp/` -- throwaway and diagnostic scripts
 
 ---
 
 ## Development Procedures
-
-### README.md Must Be Updated With Every Change
-
-Whenever a function, feature, or module is added, modified, or removed, `README.md` must be updated to reflect the change. This is not optional.
-
-**What to update:**
-
-- **New feature or function:** add a bullet to the Features list describing what it does in plain terms (one line, user-facing language — not implementation details).
-- **Modified feature:** update the existing description if the behavior, scope, or name has changed.
-- **Removed feature:** remove or strike through the corresponding bullet.
-- **New module:** if the module introduces a user-visible capability, it earns a Features entry.
-
-The README is user-facing documentation. Write feature descriptions as a user would read them — what the tool does for them, not how the code works.
-
-**README structure to maintain:**
-
-```
-# AD-PowerAdmin Overview   ← project summary, do not change
-# Features                 ← bulleted list, update here for every change
-# Installation             ← do not change unless install process changes
-```
 
 ### Test Scripts Must Live in a Dedicated Temp Directory
 
@@ -483,22 +607,21 @@ When test or scratch scripts need to be created during development or debugging,
 
 ```
 AD-PowerAdmin/
-└── temp/          ← create this directory if it does not exist; place all test scripts here
-    └── test_*.ps1
+`-- temp/          <- create this directory if it does not exist; place all test scripts here
+    `-- test_*.ps1
 ```
 
 **Rules:**
 - Always use `temp/` as the directory for any throwaway, diagnostic, or exploratory script.
 - Name test files descriptively: `test_<what_is_being_tested>.ps1`.
-- The `temp/` directory is already covered by `.gitignore` patterns for scratch files and should not be committed.
+- The `temp/` directory is covered by `.gitignore` and must not be committed.
 - Never leave test scripts in the project root, `Modules/`, or `Reports/`.
 
 ---
 
 ## Remote Windows Test Runner
 
-This project includes a narrow wrapper for executing approved PowerShell scripts
-on the Windows AD test server over PowerShell remoting.
+This project includes a narrow wrapper for executing approved PowerShell scripts on the Windows AD test server over PowerShell remoting.
 
 **Test runner location:** `.claude/tools/run-win-test.ps1`
 **Allow-list:** `.claude/tools/allowed-tests.json`
@@ -509,36 +632,26 @@ on the Windows AD test server over PowerShell remoting.
 pwsh -File ./.claude/tools/run-win-test.ps1 -TestName <TestName>
 ```
 
-Valid test names are the keys in `.claude/tools/allowed-tests.json`. Check that
-file first.
+Valid test names are the keys in `.claude/tools/allowed-tests.json`. Check that file first.
 
 ### Mandatory rules
 
-1. **Always use the wrapper.** Never run `Enter-PSSession`, `New-PSSession`,
-   `Invoke-Command`, or any ad-hoc remoting command directly. The wrapper is the
-   only approved execution path.
+1. **Always use the wrapper.** Never run `Enter-PSSession`, `New-PSSession`, `Invoke-Command`, or any ad-hoc remoting command directly. The wrapper is the only approved execution path.
 
-2. **Never use `pwsh -Command`.** The only approved invocation form is
-   `pwsh -File ./.claude/tools/run-win-test.ps1 -TestName <name>`.
-   `pwsh -Command` and `pwsh -c` are explicitly denied by `settings.local.json`.
+2. **Never use `pwsh -Command`.** The only approved invocation form is `pwsh -File ./.claude/tools/run-win-test.ps1 -TestName <name>`. `pwsh -Command` and `pwsh -c` are explicitly denied by `settings.local.json`.
 
-3. **Never touch the Windows password.** Do not request, print, store, or log it.
-   The password lives exclusively in the SecretManagement vault under the secret
-   name `WinTestPassword`. The wrapper retrieves it silently.
+3. **Never touch the Windows password.** Do not request, print, store, or log it. The password lives exclusively in the SecretManagement vault under the secret name `WinTestPassword`. The wrapper retrieves it silently.
 
-4. **Only use approved test names.** Names must exist as keys in
-   `.claude/tools/allowed-tests.json`. Never construct or guess a remote path.
+4. **Only use approved test names.** Names must exist as keys in `.claude/tools/allowed-tests.json`. Never construct or guess a remote path.
 
-5. **If a needed test is missing from the allow-list**, say so and ask the user
-   to add an entry before proceeding:
+5. **If a needed test is missing from the allow-list**, say so and ask the user to add an entry before proceeding:
    ```json
    "My-TestName": "C:\\ApprovedTests\\My-TestName.ps1"
    ```
 
 ### After a test runs
 
-Summarize results: test name, target server, exit code (0 = success), any errors,
-and recommended next steps.
+Summarize results: test name, target server, exit code (0 = success), any errors, and recommended next steps.
 
 ### One-time setup (run by the user, not Claude)
 
@@ -548,5 +661,4 @@ Register-SecretVault -Name LocalStore -ModuleName Microsoft.PowerShell.SecretSto
 Set-Secret -Name WinTestPassword -Secret (Read-Host -AsSecureString 'Windows password')
 ```
 
-Also edit the configuration block near the top of `run-win-test.ps1` to set the
-correct `$TargetServer` and `$ServiceAccount` values before first use.
+Also edit the configuration block near the top of `run-win-test.ps1` to set the correct `$TargetServer` and `$ServiceAccount` values before first use.

@@ -1,7 +1,7 @@
 #Requires -RunAsAdministrator
 #Requires -Version 5
 #Requires -Modules ActiveDirectory
-# NOTE: Script will automatically escalate to PowerShell 7 if available
+# NOTE: If launched under PowerShell 5, modules that require PowerShell 7 are automatically excluded.
 
 <#
 .SYNOPSIS
