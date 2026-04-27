@@ -32,6 +32,7 @@ Here is a quick list of features
 - SYSVOL permission auditing: audit SYSVOL file and folder ACLs for write or modify rights granted to broad or non-administrative principals such as Everyone, Domain Users, or Authenticated Users.
 - GPO delegation risk assessment: identify Group Policy Objects with edit rights assigned to non-Tier-0 identities, stale accounts, or broad security groups.
 - GPO external script path analysis: identify GPO script references pointing to UNC paths outside SYSVOL and NETLOGON that may reside on servers with weaker access controls.
+- Honeytoken account deployment and monitoring: provision a hardened, realistic-looking Active Directory account that should never authenticate; any authentication attempt generates a high-confidence alert for password spray, brute-force, credential stuffing, or attacker reconnaissance activity. Includes hourly automated log monitoring across all domain controllers, structured email alerts with recommended response actions, interactive log review, safety validation, and a reversible removal workflow.
 
 [See the wiki for more details of each feature](https://github.com/Brets0150/AD-PowerAdmin/wiki)
 

@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
 	Only variables and configurations for AD-PowerAdmin.
@@ -300,5 +300,25 @@
     "Organization Management",
     "Exchange Recipient Administrators"
 )
+
+##############################################################################################
+# Honeytoken Account Settings
+# -------------------[Optional]------------------- #
+# Enable the hourly unattended honeytoken authentication event monitor.
+# Set to $true automatically when the honeypot install wizard completes.
+# Set to $false to disable monitoring without removing the account.
+[bool]$global:HoneypotAudit = $true
+
+# The sAMAccountName of the configured honeytoken user account.
+# Set automatically by the honeypot install wizard. Do not edit manually.
+[string]$global:HoneypotUsername = ''
+
+# The name of the deny-logon security group that blocks the honeytoken account from all logon types.
+# Updated by the honeypot install wizard if a custom name is chosen during provisioning.
+[string]$global:HoneypotDenyGroup = ''
+
+# The DistinguishedName of the OU where the honeytoken user account was created.
+# Set automatically by the honeypot install wizard. Do not edit manually.
+[string]$global:HoneypotOU = ''
 
 ##############################################################################################
