@@ -403,7 +403,8 @@ Function Get-HibpPasswordHashesFiles {
             Write-Host "Downloading HIBP NTLM hash range files (directory mode)..." -ForegroundColor Yellow
             Write-Host "Output directory: $TargetDir" -ForegroundColor Yellow
 
-            & "$HibpExecutable" $global:NtlmHashDataDir --single false -n
+            # Limit the number of threads to 4. Having more then that can trigger CloudFlare to block our connections. 
+            & "$HibpExecutable" $global:NtlmHashDataDir --single false -n -p 4
 
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "The HIBP downloader exited with code $LASTEXITCODE." -ForegroundColor Red
