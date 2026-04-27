@@ -56,6 +56,7 @@
 [bool]$global:InactiveComputerAudit    = $true
 [bool]$global:InactiveUserAudit        = $true
 [bool]$global:WeakPasswordAudit        = $true
+[bool]$global:LockoutDailyReport       = $true
 
 ##############################################################################################
 # -------------------[Mandatory]------------------- #
@@ -272,5 +273,32 @@
 # The SMTP server password.
 # EXAMPLE: [string]$global:SMTPServerPassword = 'P@ssw0rd'
 [string]$global:SMTPPassword = ''
+
+##############################################################################################
+# SYSVOL Security Audit Settings
+# -------------------[Optional]------------------- #
+# Enable the daily unattended GPP cpassword check. When enabled, AD-PowerAdmin will scan
+# SYSVOL Group Policy Preference XML files daily for cpassword values and email the
+# administrator immediately if any are found. Set to $false to disable this daily check.
+# The manual GPP cpassword scan and full SYSVOL audit are always available from the menu.
+[bool]$global:SysvolGppCpasswordAudit = $false
+
+##############################################################################################
+# Exchange AD Security Audit Settings
+# -------------------[Optional]------------------- #
+# Enable the daily unattended Exchange AD security audit and email report.
+# Set to $true only in environments where Exchange is installed.
+# Default is $false because the Exchange module is a no-op in environments without Exchange.
+[bool]$global:ExchangeADSecurityAudit = $false
+
+# -------------------[Optional]------------------- #
+# Exchange security groups checked for dangerous domain-root ACEs.
+# Modify only if your environment uses non-standard Exchange group names.
+[array]$global:ExchangeGroupsToAudit = @(
+    "Exchange Windows Permissions",
+    "Exchange Trusted Subsystem",
+    "Organization Management",
+    "Exchange Recipient Administrators"
+)
 
 ##############################################################################################

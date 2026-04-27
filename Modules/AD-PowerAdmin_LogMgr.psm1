@@ -54,6 +54,18 @@ Function Initialize-Module {
             Command  = "Enter-SubMenu 'LogMgrMenu'"
         }
     }
+
+    # Register the daily unattended lockout summary job.
+    $global:UnattendedJobs += @{
+        'LockoutDailySummary' = @{
+            Title    = 'Daily Lockout Summary Report'
+            Label    = 'Email a 24-hour account lockout summary report to the administrator.'
+            Module   = 'AD-PowerAdmin_LogMgr'
+            Function = 'Start-DailyLockoutSummaryReport'
+            Daily    = $true
+            Command  = 'Start-DailyLockoutSummaryReport'
+        }
+    }
 }
 
 Initialize-Module
@@ -919,4 +931,88 @@ Function Trace-AdUserLockout {
         # Output the failed login attempts Array of HashTables.
         return $FailedLoginEventsFiltered
     }
+}
+
+Function Start-DailyLockoutSummaryReport {
+    <#
+    .SYNOPSIS
+        Start-DailyLockoutSummaryReport
+
+    .DESCRIPTION
+        Collects account lockout events (ID 4740) from the PDC Emulator for the past 24 hours,
+        builds a per-account summary, exports full event details to CSV, and emails the report
+        to the administrator address defined in settings. Controlled by $global:LockoutDailyReport.
+
+    .EXAMPLE
+        Start-DailyLockoutSummaryReport
+
+    .NOTES
+        Designed for unattended/scheduled execution. No interactive prompts.
+    #>
+
+    if ($global:LockoutDailyReport -ne $true) { return }
+
+    [string]$PDCEmulator   = (Get-ADDomain).PDCEmulator
+    [datetime]$StartTime   = (Get-Date).AddHours(-24)
+    [datetime]$EndTime     = Get-Date
+    [string]$ReportDate    = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+
+    [PSCustomObject]$LockoutEvents = Search-WindowsEventLogs -LogName 'Security' -ID 4740 `
+        -StartTime $StartTime -EndTime $EndTime -ComputerName $PDCEmulator
+
+    [string]$Header  = "AD-PowerAdmin: 24-Hour Account Lockout Summary Report`r`n"
+    $Header         += "Report Generated : $ReportDate`r`n"
+    $Header         += "Period Covered   : $($StartTime.ToString('yyyy-MM-dd HH:mm:ss')) to $($EndTime.ToString('yyyy-MM-dd HH:mm:ss'))`r`n"
+    $Header         += "DC Searched      : $PDCEmulator`r`n`r`n"
+
+    if (-not $LockoutEvents) {
+        [string]$EmailBody  = $Header
+        $EmailBody         += "No account lockout events (ID 4740) were found in the past 24 hours.`r`n"
+        Send-Email -ToEmail $global:ADAdminEmail `
+                   -FromEmail $global:ReportsEmailFrom `
+                   -Subject "ADPowerAdmin: Daily Lockout Report - No Lockouts Detected" `
+                   -Body $EmailBody
+        return
+    }
+
+    # Summarize lockout events by username, sorted by frequency descending.
+    $LockoutSummary = $LockoutEvents | Group-Object -Property TargetUsername | ForEach-Object {
+        $Sorted = $_.Group | Sort-Object TimeCreated
+        [PSCustomObject]@{
+            Username     = $_.Name
+            LockoutCount = $_.Count
+            FirstSeen    = ($Sorted | Select-Object -First 1).TimeCreated
+            LastSeen     = ($Sorted | Select-Object -Last 1).TimeCreated
+            CallerSystem = ($Sorted | Select-Object -Last 1).TargetDomainName
+        }
+    } | Sort-Object -Property LockoutCount -Descending
+
+    [int]$TotalLockouts = $LockoutEvents.Count
+    [int]$UniqueUsers   = $LockoutSummary.Count
+    [string]$Divider    = ('-' * 70) + "`r`n"
+
+    [string]$EmailBody  = $Header
+    $EmailBody         += "Total Lockout Events : $TotalLockouts`r`n"
+    $EmailBody         += "Unique Accounts      : $UniqueUsers`r`n`r`n"
+    $EmailBody         += "Account Lockout Breakdown:`r`n"
+    $EmailBody         += $Divider
+
+    $LockoutSummary | ForEach-Object {
+        $EmailBody += "Username     : $($_.Username)`r`n"
+        $EmailBody += "Lockout Count: $($_.LockoutCount)`r`n"
+        $EmailBody += "First Seen   : $($_.FirstSeen)`r`n"
+        $EmailBody += "Last Seen    : $($_.LastSeen)`r`n"
+        $EmailBody += "Caller System: $($_.CallerSystem)`r`n"
+        $EmailBody += $Divider
+    }
+
+    $EmailBody += "`r`nFull event details exported to: $global:ReportsPath`r`n"
+
+    Export-AdPowerAdminData -Data $LockoutEvents `
+        -ReportName "DailyLockoutReport_$(Get-Date -Format 'yyyyMMdd')" -Force
+
+    Send-Email -ToEmail $global:ADAdminEmail `
+               -FromEmail $global:ReportsEmailFrom `
+               -Subject "ADPowerAdmin: Daily Lockout Report - $TotalLockouts Events, $UniqueUsers Accounts" `
+               -Body $EmailBody
 }

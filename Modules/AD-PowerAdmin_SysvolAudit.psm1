@@ -1,0 +1,992 @@
+Function Initialize-Module {
+    <#
+    .SYNOPSIS
+    Registers SYSVOL audit menu entries and unattended jobs with the AD-PowerAdmin framework.
+
+    .DESCRIPTION
+    Initialize-Module is called automatically when the module is imported. It adds the
+    SYSVOL Security Audit submenu and two unattended job entries to the global framework
+    hashtables. Stale entries are removed first to allow safe module reloading.
+
+    .EXAMPLE
+    Initialize-Module
+
+    .NOTES
+    Must be called at module scope (outside any function) so it runs on import.
+    #>
+
+    $global:Menu.Remove('SysvolAudit')
+    if ($global:SubMenus.ContainsKey('SysvolAuditMenu')) { $global:SubMenus.Remove('SysvolAuditMenu') }
+    $global:UnattendedJobs.Remove('SysvolGppCpasswordCheck')
+    $global:UnattendedJobs.Remove('SysvolFullAudit')
+
+    $global:SubMenus += @{
+        'SysvolAuditMenu' = @{
+            Title = "SYSVOL Security Audit"
+            Items = @{
+                'SysvolInventory' = @{
+                    Title   = "Script Inventory"
+                    Label   = "Enumerate all script and configuration files stored in SYSVOL and NETLOGON. Produces a timestamped CSV inventory report."
+                    Command = "Get-SysvolScriptInventory"
+                }
+                'SysvolSecrets' = @{
+                    Title   = "Secret Scan"
+                    Label   = "Scan SYSVOL and NETLOGON scripts for embedded credentials, plaintext passwords, API tokens, and dangerous execution patterns. Classifies findings as Critical or High risk."
+                    Command = "Search-SysvolSecrets"
+                }
+                'SysvolGppCpassword' = @{
+                    Title   = "GPP cpassword Scan"
+                    Label   = "Search Group Policy Preference XML files in SYSVOL for cpassword values. All findings are Critical. The AES-256 decryption key was publicly disclosed in MS14-025."
+                    Command = "Search-SysvolGppCpassword"
+                }
+                'SysvolPermissions' = @{
+                    Title   = "Permission Scan"
+                    Label   = "Audit SYSVOL file and folder ACLs for write or modify rights granted to broad principals such as Everyone, Domain Users, Authenticated Users, or Domain Computers."
+                    Command = "Search-SysvolPermissions"
+                }
+                'GpoDelegation' = @{
+                    Title   = "GPO Delegation Audit"
+                    Label   = "Identify GPOs with edit rights assigned to non-Tier-0 identities, stale accounts, or broad security groups. Requires the GroupPolicy module (RSAT-GPMC)."
+                    Command = "Search-GpoDelegation"
+                }
+                'GpoExternalPaths' = @{
+                    Title   = "External Script Paths"
+                    Label   = "Export GPO definitions and identify script references pointing to UNC paths outside SYSVOL and NETLOGON. External paths may reside on servers with weaker access controls."
+                    Command = "Search-GpoExternalScriptPaths"
+                }
+                'SysvolFullAudit' = @{
+                    Title   = "Full SYSVOL Audit"
+                    Label   = "Run all six SYSVOL audit checks in sequence: inventory, secret scan, GPP cpassword, permissions, GPO delegation, and external paths. Emails Critical findings to the administrator."
+                    Command = "Start-SysvolAudit"
+                }
+            }
+        }
+    }
+
+    $global:Menu += @{
+        'SysvolAudit' = @{
+            Title    = "SYSVOL Security Audit"
+            Label    = "Audit SYSVOL and NETLOGON for credential exposure, weak file permissions, excessive GPO delegation, and external script path abuse."
+            Module   = "AD-PowerAdmin_SysvolAudit"
+            Function = "Enter-SubMenu"
+            Command  = "Enter-SubMenu 'SysvolAuditMenu'"
+        }
+    }
+
+    $global:UnattendedJobs += @{
+        'SysvolGppCpasswordCheck' = @{
+            Title    = "SYSVOL GPP cpassword Check"
+            Label    = "Daily scheduled check for GPP cpassword values in SYSVOL. Emails the administrator immediately if any are found. Controlled by the SysvolGppCpasswordAudit setting."
+            Module   = "AD-PowerAdmin_SysvolAudit"
+            Function = "Start-SysvolGppCpasswordCheck"
+            Daily    = $true
+            Command  = "Start-SysvolGppCpasswordCheck"
+        }
+        'SysvolFullAudit' = @{
+            Title    = "SYSVOL Full Audit"
+            Label    = "Run all SYSVOL security audit checks on demand. Invoke with: .\AD-PowerAdmin.ps1 -Unattended -JobName SysvolFullAudit"
+            Module   = "AD-PowerAdmin_SysvolAudit"
+            Function = "Start-SysvolAudit"
+            Daily    = $false
+            Command  = "Start-SysvolAudit"
+        }
+    }
+}
+
+Initialize-Module
+
+# --- Private Helpers ---
+
+Function Get-SysvolRoots {
+    # Returns the SYSVOL and NETLOGON UNC roots for the current domain.
+    $Domain = $env:USERDNSDOMAIN
+    return @(
+        "\\$Domain\SYSVOL\$Domain",
+        "\\$Domain\NETLOGON"
+    )
+}
+
+Function Get-SysvolScriptFiles {
+    # Returns PSCustomObjects (FullName, Name, Extension, Length, LastWriteTime, Location)
+    # for all script and configuration files under SYSVOL and NETLOGON.
+    $Extensions = @('.ps1', '.bat', '.cmd', '.vbs', '.js', '.wsf', '.hta', '.xml', '.ini', '.config', '.txt')
+    $Files = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($Root in (Get-SysvolRoots)) {
+        $Location = if ($Root -match 'NETLOGON') { 'NETLOGON' } else { 'SYSVOL' }
+        Get-ChildItem -Path $Root -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $Extensions -contains $_.Extension.ToLower() } |
+            ForEach-Object {
+                $Files.Add([PSCustomObject]@{
+                    FullName      = $_.FullName
+                    Name          = $_.Name
+                    Extension     = $_.Extension
+                    Length        = $_.Length
+                    LastWriteTime = $_.LastWriteTime
+                    Location      = $Location
+                })
+            }
+    }
+    return $Files
+}
+
+# --- Exported Functions ---
+
+Function Get-SysvolScriptInventory {
+    <#
+    .SYNOPSIS
+    Enumerates all script and configuration files stored in SYSVOL and NETLOGON.
+
+    .DESCRIPTION
+    === SYSVOL Script Inventory ===
+        Walks the SYSVOL and NETLOGON shares and produces a timestamped CSV report of
+        every script and configuration file found. File types inventoried:
+        .ps1 .bat .cmd .vbs .js .wsf .hta .xml .ini .config .txt
+
+        The inventory provides a baseline of what is present. Review files with old
+        LastWriteTime values that may be orphaned, and any unexpected file types.
+
+    .EXAMPLE
+    Get-SysvolScriptInventory
+
+    .NOTES
+    #>
+    [CmdletBinding()]
+    Param([switch]$Force)
+
+    $Files = Get-SysvolScriptFiles
+    if ($Files.Count -eq 0) {
+        Write-Host "[INFO] No script or configuration files found in SYSVOL or NETLOGON."
+        return $Files
+    }
+
+    $Results = $Files | ForEach-Object {
+        [PSCustomObject]@{
+            FullName      = $_.FullName
+            FileName      = $_.Name
+            Extension     = $_.Extension
+            SizeBytes     = $_.Length
+            LastWriteTime = $_.LastWriteTime
+            Location      = $_.Location
+        }
+    }
+
+    Write-Host "[INFO] Found $($Results.Count) files in SYSVOL and NETLOGON."
+    Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-Inventory" -Force:$Force
+    Show-AuditReport -Data $Results -Title "SYSVOL Script Inventory" `
+        -HeaderFields @('FullName','Extension','SizeBytes','LastWriteTime','Location') `
+        -DetailFields @() -RiskField ''
+    return $Results
+}
+
+Function Search-SysvolSecrets {
+    <#
+    .SYNOPSIS
+    Scans SYSVOL and NETLOGON scripts for embedded credentials and dangerous execution patterns.
+
+    .DESCRIPTION
+    === SYSVOL Secret Scan ===
+        Searches all script and configuration files in SYSVOL and NETLOGON for patterns
+        associated with embedded credentials (passwords, tokens, API keys) and dangerous
+        execution behavior (ExecutionPolicy Bypass, IEX, WebClient downloads, encoded commands).
+
+        Critical patterns are matched using regex. High patterns are matched as literal strings.
+        Findings are classified as Critical or High risk based on the matched pattern.
+
+        Review the LineContent column for each finding. Pattern matches may include comment
+        lines, documentation strings, or variable names that do not represent real credentials.
+        All matches are exported for human triage -- no automatic filtering is applied.
+
+    .EXAMPLE
+    Search-SysvolSecrets
+
+    .NOTES
+    #>
+    [CmdletBinding()]
+    Param([switch]$Force)
+
+    $CriticalPatterns = @(
+        'cpassword\s*=\s*"[^"]+',
+        '(?<!c)password\s*=',
+        'passwd\s*=',
+        'pwd\s*=',
+        '/user:',
+        '-Password\s',
+        'New-Object PSCredential',
+        '-P\s'
+    )
+
+    $HighPatterns = @(
+        'credential',
+        'creds',
+        'secret',
+        'token',
+        'apikey',
+        'api_key',
+        'client_secret',
+        'net use',
+        'runas',
+        'sqlcmd',
+        'IEX',
+        'Invoke-Expression',
+        'DownloadString',
+        'WebClient',
+        'Invoke-WebRequest',
+        'ExecutionPolicy Bypass',
+        '-EncodedCommand'
+    )
+
+    $Files = Get-SysvolScriptFiles
+    $Results = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    foreach ($File in $Files) {
+        foreach ($Pattern in $CriticalPatterns) {
+            Select-String -Path $File.FullName -Pattern $Pattern -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    $Results.Add([PSCustomObject]@{
+                        FilePath       = $_.Path
+                        LineNumber     = $_.LineNumber
+                        LineContent    = $_.Line.Trim()
+                        MatchedPattern = $Pattern
+                        RiskLevel      = 'Critical'
+                        Location       = $File.Location
+                    })
+                }
+        }
+        foreach ($Pattern in $HighPatterns) {
+            Select-String -Path $File.FullName -Pattern $Pattern -SimpleMatch -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    $Results.Add([PSCustomObject]@{
+                        FilePath       = $_.Path
+                        LineNumber     = $_.LineNumber
+                        LineContent    = $_.Line.Trim()
+                        MatchedPattern = $Pattern
+                        RiskLevel      = 'High'
+                        Location       = $File.Location
+                    })
+                }
+        }
+    }
+
+    if ($Results.Count -eq 0) {
+        Write-Host "[INFO] No credential or dangerous patterns found in SYSVOL or NETLOGON scripts."
+        return $Results
+    }
+
+    $CritCount = @($Results | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    $HighCount  = @($Results | Where-Object { $_.RiskLevel -eq 'High'     }).Count
+    Write-Host "[INFO] Secret scan complete. Critical: $CritCount  High: $HighCount"
+    Write-Host "[NOTE] Review LineContent for each finding -- matches may include comments or documentation."
+    Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-Secrets" -Force:$Force
+    Show-AuditReport -Data $Results -Title "SYSVOL Secret Scan" `
+        -HeaderFields @('FilePath','Location','LineNumber','MatchedPattern','RiskLevel') `
+        -DetailFields @('LineContent')
+    return $Results
+}
+
+Function Search-SysvolGppCpassword {
+    <#
+    .SYNOPSIS
+    Searches Group Policy Preference XML files in SYSVOL for cpassword values.
+
+    .DESCRIPTION
+    === GPP cpassword Scan ===
+        Targets the six known GPP file types that may contain cpassword attributes:
+        Groups.xml, Services.xml, ScheduledTasks.xml, DataSources.xml, Drives.xml, Printers.xml
+
+        Findings are classified based on whether the cpassword attribute contains a value:
+          Critical -- cpassword attribute is present with a non-empty encrypted value.
+                      The AES-256 decryption key was publicly disclosed (MS14-025).
+                      Treat as plaintext credential until password is rotated and file removed.
+          Info     -- cpassword attribute is present but the value is empty.
+                      Not currently exploitable, but the file should be reviewed and cleaned up.
+
+        A ValuePresent field in the report indicates whether an actual password was found.
+
+        Common locations:
+        SYSVOL\<domain>\Policies\{GUID}\Machine\Preferences\
+        SYSVOL\<domain>\Policies\{GUID}\User\Preferences\
+
+    .EXAMPLE
+    Search-SysvolGppCpassword
+
+    .NOTES
+    #>
+    [CmdletBinding()]
+    Param([switch]$Force)
+
+    $Domain     = $env:USERDNSDOMAIN
+    $SysvolRoot = "\\$Domain\SYSVOL\$Domain"
+    $GppFiles   = @('Groups.xml', 'Services.xml', 'ScheduledTasks.xml', 'DataSources.xml', 'Drives.xml', 'Printers.xml')
+    $Results    = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    $Found = Get-ChildItem -Path $SysvolRoot -Recurse -Include $GppFiles -File -ErrorAction SilentlyContinue
+    if (-not $Found) {
+        Write-Host "[INFO] No GPP XML files found in SYSVOL."
+        return $Results
+    }
+
+    foreach ($File in $Found) {
+        Select-String -Path $File.FullName -Pattern 'cpassword' -SimpleMatch -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $CpassValue   = [regex]::Match($_.Line, 'cpassword="([^"]*)"').Groups[1].Value
+                $ValuePresent = ($CpassValue.Length -gt 0)
+                $RiskLevel    = if ($ValuePresent) { 'Critical' } else { 'Info' }
+                $Results.Add([PSCustomObject]@{
+                    FilePath     = $_.Path
+                    GppFileType  = $File.Name
+                    LineNumber   = $_.LineNumber
+                    LineContent  = $_.Line.Trim()
+                    ValuePresent = $ValuePresent
+                    RiskLevel    = $RiskLevel
+                })
+            }
+    }
+
+    if ($Results.Count -eq 0) {
+        Write-Host "[INFO] No cpassword attributes found in SYSVOL GPP files."
+        return $Results
+    }
+
+    $CritCount = @($Results | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    $InfoCount  = @($Results | Where-Object { $_.RiskLevel -eq 'Info'     }).Count
+    if ($CritCount -gt 0) {
+        Write-Host "[CRITICAL] $CritCount cpassword finding(s) with non-empty values. Treat as plaintext credential exposure and remediate immediately."
+    }
+    if ($InfoCount -gt 0) {
+        Write-Host "[INFO] $InfoCount cpassword attribute(s) found with empty values -- not currently exploitable but should be cleaned up."
+    }
+    Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-GppCpassword" -Force:$Force
+    Show-AuditReport -Data $Results -Title "GPP cpassword Scan" `
+        -HeaderFields @('FilePath','GppFileType','LineNumber','ValuePresent') `
+        -DetailFields @('LineContent')
+    return $Results
+}
+
+Function Search-SysvolPermissions {
+    <#
+    .SYNOPSIS
+    Audits SYSVOL file and folder permissions for excessive write access granted to broad principals.
+
+    .DESCRIPTION
+    === SYSVOL Permission Scan ===
+        Checks all files and folders under SYSVOL for write, modify, or FullControl rights
+        granted to broad or non-administrative principals:
+          Everyone, Authenticated Users, Domain Users, Domain Computers, BUILTIN\Users
+
+        Risk classification:
+          Critical -- script files (.ps1 .bat .cmd .vbs .js .wsf .hta) writable by Everyone,
+                      Authenticated Users, or Domain Users
+          High     -- other write-access on script files, or any folder writable by risky principals
+          Medium   -- write access on non-script files (.xml .ini .config .txt)
+
+    .EXAMPLE
+    Search-SysvolPermissions
+
+    .NOTES
+    #>
+    [CmdletBinding()]
+    Param([switch]$Force)
+
+    $Domain     = $env:USERDNSDOMAIN
+    $SysvolRoot = "\\$Domain\SYSVOL\$Domain"
+
+    $ScriptExts       = @('.ps1', '.bat', '.cmd', '.vbs', '.js', '.wsf', '.hta')
+    $RiskyPrincipals  = @('Everyone', 'Authenticated Users', 'Domain Users', 'Domain Computers', 'BUILTIN\Users')
+    $BroadPrincipals  = @('Everyone', 'Authenticated Users', 'Domain Users')
+    $RiskyRightsRegex = 'Write|Modify|FullControl|CreateFiles|CreateDirectories|ChangePermissions|TakeOwnership'
+
+    $Results = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    $AllObjects  = @()
+    $AllObjects += Get-ChildItem -Path $SysvolRoot -Recurse -File      -ErrorAction SilentlyContinue
+    $AllObjects += Get-ChildItem -Path $SysvolRoot -Recurse -Directory -ErrorAction SilentlyContinue
+
+    foreach ($Obj in $AllObjects) {
+        $ObjectType = if ($Obj.PSIsContainer) { 'Folder' } else { 'File' }
+        $Ext        = if (-not $Obj.PSIsContainer) { $Obj.Extension.ToLower() } else { '' }
+
+        try {
+            $Acl = Get-Acl -Path $Obj.FullName -ErrorAction Stop
+        } catch {
+            continue
+        }
+
+        foreach ($Ace in $Acl.Access) {
+            $Identity = $Ace.IdentityReference.Value
+            $Rights   = $Ace.FileSystemRights.ToString()
+
+            $IsRisky = $false
+            foreach ($Principal in $RiskyPrincipals) {
+                if ($Identity -like "*$Principal*") { $IsRisky = $true; break }
+            }
+            if (-not $IsRisky) { continue }
+            if ($Rights -notmatch $RiskyRightsRegex) { continue }
+
+            $IsBroad = $false
+            foreach ($Principal in $BroadPrincipals) {
+                if ($Identity -like "*$Principal*") { $IsBroad = $true; break }
+            }
+
+            $RiskLevel = if ($ObjectType -eq 'Folder') {
+                'High'
+            } elseif ($ScriptExts -contains $Ext) {
+                if ($IsBroad) { 'Critical' } else { 'High' }
+            } else {
+                'Medium'
+            }
+
+            $Results.Add([PSCustomObject]@{
+                ObjectPath        = $Obj.FullName
+                ObjectType        = $ObjectType
+                Identity          = $Identity
+                FileSystemRights  = $Rights
+                AccessControlType = $Ace.AccessControlType.ToString()
+                RiskLevel         = $RiskLevel
+            })
+        }
+    }
+
+    if ($Results.Count -eq 0) {
+        Write-Host "[INFO] No excessive SYSVOL permissions found for risky principals."
+        return $Results
+    }
+
+    $CritCount = @($Results | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    $HighCount  = @($Results | Where-Object { $_.RiskLevel -eq 'High'     }).Count
+    $MedCount   = @($Results | Where-Object { $_.RiskLevel -eq 'Medium'   }).Count
+    Write-Host "[INFO] Permission scan complete. Critical: $CritCount  High: $HighCount  Medium: $MedCount"
+    Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-Permissions" -Force:$Force
+    Show-AuditReport -Data $Results -Title "SYSVOL Permission Scan" `
+        -HeaderFields @('ObjectPath','ObjectType','Identity','FileSystemRights','AccessControlType')
+    return $Results
+}
+
+Function Search-GpoDelegation {
+    <#
+    .SYNOPSIS
+    Identifies GPOs with edit rights assigned to non-Tier-0 identities.
+
+    .DESCRIPTION
+    === GPO Delegation Audit ===
+        Enumerates all GPOs and checks for GpoEdit, GpoEditDeleteModifySecurity, or GpoCustom
+        rights assigned to identities outside the expected Tier-0 administrative set.
+
+        Requires the GroupPolicy PowerShell module (RSAT-GPMC). If the module is unavailable,
+        a warning is printed and the function returns without results.
+
+        GPOs linked to the Domain Controllers OU or domain root are classified Critical.
+        All other non-Tier-0 edit rights are classified High.
+
+        Known safe trustees excluded from results:
+        Domain Admins, Enterprise Admins, SYSTEM, NT AUTHORITY\SYSTEM,
+        CREATOR OWNER, Group Policy Creator Owners, Administrator
+
+    .EXAMPLE
+    Search-GpoDelegation
+
+    .NOTES
+    #>
+    [CmdletBinding()]
+    Param([switch]$Force)
+
+    if (-not (Get-Module -ListAvailable -Name GroupPolicy)) {
+        Write-Warning "[WARN] GroupPolicy module not available. Install RSAT-GPMC or run from a Domain Controller."
+        return
+    }
+    Import-Module GroupPolicy -ErrorAction Stop
+
+    $RiskyPerms  = @('GpoEdit', 'GpoEditDeleteModifySecurity', 'GpoCustom')
+    $SafeTrustees = @(
+        'Domain Admins',
+        'Enterprise Admins',
+        'SYSTEM',
+        'NT AUTHORITY\SYSTEM',
+        'CREATOR OWNER',
+        'Group Policy Creator Owners',
+        'Administrator'
+    )
+
+    $Results   = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $Tier0Guids = @()
+
+    try {
+        $DomainDn    = (Get-ADDomain -ErrorAction Stop).DistinguishedName
+        $DCOuDn      = "OU=Domain Controllers,$DomainDn"
+        $DomainLinks = (Get-GPInheritance -Target $DomainDn -ErrorAction Stop).GpoLinks |
+                       ForEach-Object { $_.GpoId.ToString().ToLower() -replace '[{}]', '' }
+        $DcOuLinks   = (Get-GPInheritance -Target $DCOuDn   -ErrorAction Stop).GpoLinks |
+                       ForEach-Object { $_.GpoId.ToString().ToLower() -replace '[{}]', '' }
+        $Tier0Guids  = ($DomainLinks + $DcOuLinks) | Select-Object -Unique
+    } catch {
+        # Tier-0 link enrichment unavailable; LinkedToTier0 will be reported as Unknown.
+    }
+
+    foreach ($Gpo in (Get-GPO -All -ErrorAction SilentlyContinue)) {
+        $Permissions = Get-GPPermission -Guid $Gpo.Id -All -ErrorAction SilentlyContinue
+        if (-not $Permissions) { continue }
+
+        foreach ($Perm in $Permissions) {
+            if ($RiskyPerms -notcontains $Perm.Permission.ToString()) { continue }
+
+            $TrusteeName = $Perm.Trustee.Name
+            $IsSafe = $false
+            foreach ($Safe in $SafeTrustees) {
+                if ($TrusteeName -like "*$Safe*") { $IsSafe = $true; break }
+            }
+            if ($IsSafe) { continue }
+
+            $GpoGuidStr    = $Gpo.Id.ToString().ToLower() -replace '[{}]', ''
+            $LinkedToTier0 = if ($Tier0Guids.Count -gt 0) {
+                if ($Tier0Guids -contains $GpoGuidStr) { 'Yes' } else { 'No' }
+            } else { 'Unknown' }
+            $RiskLevel = if ($LinkedToTier0 -eq 'Yes') { 'Critical' } else { 'High' }
+
+            $Results.Add([PSCustomObject]@{
+                GPOName       = $Gpo.DisplayName
+                GPOGuid       = $Gpo.Id.ToString()
+                GPOStatus     = $Gpo.GpoStatus.ToString()
+                Trustee       = $TrusteeName
+                TrusteeType   = $Perm.Trustee.SidType.ToString()
+                TrusteeSid    = $Perm.Trustee.Sid.ToString()
+                Permission    = $Perm.Permission.ToString()
+                LinkedToTier0 = $LinkedToTier0
+                RiskLevel     = $RiskLevel
+            })
+        }
+    }
+
+    if ($Results.Count -eq 0) {
+        Write-Host "[INFO] No excessive GPO delegation found."
+        return $Results
+    }
+
+    $CritCount = @($Results | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    $HighCount  = @($Results | Where-Object { $_.RiskLevel -eq 'High'     }).Count
+    Write-Host "[INFO] GPO delegation audit complete. Critical: $CritCount  High: $HighCount"
+    Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-GpoDelegation" -Force:$Force
+    Show-AuditReport -Data $Results -Title "GPO Delegation Audit" `
+        -HeaderFields @('GPOName','GPOStatus','Trustee','TrusteeType','Permission','LinkedToTier0')
+    return $Results
+}
+
+Function Get-AceExplanation {
+    # Private helper: builds contextual security explanation fields for a single ACE finding.
+    Param(
+        [string]$TargetPath,
+        [string]$ObjectType,
+        [bool]$IsExec,
+        [string]$Identity,
+        [string]$Rights
+    )
+
+    $FileName = [System.IO.Path]::GetFileName($TargetPath)
+    $Ext      = [System.IO.Path]::GetExtension($TargetPath).ToLower()
+
+    $WhoDesc = switch -Wildcard ($Identity) {
+        '*Everyone*'            { 'any user, including unauthenticated guests where guest access is permitted, or any authenticated domain user in standard configurations' }
+        '*Authenticated Users*' { 'any user with a valid domain credential, including standard users, service accounts, and contractor or temporary accounts' }
+        '*Domain Users*'        { 'every standard domain user account across the entire enterprise' }
+        '*Domain Computers*'    { 'every domain-joined machine account, exploitable via code execution on any compromised domain host' }
+        '*BUILTIN\Users*'       { 'all local user accounts and domain users who have authenticated to this system' }
+        default                 { "any member of the group or account '$Identity'" }
+    }
+
+    $AccessRequired = switch -Wildcard ($Identity) {
+        '*Everyone*'            { 'No authentication required in guest-enabled environments; any domain credential in standard AD configurations' }
+        '*Authenticated Users*' { 'Any valid domain credential -- standard domain user, service account, or contractor account' }
+        '*Domain Users*'        { 'Any standard domain user account (default group for all AD users)' }
+        '*Domain Computers*'    { 'Code execution on any domain-joined computer (e.g., via phishing, local privilege escalation, or lateral movement)' }
+        '*BUILTIN\Users*'       { 'Any user with interactive or remote logon access to this specific host' }
+        default                 { "Membership in '$Identity', or compromise of any account with that membership" }
+    }
+
+    $RightsDesc = if ($Rights -match 'FullControl') {
+        'full control (read, write, modify, delete, change permissions, and take ownership)'
+    } elseif ($Rights -match 'Modify') {
+        'modify rights (read, write, execute, and delete the file or its contents)'
+    } elseif ($Rights -match 'ChangePermissions|TakeOwnership') {
+        'permission management rights (ability to alter the ACL, including granting themselves or others full control)'
+    } elseif ($Rights -match 'Write|CreateFiles|CreateDirectories') {
+        'write rights (create or overwrite files within the target location)'
+    } else {
+        "elevated file system rights ($Rights)"
+    }
+
+    if ($ObjectType -eq 'File') {
+        $FileType = switch ($Ext) {
+            '.exe' { 'executable binary' }
+            '.msi' { 'installer package' }
+            '.dll' { 'dynamic-link library' }
+            '.com' { 'executable' }
+            '.ps1' { 'PowerShell script' }
+            '.bat' { 'batch script' }
+            '.cmd' { 'command script' }
+            '.vbs' { 'VBScript' }
+            '.js'  { 'JScript file' }
+            '.wsf' { 'Windows Script File' }
+            '.hta' { 'HTML Application (runs with elevated script trust)' }
+            default { 'configuration file' }
+        }
+        if ($IsExec) {
+            $SecurityImpact = "$Identity holds $RightsDesc on the $FileType '$FileName'. Because this file is referenced by a GPO, it executes automatically on target machines during startup or logon. An attacker who can write to this file can replace it with a malicious payload. Startup scripts run as SYSTEM; logon scripts run as the authenticated user. Either context allows privilege escalation, credential harvesting, or persistent backdoor installation across every machine affected by the GPO."
+            $ExploitScenario = "Step 1 -- Attacker obtains any credential satisfying '$Identity' (requires $AccessRequired). Step 2 -- Attacker overwrites '$FileName' at '$TargetPath' with a malicious $FileType. Step 3 -- On next machine reboot or user logon, the GPO executes the attacker's payload in a privileged context (SYSTEM for startup, user context for logon). Step 4 -- Attacker achieves code execution without ever touching the GPO itself, bypassing GPMC delegation controls entirely."
+        } else {
+            $SecurityImpact = "$Identity holds $RightsDesc on '$FileName'. If this configuration file controls script paths, software sources, download URLs, or security policy values consumed by a GPO or startup process, an attacker can tamper with it to redirect execution to attacker-controlled resources, inject malicious commands, or disable protective controls."
+            $ExploitScenario = "Step 1 -- Attacker obtains any credential satisfying '$Identity' (requires $AccessRequired). Step 2 -- Attacker modifies '$FileName' to redirect a path, inject a command, or alter a value the GPO or consuming process trusts. Step 3 -- The modified configuration is processed during the next GPO application cycle or startup, causing unintended behavior in the attacker's favor."
+        }
+    } else {
+        $SecurityImpact = "$Identity holds $RightsDesc on the directory '$TargetPath'. Write access to a parent directory allows an attacker to replace any file within it, add new malicious files alongside legitimate ones, or delete existing scripts to cause denial of service. If any file in this directory is executed by a GPO startup script, logon script, scheduled task, or software deployment policy, the attacker can introduce code that runs in a privileged execution context."
+        $ExploitScenario = "Step 1 -- Attacker obtains any credential satisfying '$Identity' (requires $AccessRequired). Step 2 -- Attacker replaces a legitimate script, binary, or installer in '$TargetPath' with a malicious version (or creates a new file with an expected name). Step 3 -- The GPO or startup process executes the attacker's file at the next application cycle. Because write access to the directory is sufficient to replace its contents, an attacker does not need modify rights on the individual files -- directory write access alone is the exploitable condition."
+    }
+
+    $LeastPrivDev = if ($ObjectType -eq 'File') {
+        "GPO-referenced scripts and binaries must be writable only by Domain Admins or designated GPO administrators. The set of principals who can modify a GPO-executed file should be a strict subset of those who can edit the GPO itself. Granting $RightsDesc to '$Identity' creates an indirect privilege escalation path: an attacker can achieve GPO-level code execution without holding any GPO edit rights in GPMC, bypassing all GPO delegation controls and violating the principle of least privilege at the GPO execution boundary."
+    } else {
+        "Directories containing GPO-referenced content must restrict write access to Domain Admins and designated software distribution administrators. Granting $RightsDesc to '$Identity' means the effective security boundary around GPO-executed code is the directory ACL, not the GPMC permission model. Any principal with write access to this directory has de-facto ability to influence what code the GPO runs, regardless of whether they appear in any GPO delegation report."
+    }
+
+    return @{
+        SecurityImpact    = $SecurityImpact
+        ExploitScenario   = $ExploitScenario
+        AccessRequired    = $AccessRequired
+        LeastPrivDev      = $LeastPrivDev
+    }
+}
+
+Function Search-GpoExternalScriptPaths {
+    <#
+    .SYNOPSIS
+    Identifies GPO script references pointing to UNC paths outside SYSVOL and NETLOGON.
+
+    .DESCRIPTION
+    === External Script Path Review ===
+        Exports all GPO definitions as XML to a temporary directory under ReportsPath,
+        then searches the XML for UNC path references that do not resolve to SYSVOL or
+        NETLOGON. External paths may reside on servers with weaker or less-monitored
+        access controls, or reference decommissioned servers whose DNS names are reusable.
+
+        Risk classification:
+          High   -- UNC path server does not match the domain FQDN (truly external server).
+                    These paths reference infrastructure outside the domain and warrant prompt review.
+          Medium -- UNC path server matches the domain FQDN (e.g., a domain DFS namespace).
+                    These paths are on the domain but outside SYSVOL and NETLOGON.
+
+        A RiskLevel field is included in every output row.
+
+        The temporary XML directory is always removed after parsing (try/finally).
+
+        Requires the GroupPolicy PowerShell module (RSAT-GPMC).
+
+    .EXAMPLE
+    Search-GpoExternalScriptPaths
+
+    .NOTES
+    #>
+    [CmdletBinding()]
+    Param([switch]$Force)
+
+    if (-not (Get-Module -ListAvailable -Name GroupPolicy)) {
+        Write-Warning "[WARN] GroupPolicy module not available. Install RSAT-GPMC or run from a Domain Controller."
+        return
+    }
+    Import-Module GroupPolicy -ErrorAction Stop
+
+    $Domain  = $env:USERDNSDOMAIN.ToLower()
+    $TempDir = "$global:ReportsPath\GpoXmlTemp_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    $Results = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    try {
+        New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
+
+        $GpoMap = @{}
+        foreach ($Gpo in (Get-GPO -All -ErrorAction SilentlyContinue)) {
+            $SafeName = $Gpo.DisplayName -replace '[\\/:*?"<>|]', '_'
+            $OutFile  = "$TempDir\$($Gpo.Id)_$SafeName.xml"
+            Get-GPOReport -Guid $Gpo.Id -ReportType Xml -Path $OutFile -ErrorAction SilentlyContinue
+            $GpoMap[$OutFile] = @{ Name = $Gpo.DisplayName; Guid = $Gpo.Id.ToString() }
+        }
+
+        foreach ($XmlFile in (Get-ChildItem -Path $TempDir -Filter '*.xml' -File -ErrorAction SilentlyContinue)) {
+            $GpoInfo = $GpoMap[$XmlFile.FullName]
+            $GpoName = if ($GpoInfo) { $GpoInfo.Name } else { $XmlFile.BaseName }
+            $GpoGuid = if ($GpoInfo) { $GpoInfo.Guid } else { '' }
+
+            Select-String -Path $XmlFile.FullName -Pattern '\\\\' -ErrorAction SilentlyContinue |
+                Where-Object { $_.Line -notmatch '\\SYSVOL\\' -and $_.Line -notmatch '\\NETLOGON' } |
+                ForEach-Object {
+                    $Line = $_.Line.Trim()
+
+                    $ScriptType = 'Unknown'
+                    if     ($Line -match '\.ps1') { $ScriptType = 'PowerShell' }
+                    elseif ($Line -match '\.bat|\.cmd') { $ScriptType = 'Batch' }
+                    elseif ($Line -match '\.vbs') { $ScriptType = 'VBScript' }
+                    elseif ($Line -match '\.exe') { $ScriptType = 'Executable' }
+                    elseif ($Line -match '\.msi') { $ScriptType = 'Installer' }
+
+                    $UncMatch        = [regex]::Match($Line, '\\\\[^\s<>"]+')
+                    $ReferencedShare = if ($UncMatch.Success) { $UncMatch.Value.TrimEnd('\') } else { '' }
+
+                    $ServerPart = [regex]::Match($ReferencedShare, '\\\\([^\\]+)').Groups[1].Value.ToLower()
+                    $RiskLevel  = if ($ServerPart -and ($ServerPart -ne $Domain)) { 'High' } else { 'Medium' }
+
+                    $Results.Add([PSCustomObject]@{
+                        GPOName         = $GpoName
+                        GPOGuid         = $GpoGuid
+                        ScriptType      = $ScriptType
+                        IsExternal      = $true
+                        ReferencedShare = $ReferencedShare
+                        RiskLevel       = $RiskLevel
+                        LineContent     = $Line
+                    })
+                }
+        }
+    } finally {
+        if (Test-Path $TempDir) {
+            Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $PermResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    if ($Results.Count -eq 0) {
+        Write-Host "[INFO] No external GPO script references found."
+        Export-AdPowerAdminData -Data $Results     -ReportName "SysvolAudit-ExternalPaths"           -Force:$Force
+        Export-AdPowerAdminData -Data $PermResults -ReportName "SysvolAudit-ExternalPathPermissions" -Force:$Force
+        Show-AuditReport -Data $Results     -Title "External GPO Script Paths" `
+            -HeaderFields @('GPOName','ScriptType','ReferencedShare') `
+            -DetailFields @('LineContent')
+        Show-AuditReport -Data $PermResults -Title "External Path Permissions" `
+            -HeaderFields @('ExternalPath','ObjectType','Identity','FileSystemRights','AccessControlType','Note') `
+            -DetailFields @('SecurityImpact','ExploitScenario','AccessRequired','LeastPrivDev')
+        return @{ PathRefs = $Results; PermFindings = $PermResults }
+    }
+
+    $HighCount   = @($Results | Where-Object { $_.RiskLevel -eq 'High'   }).Count
+    $MediumCount = @($Results | Where-Object { $_.RiskLevel -eq 'Medium' }).Count
+    Write-Host "[INFO] External script path review complete. High: $HighCount (external server)  Medium: $MediumCount (domain share)"
+    Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-ExternalPaths" -Force:$Force
+
+    # Evaluate ACLs on every discovered external path.
+    $ExecExts      = @('.ps1', '.bat', '.cmd', '.vbs', '.js', '.wsf', '.hta', '.exe', '.msi', '.dll', '.com')
+    $RiskyPrincipals = @('Everyone', 'Authenticated Users', 'Domain Users', 'Domain Computers', 'BUILTIN\Users')
+    $RiskyRightsRx   = 'Write|Modify|FullControl|CreateFiles|CreateDirectories|ChangePermissions|TakeOwnership'
+
+    $CheckedPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($Ref in $Results) {
+        $TargetPath = $Ref.ReferencedShare
+        if ([string]::IsNullOrWhiteSpace($TargetPath)) { continue }
+        if (-not $CheckedPaths.Add($TargetPath))       { continue }
+
+        if (-not (Test-Path -LiteralPath $TargetPath -ErrorAction SilentlyContinue)) {
+            $PermResults.Add([PSCustomObject]@{
+                ExternalPath      = $TargetPath
+                ObjectType        = 'Unknown'
+                Identity          = 'N/A'
+                FileSystemRights  = 'N/A'
+                AccessControlType = 'N/A'
+                RiskLevel         = 'Info'
+                SecurityImpact    = 'Path could not be reached. If the server is decommissioned, its DNS name may be re-registerable by an attacker (DNS tombstoning). Verify the referenced server is still active and the share is intentional.'
+                ExploitScenario   = 'If the DNS name of the referenced server is no longer registered, an attacker can register a machine with that hostname, host a malicious share at the expected path, and serve a malicious script to any GPO execution cycle that requests it.'
+                AccessRequired    = 'Ability to register a hostname matching the original server (requires a domain computer account or DNS record creation rights).'
+                LeastPrivDev      = 'GPO script paths should always resolve to active, monitored infrastructure. References to offline or decommissioned servers are an orphaned attack surface.'
+                Note              = 'Path not reachable from this host'
+            })
+            continue
+        }
+
+        $IsFile     = (Get-Item -LiteralPath $TargetPath -ErrorAction SilentlyContinue) -is [System.IO.FileInfo]
+        $ObjectType = if ($IsFile) { 'File' } else { 'Directory' }
+        $Ext        = if ($IsFile) { [System.IO.Path]::GetExtension($TargetPath).ToLower() } else { '' }
+        $IsExec     = $ExecExts -contains $Ext
+
+        try {
+            $Acl = Get-Acl -LiteralPath $TargetPath -ErrorAction Stop
+        } catch {
+            continue
+        }
+
+        foreach ($Ace in $Acl.Access) {
+            if ($Ace.AccessControlType -ne 'Allow') { continue }
+            $Identity = $Ace.IdentityReference.Value
+            $Rights   = $Ace.FileSystemRights.ToString()
+
+            $PrincipalMatch = $false
+            foreach ($P in $RiskyPrincipals) {
+                if ($Identity -like "*$P*") { $PrincipalMatch = $true; break }
+            }
+            if (-not $PrincipalMatch)          { continue }
+            if ($Rights -notmatch $RiskyRightsRx) { continue }
+
+            if ($IsExec -and $IsFile -and ($Identity -like '*Everyone*' -or $Identity -like '*Authenticated Users*' -or $Identity -like '*Domain Users*')) {
+                $RiskLevel = 'Critical'
+            } elseif ($IsExec -or (-not $IsFile)) {
+                $RiskLevel = 'High'
+            } else {
+                $RiskLevel = 'Medium'
+            }
+
+            $Expl = Get-AceExplanation -TargetPath $TargetPath -ObjectType $ObjectType -IsExec $IsExec -Identity $Identity -Rights $Rights
+
+            $PermResults.Add([PSCustomObject]@{
+                ExternalPath      = $TargetPath
+                ObjectType        = $ObjectType
+                Identity          = $Identity
+                FileSystemRights  = $Rights
+                AccessControlType = $Ace.AccessControlType.ToString()
+                RiskLevel         = $RiskLevel
+                SecurityImpact    = $Expl.SecurityImpact
+                ExploitScenario   = $Expl.ExploitScenario
+                AccessRequired    = $Expl.AccessRequired
+                LeastPrivDev      = $Expl.LeastPrivDev
+                Note              = ''
+            })
+        }
+    }
+
+    if ($PermResults.Count -gt 0) {
+        $PermCritCount = @($PermResults | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+        $PermHighCount = @($PermResults | Where-Object { $_.RiskLevel -eq 'High'     }).Count
+        Write-Host "[INFO] External path permission check complete. Critical: $PermCritCount  High: $PermHighCount"
+    } else {
+        Write-Host "[INFO] External path permission check complete. No risky ACEs found."
+    }
+    Export-AdPowerAdminData -Data $PermResults -ReportName "SysvolAudit-ExternalPathPermissions" -Force:$Force
+
+    Show-AuditReport -Data $Results -Title "External GPO Script Paths" `
+        -HeaderFields @('GPOName','ScriptType','ReferencedShare') `
+        -DetailFields @('LineContent')
+    Show-AuditReport -Data $PermResults -Title "External Path Permissions" `
+        -HeaderFields @('ExternalPath','ObjectType','Identity','FileSystemRights','AccessControlType','Note') `
+        -DetailFields @('SecurityImpact','ExploitScenario','AccessRequired','LeastPrivDev')
+
+    return @{ PathRefs = $Results; PermFindings = $PermResults }
+}
+
+Function Start-SysvolAudit {
+    <#
+    .SYNOPSIS
+    Runs all six SYSVOL audit checks in sequence and prints a findings summary.
+
+    .DESCRIPTION
+    === Full SYSVOL Audit ===
+        Runs all six SYSVOL audit checks in sequence:
+          1. Script Inventory
+          2. Secret Scan
+          3. GPP cpassword Scan
+          4. Permission Scan
+          5. GPO Delegation Audit
+          6. External Script Path Review
+
+        Each check exports its own timestamped CSV to the Reports directory.
+        After all checks complete, a summary table is printed to the console.
+        If any Critical findings are present, an alert email is sent to the administrator.
+
+    .EXAMPLE
+    Start-SysvolAudit
+
+    .NOTES
+    #>
+
+    Write-Host ""
+    Write-Host "Starting Full SYSVOL Security Audit..."
+    Write-Host "========================================"
+
+    $InventoryResults = Get-SysvolScriptInventory      -Force
+    $SecretsResults   = Search-SysvolSecrets           -Force
+    $GppResults       = Search-SysvolGppCpassword      -Force
+    $SysvolPermResults = Search-SysvolPermissions      -Force
+    $GpoDelResults    = Search-GpoDelegation           -Force
+    $ExtOutput        = Search-GpoExternalScriptPaths  -Force
+    $ExtPathResults   = if ($ExtOutput -is [hashtable]) { $ExtOutput.PathRefs    } else { @() }
+    $ExtPermResults   = if ($ExtOutput -is [hashtable]) { $ExtOutput.PermFindings } else { @() }
+
+    $InventoryCount  = @($InventoryResults).Count
+    $SecretCrit      = @($SecretsResults      | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    $SecretHigh      = @($SecretsResults      | Where-Object { $_.RiskLevel -eq 'High'     }).Count
+    $GppCrit         = @($GppResults          | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    $GppInfo         = @($GppResults          | Where-Object { $_.RiskLevel -eq 'Info'     }).Count
+    $SysvolPermCrit  = @($SysvolPermResults   | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    $SysvolPermHigh  = @($SysvolPermResults   | Where-Object { $_.RiskLevel -eq 'High'     }).Count
+    $GpoDelCrit      = @($GpoDelResults       | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    $GpoDelHigh      = @($GpoDelResults       | Where-Object { $_.RiskLevel -eq 'High'     }).Count
+    $ExtHigh         = @($ExtPathResults      | Where-Object { $_.RiskLevel -eq 'High'     }).Count
+    $ExtMedium       = @($ExtPathResults      | Where-Object { $_.RiskLevel -eq 'Medium'   }).Count
+    $ExtPermCrit     = @($ExtPermResults      | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    $ExtPermHigh     = @($ExtPermResults      | Where-Object { $_.RiskLevel -eq 'High'     }).Count
+
+    $TotalCritical = $SecretCrit + $GppCrit + $SysvolPermCrit + $GpoDelCrit + $ExtPermCrit
+    $TotalHigh     = $SecretHigh + $SysvolPermHigh + $GpoDelHigh + $ExtHigh + $ExtPermHigh
+
+    Write-Host ""
+    Write-Host "[SYSVOL Audit Summary]"
+    Write-Host "-------------------------------------------------------"
+    Write-Host ("Script Inventory:        {0} files found"                          -f $InventoryCount)
+    Write-Host ("Secret Scan:             {0} Critical, {1} High"                  -f $SecretCrit, $SecretHigh)
+    Write-Host ("GPP cpassword:           {0} Critical, {1} Info (empty)"          -f $GppCrit, $GppInfo)
+    Write-Host ("Permission Scan:         {0} Critical, {1} High"                  -f $SysvolPermCrit, $SysvolPermHigh)
+    Write-Host ("GPO Delegation:          {0} Critical, {1} High"                  -f $GpoDelCrit, $GpoDelHigh)
+    Write-Host ("External Script Paths:   {0} High, {1} Medium"                    -f $ExtHigh, $ExtMedium)
+    Write-Host ("Ext. Path Permissions:   {0} Critical, {1} High"                  -f $ExtPermCrit, $ExtPermHigh)
+    Write-Host "-------------------------------------------------------"
+    Write-Host ("Total Critical Findings: {0}"                                      -f $TotalCritical)
+    Write-Host ("Total High Findings:     {0}"                                      -f $TotalHigh)
+    Write-Host ""
+
+    if (($TotalCritical -gt 0 -or $TotalHigh -gt 0) -and $global:ADAdminEmail) {
+        $Body  = "AD-PowerAdmin SYSVOL Security Audit detected $TotalCritical Critical and $TotalHigh High finding(s).`r`n`r`n"
+        $Body += "Script Inventory:        $InventoryCount files`r`n"
+        $Body += "Secret Scan:             $SecretCrit Critical, $SecretHigh High`r`n"
+        $Body += "GPP cpassword:           $GppCrit Critical, $GppInfo Info (empty)`r`n"
+        $Body += "Permission Scan:         $SysvolPermCrit Critical, $SysvolPermHigh High`r`n"
+        $Body += "GPO Delegation:          $GpoDelCrit Critical, $GpoDelHigh High`r`n"
+        $Body += "External Script Paths:   $ExtHigh High (external server), $ExtMedium Medium (domain share)`r`n"
+        $Body += "Ext. Path Permissions:   $ExtPermCrit Critical, $ExtPermHigh High`r`n`r`n"
+        $Body += "Review the CSV reports in the Reports directory for full details."
+
+        Send-Email -ToEmail   $global:ADAdminEmail `
+                   -FromEmail $global:FromEmail `
+                   -Subject   "AD-PowerAdmin: SYSVOL Audit - $TotalCritical Critical, $TotalHigh High Finding(s)" `
+                   -Body      $Body
+    }
+}
+
+Function Start-SysvolGppCpasswordCheck {
+    <#
+    .SYNOPSIS
+    Daily scheduled check for GPP cpassword values in SYSVOL.
+
+    .DESCRIPTION
+    === SYSVOL GPP cpassword Daily Check ===
+        Lightweight daily scan targeting only GPP XML files for cpassword values.
+        Respects the SysvolGppCpasswordAudit setting -- returns silently if set to $false.
+        If any cpassword values are found, an immediate alert email is sent to the
+        administrator. No action is taken if the scan produces no findings.
+
+    .EXAMPLE
+    Start-SysvolGppCpasswordCheck
+
+    .NOTES
+    #>
+
+    if (-not $global:SysvolGppCpasswordAudit) { return }
+
+    $Results     = Search-SysvolGppCpassword -Force
+    $CritResults = @($Results | Where-Object { $_.RiskLevel -eq 'Critical' })
+    if ($CritResults.Count -eq 0) { return }
+
+    if ($global:ADAdminEmail) {
+        $Body  = "[CRITICAL] AD-PowerAdmin detected $($CritResults.Count) GPP cpassword value(s) with non-empty values in SYSVOL.`r`n`r`n"
+        $Body += "The AES-256 decryption key for cpassword was publicly disclosed (MS14-025).`r`n"
+        $Body += "These credentials must be treated as exposed until rotated and the GPP files removed.`r`n`r`n"
+        $Body += "Affected files:`r`n"
+        foreach ($Finding in $CritResults) {
+            $Body += "  $($Finding.FilePath) (line $($Finding.LineNumber))`r`n"
+        }
+        $Body += "`r`nReview the CSV report in the Reports directory for full details."
+
+        Send-Email -ToEmail   $global:ADAdminEmail `
+                   -FromEmail $global:FromEmail `
+                   -Subject   "[CRITICAL] GPP cpassword Found in SYSVOL - Immediate Action Required" `
+                   -Body      $Body
+    }
+}

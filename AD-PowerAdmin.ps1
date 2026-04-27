@@ -265,6 +265,16 @@ function Stop-AllTranscripts {
     }
 }
 
+function Stop-ADPowerAdmin {
+    <#
+    .SYNOPSIS
+    Cleanly terminates the entire AD-PowerAdmin application from any menu depth.
+    #>
+    Write-Host "Exiting AD-PowerAdmin..." -ForegroundColor Yellow
+    Stop-AllTranscripts
+    exit 0
+}
+
 function Get-IncompatibleModules {
     <#
     .SYNOPSIS
@@ -616,6 +626,7 @@ function Enter-MainMenu {
     Write-Host "=================================================================================="
     Write-Host "h. Help"
     Write-Host "q. Quit"
+    Write-Host "qq. Quit Application"
     Write-Host "=================================================================================="
     Write-Host ""
 
@@ -647,6 +658,11 @@ function Enter-MainMenu {
     if ($MenuChoice -eq "q") {
         Write-Host "Exiting..." -ForegroundColor Yellow
         return
+    }
+
+    # If the $MenuChoice is "qq" then terminate the entire application immediately.
+    if ($MenuChoice -eq "qq") {
+        Stop-ADPowerAdmin
     }
 
     # If the $MenuChoise is "h" ask the user to input a number from the menu. The selected number will be stored in the $MenuChoice variable, then get that functions .DISCRIPTION and output it to the screen.
@@ -757,12 +773,14 @@ function Enter-SubMenu {
         Write-Host ""
         Write-Host "=================================================================================="
         Write-Host "q. Back to Main Menu"
+        Write-Host "qq. Quit Application"
         Write-Host "=================================================================================="
         Write-Host ""
 
         [string]$Choice = Read-Host "Input the option # you want to run"
 
         if ($Choice -eq 'q' -or $Choice -eq 'Q') { return }
+        if ($Choice -eq 'qq' -or $Choice -eq 'QQ') { Stop-ADPowerAdmin }
 
         [Int32]$OutNum = 0
         if ([Int32]::TryParse($Choice, [ref]$OutNum)) {

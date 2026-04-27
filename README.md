@@ -24,6 +24,14 @@ Here is a quick list of features
 - Machine Account Quota audit: checks ms-DS-MachineAccountQuota, finds computer accounts created by non-admin users via ms-DS-CreatorSID, and flags computers with Resource-Based Constrained Delegation configured (msDS-AllowedToActOnBehalfOfOtherIdentity).
 - Machine Account Quota remediation: sets ms-DS-MachineAccountQuota to 0 to eliminate the attack surface for non-admin computer account creation.
 - Event log analysis: search for account lockout events (4740), view currently locked-out users with an unlock option, and search for failed logon events (4625).
+- Daily account lockout summary report emailed to the administrator, covering all lockout events from the past 24 hours with a per-account breakdown and a full CSV export.
+- Exchange AD permission escalation audit: detects dangerous permissions (WriteDACL, GenericAll, WriteOwner) held by Exchange security groups on the domain root, audits Exchange group membership for unexpected principals, checks who can control Exchange Windows Permissions, correlates with DCSync rights, and provides guided removal of dangerous ACEs.
+- SYSVOL and NETLOGON script inventory: enumerate all scripts, logon/startup scripts, and configuration files stored in the domain's SYSVOL and NETLOGON shares.
+- SYSVOL credential and secret scanning: scan SYSVOL and NETLOGON scripts for embedded credentials, plaintext passwords, API tokens, and dangerous execution patterns such as ExecutionPolicy Bypass, encoded commands, and unauthenticated downloads.
+- GPP cpassword detection: identify legacy Group Policy Preferences XML files in SYSVOL containing cpassword values whose AES-256 encryption key was publicly disclosed (MS14-025).
+- SYSVOL permission auditing: audit SYSVOL file and folder ACLs for write or modify rights granted to broad or non-administrative principals such as Everyone, Domain Users, or Authenticated Users.
+- GPO delegation risk assessment: identify Group Policy Objects with edit rights assigned to non-Tier-0 identities, stale accounts, or broad security groups.
+- GPO external script path analysis: identify GPO script references pointing to UNC paths outside SYSVOL and NETLOGON that may reside on servers with weaker access controls.
 
 [See the wiki for more details of each feature](https://github.com/Brets0150/AD-PowerAdmin/wiki)
 

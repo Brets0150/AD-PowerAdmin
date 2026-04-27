@@ -58,6 +58,38 @@ Everything beyond the high-level summary belongs in the wiki. The wiki has two d
 
 The wiki is the authoritative source for "why does this exist and how does it work."
 
+### CHANGELOG.md -- Version History and Change Record
+
+`CHANGELOG.md` is the authoritative record of every meaningful change to the project. It exists to give contributors and operators a clear, chronological account of what changed, why it changed, and what effect it had.
+
+**CHANGELOG.md must be updated for every code change** -- including new features, new functions, modifications to existing behavior, bug fixes, refactors, and architectural changes. This is mandatory alongside wiki and README updates; it is not optional.
+
+Each entry must include:
+
+- **What changed** -- the function, module, or system component that was affected, and a precise description of the addition, modification, fix, or removal.
+- **Why it changed** -- the purpose of the change: the threat it addresses, the bug it resolves, the operational need it fulfills, or the improvement it makes.
+- **Impact** -- what effect the change has on behavior, security posture, or compatibility.
+
+**Entry format by change type:**
+
+```
+### [Module or Component Name]
+
+**Added:**
+- `Function-Name` -- what it does and why it was introduced.
+
+**Changed:**
+- `Function-Name` -- what changed and what problem it solves.
+
+**Fixed:**
+- `Function-Name` -- what was broken and how it was corrected.
+
+**Removed:**
+- `Function-Name` -- what was removed and why.
+```
+
+A code change without a CHANGELOG entry is an incomplete change.
+
 ---
 
 ## Feature Justification Policy
@@ -71,16 +103,26 @@ Every audit, test, automation, and feature in AD-PowerAdmin must be grounded in 
 
 **This is not optional.** AD-PowerAdmin exists to address real threats. A feature that cannot be traced to one of the above has no place in the project.
 
-### Wiki Requirement for Every Change
+### Documentation Requirements for Every Change
 
-When adding or changing any audit, test, automation, or feature, a corresponding wiki page must be created or updated. The page must answer:
+When adding or changing any audit, test, automation, or feature, all three of the following documentation updates are mandatory. A code change is not complete until all three are done.
 
-1. **What was built or changed** -- a clear description of the functionality.
-2. **Why it was built** -- the threat, weakness, operational need, or best practice that motivated it.
-3. **Which vulnerability, weakness, operational need, or best practice it addresses** -- link to the relevant `Vulnerabilities/` dossier if applicable.
-4. **How it integrates with the broader AD-PowerAdmin framework** -- which module it lives in, how it appears in the menu or scheduler, and any dependencies on other modules.
+**1. Update CHANGELOG.md**
 
-A code change without a corresponding wiki update is an incomplete change.
+Add an entry describing what changed, why it changed, and what its impact is. See the CHANGELOG.md section in the Documentation Model above for the required format and entry types (Added / Changed / Fixed / Removed).
+
+**2. Create or update the wiki page**
+
+The wiki page must answer:
+
+- **What was built or changed** -- a clear description of the functionality.
+- **Why it was built** -- the threat, weakness, operational need, or best practice that motivated it.
+- **Which vulnerability, weakness, operational need, or best practice it addresses** -- link to the relevant `Vulnerabilities/` dossier if applicable.
+- **How it integrates with the broader AD-PowerAdmin framework** -- which module it lives in, how it appears in the menu or scheduler, and any dependencies on other modules.
+
+**3. Update README.md** (if the change introduces or removes a user-visible AD capability)
+
+Add, update, or remove the corresponding bullet in the Features list following the README rules defined in the Documentation Model above.
 
 ---
 
@@ -91,6 +133,7 @@ AD-PowerAdmin/
 |-- AD-PowerAdmin.ps1              # Main entry point (menu, module loader, scheduler)
 |-- AD-PowerAdmin_settings.ps1     # All global configuration variables
 |-- README.md                      # High-level summary only
+|-- CHANGELOG.md                   # Mandatory change record; updated with every code change
 |-- .gitignore
 |-- Modules/                       # All production modules go here
 |   |-- AD-PowerAdmin_Utils.psm1/.psd1
@@ -512,16 +555,20 @@ Before the module is considered complete, create a wiki page that covers:
 3. Which `Vulnerabilities/` dossier is relevant (if any)
 4. How it integrates with the rest of the framework
 
-### Step 5 -- Test
+### Step 5 -- Update CHANGELOG.md
+
+Add an entry under the appropriate headings (Added / Changed / Fixed / Removed) for every function and behavior introduced by the new module. Include what it does and why it was built.
+
+### Step 6 -- Test
 
 ```powershell
 .\AD-PowerAdmin.ps1                                     # Verify menu item appears
 .\AD-PowerAdmin.ps1 -Unattended -JobName 'MyJobKey'    # Verify job runs
 ```
 
-### Step 6 -- Update README.md
+### Step 7 -- Update README.md
 
-Add a bullet to the Features list for every user-visible capability the new module introduces.
+Add a bullet to the Features list for every user-visible AD capability the new module introduces.
 
 ---
 
