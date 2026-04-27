@@ -776,12 +776,17 @@ Function Get-WordWrap {
 Function Show-AuditReport {
     <#
     .SYNOPSIS
-    Displays a formatted, color-coded security findings report in the terminal.
+    Displays a formatted, color-coded security findings report in the terminal and
+    optionally writes the same content as plain text to a file.
 
     .DESCRIPTION
     Renders an array of PSCustomObject findings as structured cards grouped by
     severity (Critical, High, Medium, Info). Each card shows compact key/value
     header fields and optional multi-line wrapped detail fields with their labels.
+
+    Output is built as a parallel list of (text, color) pairs. The terminal receives
+    colored output; the file receives the same text without color codes. Both targets
+    are written from one pass through the data, so they are always identical in content.
 
     When RiskField is set to an empty string, grouping is disabled and all items
     are displayed in order without severity badges -- suitable for inventory data.
@@ -808,15 +813,21 @@ Function Show-AuditReport {
     Optional hashtable mapping property names to human-readable display labels.
     These merge with and override the built-in label map.
 
+    .PARAMETER OutputFile
+    Optional file path. When provided, the plain-text content of the report is
+    appended to this file. The caller is responsible for creating or clearing the
+    file before the first call; subsequent calls from the same scan run append.
+
     .EXAMPLE
     Show-AuditReport -Data $Results -Title "SYSVOL Permissions" `
         -HeaderFields @('ObjectPath','ObjectType','Identity','FileSystemRights') `
-        -DetailFields @()
+        -OutputFile "$global:ReportsPath\report.txt"
 
     .EXAMPLE
     Show-AuditReport -Data $PermFindings -Title "External Path Permissions" `
         -HeaderFields @('ExternalPath','ObjectType','Identity','FileSystemRights','Note') `
-        -DetailFields @('SecurityImpact','ExploitScenario','AccessRequired','LeastPrivDev')
+        -DetailFields @('SecurityImpact','ExploitScenario','AccessRequired','LeastPrivDev') `
+        -OutputFile $ReportFile
     #>
     [CmdletBinding()]
     Param(
@@ -838,19 +849,17 @@ Function Show-AuditReport {
         [string]$RiskField = 'RiskLevel',
 
         [Parameter(Mandatory=$False)]
-        [hashtable]$FieldLabels = @{}
+        [hashtable]$FieldLabels = @{},
+
+        [Parameter(Mandatory=$False)]
+        [string]$OutputFile = ''
     )
 
     $Width  = if ($global:OptionsMaxTextLength -gt 0) { [int]$global:OptionsMaxTextLength } else { 82 }
     $Sep    = '=' * $Width
     $SubSep = '-' * $Width
 
-    $ColorMap = @{
-        'Critical' = 'Red'
-        'High'     = 'Yellow'
-        'Medium'   = 'Cyan'
-        'Info'     = 'DarkGray'
-    }
+    $ColorMap = @{ 'Critical' = 'Red'; 'High' = 'Yellow'; 'Medium' = 'Cyan'; 'Info' = 'DarkGray' }
 
     $LabelMap = @{
         'ExternalPath'      = 'Path'
@@ -888,18 +897,14 @@ Function Show-AuditReport {
     }
     foreach ($K in $FieldLabels.Keys) { $LabelMap[$K] = $FieldLabels[$K] }
 
-    # Max label width for header-field alignment (header fields only -- detail labels are full-width headings)
-    $AllHeaderLabels = $HeaderFields | ForEach-Object {
-        if ($LabelMap.ContainsKey($_)) { $LabelMap[$_] } else { $_ }
-    }
+    $AllHeaderLabels = $HeaderFields | ForEach-Object { if ($LabelMap.ContainsKey($_)) { $LabelMap[$_] } else { $_ } }
     $MaxLabelLen = ($AllHeaderLabels | Measure-Object -Property Length -Maximum).Maximum
-    if (-not $MaxLabelLen -or $MaxLabelLen -lt 6)  { $MaxLabelLen = 6  }
-    if ($MaxLabelLen -gt 22) { $MaxLabelLen = 22 }
+    if (-not $MaxLabelLen -or $MaxLabelLen -lt 6) { $MaxLabelLen = 6  }
+    if ($MaxLabelLen -gt 22)                      { $MaxLabelLen = 22 }
 
     $DataArray = @($Data | Where-Object { $_ -ne $null })
     $Total     = $DataArray.Count
 
-    # Build groups
     $UseRisk   = ($RiskField -ne '')
     $RiskOrder = @('Critical','High','Medium','Info')
     $Groups    = [ordered]@{}
@@ -922,89 +927,89 @@ Function Show-AuditReport {
         $SortedRisks = @('__all')
     }
 
-    # Header
-    Write-Host ""
-    Write-Host $Sep -ForegroundColor DarkGray
+    # Build parallel text/color lists -- terminal gets colors, file gets plain text.
+    $PT = [System.Collections.Generic.List[string]]::new()   # text
+    $PC = [System.Collections.Generic.List[string]]::new()   # color ('' = default)
+
+    $PT.Add('');     $PC.Add('')
+    $PT.Add($Sep);   $PC.Add('DarkGray')
 
     if ($Total -eq 0) {
-        Write-Host (" {0} -- No findings" -f $Title) -ForegroundColor DarkGray
-        Write-Host $Sep -ForegroundColor DarkGray
-        Write-Host ""
-        return
-    }
-
-    if ($UseRisk) {
-        $SummaryParts = @()
-        foreach ($R in $RiskOrder) {
-            if ($Groups.Contains($R) -and $Groups[$R].Count -gt 0) {
-                $SummaryParts += "$($Groups[$R].Count) $R"
-            }
-        }
-        Write-Host (" {0}  --  {1} finding(s):  {2}" -f $Title, $Total, ($SummaryParts -join ', ')) -ForegroundColor White
+        $PT.Add(" $Title  --  No findings");  $PC.Add('DarkGray')
+        $PT.Add($Sep);                         $PC.Add('DarkGray')
+        $PT.Add('');                           $PC.Add('')
     } else {
-        Write-Host (" {0}  --  {1} item(s)" -f $Title, $Total) -ForegroundColor White
-    }
-    Write-Host $Sep -ForegroundColor DarkGray
-
-    $ItemNum = 0
-    foreach ($Risk in $SortedRisks) {
-        $Color   = if ($ColorMap.ContainsKey($Risk)) { $ColorMap[$Risk] } else { 'White' }
-        $IsFlat  = ($Risk -eq '__all')
-
-        foreach ($Item in $Groups[$Risk]) {
-            $ItemNum++
-            Write-Host ""
-
-            if ($IsFlat) {
-                Write-Host ("  Item {0} of {1}" -f $ItemNum, $Total) -ForegroundColor DarkGray
-            } else {
-                Write-Host -NoNewline "  ["
-                Write-Host -NoNewline $Risk.ToUpper() -ForegroundColor $Color
-                Write-Host ("]  Finding {0} of {1}" -f $ItemNum, $Total)
+        if ($UseRisk) {
+            $SummaryParts = @()
+            foreach ($R in $RiskOrder) {
+                if ($Groups.Contains($R) -and $Groups[$R].Count -gt 0) { $SummaryParts += "$($Groups[$R].Count) $R" }
             }
+            $PT.Add(" $Title  --  $Total finding(s):  $($SummaryParts -join ', ')");  $PC.Add('White')
+        } else {
+            $PT.Add(" $Title  --  $Total item(s)");  $PC.Add('White')
+        }
+        $PT.Add($Sep);  $PC.Add('DarkGray')
 
-            Write-Host $SubSep -ForegroundColor DarkGray
+        $ItemNum = 0
+        foreach ($Risk in $SortedRisks) {
+            $Color  = if ($ColorMap.ContainsKey($Risk)) { $ColorMap[$Risk] } else { 'White' }
+            $IsFlat = ($Risk -eq '__all')
 
-            # Header fields: compact label : value pairs
-            foreach ($Field in $HeaderFields) {
-                if (-not $Item.PSObject.Properties[$Field]) { continue }
-                $Label = if ($LabelMap.ContainsKey($Field)) { $LabelMap[$Field] } else { $Field }
-                $Value = [string]$Item.$Field
-                if ([string]::IsNullOrWhiteSpace($Value)) { continue }
-                Write-Host ("  {0,-$MaxLabelLen} : {1}" -f $Label, $Value)
-            }
+            foreach ($Item in $Groups[$Risk]) {
+                $ItemNum++
+                $PT.Add('');  $PC.Add('')
 
-            # Detail fields: labeled wrapped paragraphs
-            if ($DetailFields.Count -gt 0) {
-                $HasDetail = $false
-                foreach ($Field in $DetailFields) {
-                    if ($Item.PSObject.Properties[$Field]) {
-                        $V = ([string]$Item.$Field).Trim()
-                        if ($V.Length -gt 0) { $HasDetail = $true; break }
-                    }
+                if ($IsFlat) {
+                    $PT.Add("  Item $ItemNum of $Total");                          $PC.Add('DarkGray')
+                } else {
+                    $PT.Add("  [$($Risk.ToUpper())]  Finding $ItemNum of $Total"); $PC.Add($Color)
+                }
+                $PT.Add($SubSep);  $PC.Add('DarkGray')
+
+                foreach ($Field in $HeaderFields) {
+                    if (-not $Item.PSObject.Properties[$Field]) { continue }
+                    $Label = if ($LabelMap.ContainsKey($Field)) { $LabelMap[$Field] } else { $Field }
+                    $Value = [string]$Item.$Field
+                    if ([string]::IsNullOrWhiteSpace($Value)) { continue }
+                    $PT.Add(("  {0,-$MaxLabelLen} : {1}" -f $Label, $Value));  $PC.Add('')
                 }
 
-                if ($HasDetail) {
-                    Write-Host $SubSep -ForegroundColor DarkGray
+                if ($DetailFields.Count -gt 0) {
+                    $HasDetail = $false
                     foreach ($Field in $DetailFields) {
-                        if (-not $Item.PSObject.Properties[$Field]) { continue }
-                        $Label = if ($LabelMap.ContainsKey($Field)) { $LabelMap[$Field] } else { $Field }
-                        $Value = ([string]$Item.$Field).Trim()
-                        if ([string]::IsNullOrWhiteSpace($Value)) { continue }
-                        if ($IsFlat) {
-                            Write-Host ("  {0}" -f $Label) -ForegroundColor DarkGray
-                        } else {
-                            Write-Host ("  {0}" -f $Label) -ForegroundColor $Color
+                        if ($Item.PSObject.Properties[$Field] -and ([string]$Item.$Field).Trim().Length -gt 0) {
+                            $HasDetail = $true; break
                         }
-                        $Wrapped = Get-WordWrap -Text $Value -Width ($Width - 4) -Indent '    '
-                        foreach ($Line in $Wrapped) { Write-Host $Line }
-                        Write-Host ""
+                    }
+                    if ($HasDetail) {
+                        $PT.Add($SubSep);  $PC.Add('DarkGray')
+                        foreach ($Field in $DetailFields) {
+                            if (-not $Item.PSObject.Properties[$Field]) { continue }
+                            $Label = if ($LabelMap.ContainsKey($Field)) { $LabelMap[$Field] } else { $Field }
+                            $Value = ([string]$Item.$Field).Trim()
+                            if ([string]::IsNullOrWhiteSpace($Value)) { continue }
+                            $PT.Add("  $Label");  $PC.Add($(if ($IsFlat) { 'DarkGray' } else { $Color }))
+                            $Wrapped = Get-WordWrap -Text $Value -Width ($Width - 4) -Indent '    '
+                            foreach ($Line in $Wrapped) { $PT.Add($Line); $PC.Add('') }
+                            $PT.Add('');  $PC.Add('')
+                        }
                     }
                 }
             }
         }
+
+        $PT.Add($Sep);  $PC.Add('DarkGray')
+        $PT.Add('');    $PC.Add('')
     }
 
-    Write-Host $Sep -ForegroundColor DarkGray
-    Write-Host ""
+    # Flush to terminal with colors
+    for ($i = 0; $i -lt $PT.Count; $i++) {
+        if ($PC[$i]) { Write-Host $PT[$i] -ForegroundColor $PC[$i] }
+        else         { Write-Host $PT[$i] }
+    }
+
+    # Flush plain text to file (append; caller creates/clears the file before first call)
+    if (-not [string]::IsNullOrWhiteSpace($OutputFile)) {
+        [System.IO.File]::AppendAllLines($OutputFile, $PT.ToArray(), [System.Text.Encoding]::ASCII)
+    }
 }

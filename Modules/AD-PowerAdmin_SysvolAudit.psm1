@@ -151,11 +151,20 @@ Function Get-SysvolScriptInventory {
     .NOTES
     #>
     [CmdletBinding()]
-    Param([switch]$Force)
+    Param([switch]$Force, [string]$ReportFile = '')
+
+    $IsConsolidated = (-not [string]::IsNullOrWhiteSpace($ReportFile))
+    if (-not $IsConsolidated) {
+        $ReportFile = "$global:ReportsPath\SysvolAudit-Inventory_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').txt"
+        if (Test-Path -LiteralPath $ReportFile) { Remove-Item -LiteralPath $ReportFile -Force -ErrorAction SilentlyContinue }
+    }
 
     $Files = Get-SysvolScriptFiles
     if ($Files.Count -eq 0) {
         Write-Host "[INFO] No script or configuration files found in SYSVOL or NETLOGON."
+        Show-AuditReport -Data @() -Title "SYSVOL Script Inventory" `
+            -HeaderFields @('FullName','Extension','SizeBytes','LastWriteTime','Location') `
+            -DetailFields @() -RiskField '' -OutputFile $ReportFile
         return $Files
     }
 
@@ -174,7 +183,7 @@ Function Get-SysvolScriptInventory {
     Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-Inventory" -Force:$Force
     Show-AuditReport -Data $Results -Title "SYSVOL Script Inventory" `
         -HeaderFields @('FullName','Extension','SizeBytes','LastWriteTime','Location') `
-        -DetailFields @() -RiskField ''
+        -DetailFields @() -RiskField '' -OutputFile $ReportFile
     return $Results
 }
 
@@ -202,7 +211,13 @@ Function Search-SysvolSecrets {
     .NOTES
     #>
     [CmdletBinding()]
-    Param([switch]$Force)
+    Param([switch]$Force, [string]$ReportFile = '')
+
+    $IsConsolidated = (-not [string]::IsNullOrWhiteSpace($ReportFile))
+    if (-not $IsConsolidated) {
+        $ReportFile = "$global:ReportsPath\SysvolAudit-Secrets_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').txt"
+        if (Test-Path -LiteralPath $ReportFile) { Remove-Item -LiteralPath $ReportFile -Force -ErrorAction SilentlyContinue }
+    }
 
     $CriticalPatterns = @(
         'cpassword\s*=\s*"[^"]+',
@@ -269,6 +284,9 @@ Function Search-SysvolSecrets {
 
     if ($Results.Count -eq 0) {
         Write-Host "[INFO] No credential or dangerous patterns found in SYSVOL or NETLOGON scripts."
+        Show-AuditReport -Data @() -Title "SYSVOL Secret Scan" `
+            -HeaderFields @('FilePath','Location','LineNumber','MatchedPattern','RiskLevel') `
+            -DetailFields @('LineContent') -OutputFile $ReportFile
         return $Results
     }
 
@@ -279,7 +297,7 @@ Function Search-SysvolSecrets {
     Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-Secrets" -Force:$Force
     Show-AuditReport -Data $Results -Title "SYSVOL Secret Scan" `
         -HeaderFields @('FilePath','Location','LineNumber','MatchedPattern','RiskLevel') `
-        -DetailFields @('LineContent')
+        -DetailFields @('LineContent') -OutputFile $ReportFile
     return $Results
 }
 
@@ -312,7 +330,13 @@ Function Search-SysvolGppCpassword {
     .NOTES
     #>
     [CmdletBinding()]
-    Param([switch]$Force)
+    Param([switch]$Force, [string]$ReportFile = '')
+
+    $IsConsolidated = (-not [string]::IsNullOrWhiteSpace($ReportFile))
+    if (-not $IsConsolidated) {
+        $ReportFile = "$global:ReportsPath\SysvolAudit-GppCpassword_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').txt"
+        if (Test-Path -LiteralPath $ReportFile) { Remove-Item -LiteralPath $ReportFile -Force -ErrorAction SilentlyContinue }
+    }
 
     $Domain     = $env:USERDNSDOMAIN
     $SysvolRoot = "\\$Domain\SYSVOL\$Domain"
@@ -344,6 +368,9 @@ Function Search-SysvolGppCpassword {
 
     if ($Results.Count -eq 0) {
         Write-Host "[INFO] No cpassword attributes found in SYSVOL GPP files."
+        Show-AuditReport -Data @() -Title "GPP cpassword Scan" `
+            -HeaderFields @('FilePath','GppFileType','LineNumber','ValuePresent') `
+            -DetailFields @('LineContent') -OutputFile $ReportFile
         return $Results
     }
 
@@ -358,7 +385,7 @@ Function Search-SysvolGppCpassword {
     Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-GppCpassword" -Force:$Force
     Show-AuditReport -Data $Results -Title "GPP cpassword Scan" `
         -HeaderFields @('FilePath','GppFileType','LineNumber','ValuePresent') `
-        -DetailFields @('LineContent')
+        -DetailFields @('LineContent') -OutputFile $ReportFile
     return $Results
 }
 
@@ -385,7 +412,13 @@ Function Search-SysvolPermissions {
     .NOTES
     #>
     [CmdletBinding()]
-    Param([switch]$Force)
+    Param([switch]$Force, [string]$ReportFile = '')
+
+    $IsConsolidated = (-not [string]::IsNullOrWhiteSpace($ReportFile))
+    if (-not $IsConsolidated) {
+        $ReportFile = "$global:ReportsPath\SysvolAudit-Permissions_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').txt"
+        if (Test-Path -LiteralPath $ReportFile) { Remove-Item -LiteralPath $ReportFile -Force -ErrorAction SilentlyContinue }
+    }
 
     $Domain     = $env:USERDNSDOMAIN
     $SysvolRoot = "\\$Domain\SYSVOL\$Domain"
@@ -448,6 +481,9 @@ Function Search-SysvolPermissions {
 
     if ($Results.Count -eq 0) {
         Write-Host "[INFO] No excessive SYSVOL permissions found for risky principals."
+        Show-AuditReport -Data @() -Title "SYSVOL Permission Scan" `
+            -HeaderFields @('ObjectPath','ObjectType','Identity','FileSystemRights','AccessControlType') `
+            -OutputFile $ReportFile
         return $Results
     }
 
@@ -457,7 +493,8 @@ Function Search-SysvolPermissions {
     Write-Host "[INFO] Permission scan complete. Critical: $CritCount  High: $HighCount  Medium: $MedCount"
     Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-Permissions" -Force:$Force
     Show-AuditReport -Data $Results -Title "SYSVOL Permission Scan" `
-        -HeaderFields @('ObjectPath','ObjectType','Identity','FileSystemRights','AccessControlType')
+        -HeaderFields @('ObjectPath','ObjectType','Identity','FileSystemRights','AccessControlType') `
+        -OutputFile $ReportFile
     return $Results
 }
 
@@ -487,7 +524,13 @@ Function Search-GpoDelegation {
     .NOTES
     #>
     [CmdletBinding()]
-    Param([switch]$Force)
+    Param([switch]$Force, [string]$ReportFile = '')
+
+    $IsConsolidated = (-not [string]::IsNullOrWhiteSpace($ReportFile))
+    if (-not $IsConsolidated) {
+        $ReportFile = "$global:ReportsPath\SysvolAudit-GpoDelegation_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').txt"
+        if (Test-Path -LiteralPath $ReportFile) { Remove-Item -LiteralPath $ReportFile -Force -ErrorAction SilentlyContinue }
+    }
 
     if (-not (Get-Module -ListAvailable -Name GroupPolicy)) {
         Write-Warning "[WARN] GroupPolicy module not available. Install RSAT-GPMC or run from a Domain Controller."
@@ -557,6 +600,9 @@ Function Search-GpoDelegation {
 
     if ($Results.Count -eq 0) {
         Write-Host "[INFO] No excessive GPO delegation found."
+        Show-AuditReport -Data @() -Title "GPO Delegation Audit" `
+            -HeaderFields @('GPOName','GPOStatus','Trustee','TrusteeType','Permission','LinkedToTier0') `
+            -OutputFile $ReportFile
         return $Results
     }
 
@@ -565,7 +611,8 @@ Function Search-GpoDelegation {
     Write-Host "[INFO] GPO delegation audit complete. Critical: $CritCount  High: $HighCount"
     Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-GpoDelegation" -Force:$Force
     Show-AuditReport -Data $Results -Title "GPO Delegation Audit" `
-        -HeaderFields @('GPOName','GPOStatus','Trustee','TrusteeType','Permission','LinkedToTier0')
+        -HeaderFields @('GPOName','GPOStatus','Trustee','TrusteeType','Permission','LinkedToTier0') `
+        -OutputFile $ReportFile
     return $Results
 }
 
@@ -683,7 +730,13 @@ Function Search-GpoExternalScriptPaths {
     .NOTES
     #>
     [CmdletBinding()]
-    Param([switch]$Force)
+    Param([switch]$Force, [string]$ReportFile = '')
+
+    $IsConsolidated = (-not [string]::IsNullOrWhiteSpace($ReportFile))
+    if (-not $IsConsolidated) {
+        $ReportFile = "$global:ReportsPath\SysvolAudit-ExternalPaths_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').txt"
+        if (Test-Path -LiteralPath $ReportFile) { Remove-Item -LiteralPath $ReportFile -Force -ErrorAction SilentlyContinue }
+    }
 
     if (-not (Get-Module -ListAvailable -Name GroupPolicy)) {
         Write-Warning "[WARN] GroupPolicy module not available. Install RSAT-GPMC or run from a Domain Controller."
@@ -754,10 +807,10 @@ Function Search-GpoExternalScriptPaths {
         Export-AdPowerAdminData -Data $PermResults -ReportName "SysvolAudit-ExternalPathPermissions" -Force:$Force
         Show-AuditReport -Data $Results     -Title "External GPO Script Paths" `
             -HeaderFields @('GPOName','ScriptType','ReferencedShare') `
-            -DetailFields @('LineContent')
+            -DetailFields @('LineContent') -OutputFile $ReportFile
         Show-AuditReport -Data $PermResults -Title "External Path Permissions" `
             -HeaderFields @('ExternalPath','ObjectType','Identity','FileSystemRights','AccessControlType','Note') `
-            -DetailFields @('SecurityImpact','ExploitScenario','AccessRequired','LeastPrivDev')
+            -DetailFields @('SecurityImpact','ExploitScenario','AccessRequired','LeastPrivDev') -OutputFile $ReportFile
         return @{ PathRefs = $Results; PermFindings = $PermResults }
     }
 
@@ -854,10 +907,10 @@ Function Search-GpoExternalScriptPaths {
 
     Show-AuditReport -Data $Results -Title "External GPO Script Paths" `
         -HeaderFields @('GPOName','ScriptType','ReferencedShare') `
-        -DetailFields @('LineContent')
+        -DetailFields @('LineContent') -OutputFile $ReportFile
     Show-AuditReport -Data $PermResults -Title "External Path Permissions" `
         -HeaderFields @('ExternalPath','ObjectType','Identity','FileSystemRights','AccessControlType','Note') `
-        -DetailFields @('SecurityImpact','ExploitScenario','AccessRequired','LeastPrivDev')
+        -DetailFields @('SecurityImpact','ExploitScenario','AccessRequired','LeastPrivDev') -OutputFile $ReportFile
 
     return @{ PathRefs = $Results; PermFindings = $PermResults }
 }
@@ -887,18 +940,28 @@ Function Start-SysvolAudit {
     .NOTES
     #>
 
+    $AuditReportFile = "$global:ReportsPath\SysvolAudit-FullReport_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').txt"
+    if (Test-Path -LiteralPath $AuditReportFile) { Remove-Item -LiteralPath $AuditReportFile -Force -ErrorAction SilentlyContinue }
+    $AuditHeader = @(
+        "AD-PowerAdmin SYSVOL Security Audit",
+        "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+        ('=' * 82),
+        ""
+    )
+    [System.IO.File]::AppendAllLines($AuditReportFile, [string[]]$AuditHeader, [System.Text.Encoding]::ASCII)
+
     Write-Host ""
     Write-Host "Starting Full SYSVOL Security Audit..."
     Write-Host "========================================"
 
-    $InventoryResults = Get-SysvolScriptInventory      -Force
-    $SecretsResults   = Search-SysvolSecrets           -Force
-    $GppResults       = Search-SysvolGppCpassword      -Force
-    $SysvolPermResults = Search-SysvolPermissions      -Force
-    $GpoDelResults    = Search-GpoDelegation           -Force
-    $ExtOutput        = Search-GpoExternalScriptPaths  -Force
-    $ExtPathResults   = if ($ExtOutput -is [hashtable]) { $ExtOutput.PathRefs    } else { @() }
-    $ExtPermResults   = if ($ExtOutput -is [hashtable]) { $ExtOutput.PermFindings } else { @() }
+    $InventoryResults  = Get-SysvolScriptInventory     -Force -ReportFile $AuditReportFile
+    $SecretsResults    = Search-SysvolSecrets          -Force -ReportFile $AuditReportFile
+    $GppResults        = Search-SysvolGppCpassword     -Force -ReportFile $AuditReportFile
+    $SysvolPermResults = Search-SysvolPermissions      -Force -ReportFile $AuditReportFile
+    $GpoDelResults     = Search-GpoDelegation          -Force -ReportFile $AuditReportFile
+    $ExtOutput         = Search-GpoExternalScriptPaths -Force -ReportFile $AuditReportFile
+    $ExtPathResults    = if ($ExtOutput -is [hashtable]) { $ExtOutput.PathRefs    } else { @() }
+    $ExtPermResults    = if ($ExtOutput -is [hashtable]) { $ExtOutput.PermFindings } else { @() }
 
     $InventoryCount  = @($InventoryResults).Count
     $SecretCrit      = @($SecretsResults      | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
@@ -948,6 +1011,25 @@ Function Start-SysvolAudit {
                    -Subject   "AD-PowerAdmin: SYSVOL Audit - $TotalCritical Critical, $TotalHigh High Finding(s)" `
                    -Body      $Body
     }
+
+    $SummaryLines = @(
+        "",
+        "[SYSVOL Audit Summary]",
+        "-------------------------------------------------------",
+        ("Script Inventory:        {0} files found"             -f $InventoryCount),
+        ("Secret Scan:             {0} Critical, {1} High"      -f $SecretCrit, $SecretHigh),
+        ("GPP cpassword:           {0} Critical, {1} Info"      -f $GppCrit, $GppInfo),
+        ("Permission Scan:         {0} Critical, {1} High"      -f $SysvolPermCrit, $SysvolPermHigh),
+        ("GPO Delegation:          {0} Critical, {1} High"      -f $GpoDelCrit, $GpoDelHigh),
+        ("External Script Paths:   {0} High, {1} Medium"        -f $ExtHigh, $ExtMedium),
+        ("Ext. Path Permissions:   {0} Critical, {1} High"      -f $ExtPermCrit, $ExtPermHigh),
+        "-------------------------------------------------------",
+        ("Total Critical Findings: {0}"                         -f $TotalCritical),
+        ("Total High Findings:     {0}"                         -f $TotalHigh),
+        ""
+    )
+    [System.IO.File]::AppendAllLines($AuditReportFile, [string[]]$SummaryLines, [System.Text.Encoding]::ASCII)
+    Write-Host "[INFO] Full audit report saved to: $AuditReportFile" -ForegroundColor Green
 }
 
 Function Start-SysvolGppCpasswordCheck {
