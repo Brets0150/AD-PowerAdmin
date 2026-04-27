@@ -30,7 +30,11 @@
 
     # Description of the functionality provided by this module
     Description = @'
-    AD-PowerAdmin_Mgr is a module that allows you to manage ad Accounts, Groups, and OUs.
+    AD-PowerAdmin_Mgr is a module that allows you to manage AD accounts and domain security settings.
+
+    Functions included:
+    - Unregister-AdUser        Decommission an AD user account (remove groups, rotate password, disable, move to disabled OU).
+    - Set-MachineAccountQuota  Set ms-DS-MachineAccountQuota to 0 to eliminate the Machine Account Quota vulnerability.
 '@
 
     # Minimum version of the Windows PowerShell engine required by this module
@@ -70,7 +74,7 @@
     # NestedModules = @()
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-    FunctionsToExport = @('Initialize-Module', 'Unregister-AdUser')
+    FunctionsToExport = @('Initialize-Module', 'Unregister-AdUser', 'Set-MachineAccountQuota')
     # IF YOU DO NOT EXPORT THE FUNCTIONS, THEN THE FUNCTIONS WILL NOT BE AVAILABLE TO THE MAIN SCRIPT.
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
@@ -119,6 +123,10 @@
             - Added pre-flight validation to Unregister-AdUser. All required global variables
               (InactiveUsersLocations and each entry DisabledOULocal) are verified before any
               destructive AD operation is performed. Missing settings produce a clear error.
+            v1.2:
+            - Refactored Initialize-Module to use a sub-menu (MgrMenu) instead of a direct main menu entry.
+            - Added Set-MachineAccountQuota: reads the current ms-DS-MachineAccountQuota via Get-ADObject,
+              confirms with the user, sets the value to 0 via Set-ADDomain -Replace, and verifies the change.
 '@
 
         } # End of PSData hashtable

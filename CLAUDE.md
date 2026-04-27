@@ -28,12 +28,14 @@ Automation here is not simply about saving time. It is about enforcing secure, r
 
 `README.md` does **not** contain implementation details, architectural explanations, or methodology writeups. Keep it oriented toward a reader deciding whether to adopt the tool.
 
+**Features in README.md must describe Active Directory capabilities and outcomes only.** Internal framework mechanics -- menu structure, sub-menu architecture, modular design, scheduled job infrastructure, or any other implementation detail -- must not appear in the Features list. Those topics belong exclusively in `AD-PowerAdmin.wiki/`. Every bullet in Features answers the question "what does this do for Active Directory?" not "how is the tool structured?"
+
 **README must be updated with every change.** Whenever a function, feature, or module is added, modified, or removed:
 
-- **New feature or function:** add a bullet to the Features list in plain, user-facing terms.
+- **New AD feature or function:** add a bullet to the Features list in plain, user-facing terms describing the AD capability.
 - **Modified feature:** update the existing description if behavior, scope, or name changed.
 - **Removed feature:** remove the corresponding bullet.
-- **New module:** if it introduces a user-visible capability, it earns a Features entry.
+- **New module:** if it introduces a user-visible AD capability, it earns a Features entry. Framework-only modules (utilities, infrastructure) do not.
 
 ```
 # AD-PowerAdmin Overview   <- project summary, do not change

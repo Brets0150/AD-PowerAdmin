@@ -14,17 +14,38 @@ Function Initialize-Module {
 
     #>
 
-    # Any function you want to use in the "Command" property must be exported by adding the function to the "FunctionsToExport" property in the module manifest(the .psd1 file).
-    # The main script cannot see any functions in the module unless they are exported in the module manifest(the .psd1 file).
+    # Remove stale entries if module is reloaded.
+    $global:Menu.Remove('Unregister-AdUser')
+    $global:Menu.Remove('MgrMenu')
+    $global:SubMenus.Remove('MgrMenu')
 
-    # Append $global:Menu with the menu items to be displayed.
+    # Register the sub-menu items.
+    $global:SubMenus += @{
+        'MgrMenu' = @{
+            Title = "AD Management"
+            Items = @{
+                'DecommissionAdUser' = @{
+                    Title   = "Decommission AD User"
+                    Label   = "Decommission an AD user account: remove all group memberships, rotate the password, disable the account, and move it to the disabled OU."
+                    Command = "Unregister-AdUser"
+                }
+                'SetMachineAccountQuota' = @{
+                    Title   = "Set MAQ to Zero"
+                    Label   = "Set ms-DS-MachineAccountQuota to 0 to prevent non-administrator users from creating computer accounts in the domain. Eliminates the Machine Account Quota vulnerability."
+                    Command = "Set-MachineAccountQuota"
+                }
+            }
+        }
+    }
+
+    # Register a single main menu entry that opens the sub-menu.
     $global:Menu += @{
-        'Unregister-AdUser' = @{ # Must be a unique name. You have have multiple menu items that run the same "command", but they must have unique names.
-            Title    = "Decommision AD User" # This is the title that will be displayed in the menu. PLEASE keep this short, like 20 characters or less.
-            Label    = "Decommision an AD User account; remove all group assosations, rotate password, and Disable the account" # This is the label that will be displayed in the menu. Try keep this short, like 150-250 characters or less.
-            Module   = "AD-PowerAdmin_Mgr" # This is the name of the module in which the function resides. Not really used(for now), but it is here for reference and in case it is needed in the future.
-            Function = "Unregister-AdUser" # This is the name of function that will be run. Not realy used(for now), but is here for reference and incase it is needed in the future.
-            Command  = "Unregister-AdUser" # This is the command(a function from this module) that will be run.
+        'MgrMenu' = @{
+            Title    = "AD Management"
+            Label    = "Manage AD user accounts and domain security settings, including user decommissioning and Machine Account Quota remediation."
+            Module   = "AD-PowerAdmin_Mgr"
+            Function = "Enter-SubMenu"
+            Command  = "Enter-SubMenu 'MgrMenu'"
         }
     }
 }
@@ -175,5 +196,110 @@ Function Unregister-AdUser {
         # Move the account to the Decommissioned OU.
         Move-ADObject -Identity $AdUserToDisable -TargetPath "$($global:InactiveUsersLocations).DisabledOULocal"
     }
-# End of Get-ADAdmins function
+# End of Unregister-AdUser function
+}
+
+Function Set-MachineAccountQuota {
+    <#
+    .SYNOPSIS
+    Sets the Machine Account Quota (ms-DS-MachineAccountQuota) to 0 to prevent non-admin users from creating computer accounts.
+
+    .DESCRIPTION
+    === Machine Account Quota Remediation. ===
+        The ms-DS-MachineAccountQuota domain attribute controls how many computer accounts
+        an ordinary authenticated user can create. The default value of 10 is a well-known
+        attack enabler: a low-privileged user can create a computer account and use it in
+        Kerberos abuse, NTLM relay, or Resource-Based Constrained Delegation attack chains.
+
+        This function:
+        1. Reads the current ms-DS-MachineAccountQuota value via Get-ADObject so the
+           attribute is always retrieved from LDAP regardless of the typed wrapper.
+        2. Reports the current value and exits cleanly if it is already 0.
+        3. Prompts the user to confirm the change before modifying anything.
+        4. Sets ms-DS-MachineAccountQuota to 0 using Set-ADDomain -Replace.
+        5. Re-reads the attribute from LDAP to verify the change was applied.
+
+        Setting this value to 0 does NOT prevent administrators from joining machines to
+        the domain. It only removes the default quota granted to ordinary users. Delegation
+        of computer-join rights should be handled explicitly via AD delegation.
+
+        Reference: AD-PowerAdmin.wiki/Vulnerabilities/ad_machine_account_quota_audit.md
+
+    .EXAMPLE
+    Set-MachineAccountQuota
+
+    .INPUTS
+    Set-MachineAccountQuota does not take pipeline input.
+
+    .OUTPUTS
+    None. All results are written to the console via Write-Host.
+
+    .NOTES
+    Requires Domain Admin or equivalent write access to the domain NC head object.
+
+    ms-DS-MachineAccountQuota is not in the fixed property set returned by Get-ADDomain.
+    This function uses Get-ADObject -Properties to read and verify the attribute directly
+    from LDAP, consistent with the Get-MachineAccountQuotaAudit audit function.
+
+    #>
+
+    # Read the current value via Get-ADObject so the attribute is always retrieved from LDAP.
+    $DomainDN = $null
+    try { $DomainDN = (Get-ADDomain).DistinguishedName } catch {}
+
+    if ($null -eq $DomainDN) {
+        Write-Host "[FAIL] Unable to retrieve the domain Distinguished Name via Get-ADDomain." -ForegroundColor Red
+        return
+    }
+
+    $DomainObject = Get-ADObject -Identity $DomainDN -Properties 'ms-DS-MachineAccountQuota' -ErrorAction SilentlyContinue
+    $MAQRaw = $DomainObject.'ms-DS-MachineAccountQuota'
+
+    if ($null -eq $MAQRaw) {
+        Write-Host "[FAIL] Could not read ms-DS-MachineAccountQuota from the domain object ($DomainDN)." -ForegroundColor Red
+        Write-Host "       Verify that you have read access to the domain NC head object." -ForegroundColor Yellow
+        return
+    }
+
+    [int]$CurrentMAQ = [int]$MAQRaw
+
+    if ($CurrentMAQ -eq 0) {
+        Write-Host "[OK] ms-DS-MachineAccountQuota is already 0. No action required." -ForegroundColor Green
+        return
+    }
+
+    # Report the current value and explain the risk before prompting.
+    Write-Host ""
+    Write-Host "Current ms-DS-MachineAccountQuota value: $CurrentMAQ" -ForegroundColor Yellow
+    Write-Host "Any authenticated domain user can currently create up to $CurrentMAQ computer accounts." -ForegroundColor Yellow
+    Write-Host "Setting this to 0 prevents non-admin users from creating computer accounts." -ForegroundColor Yellow
+    Write-Host "Administrators and explicitly delegated accounts are not affected by this change." -ForegroundColor Yellow
+    Write-Host ""
+
+    [string]$Confirm = Read-Host "Set ms-DS-MachineAccountQuota to 0 on '$DomainDN'? (y/N)"
+    if ($Confirm -ne "y" -and $Confirm -ne "Y") {
+        Write-Host "Operation cancelled. No changes were made." -ForegroundColor Yellow
+        return
+    }
+
+    # Apply the change.
+    try {
+        Set-ADDomain -Identity $DomainDN -Replace @{'ms-DS-MachineAccountQuota' = 0}
+    } catch {
+        Write-Host "[FAIL] Set-ADDomain failed: $_" -ForegroundColor Red
+        Write-Host "       Verify that you have Domain Admin or equivalent write rights." -ForegroundColor Yellow
+        return
+    }
+
+    # Verify the change was applied by re-reading from LDAP.
+    $VerifyObject = Get-ADObject -Identity $DomainDN -Properties 'ms-DS-MachineAccountQuota' -ErrorAction SilentlyContinue
+    [int]$VerifiedMAQ = [int]$VerifyObject.'ms-DS-MachineAccountQuota'
+
+    if ($VerifiedMAQ -eq 0) {
+        Write-Host "[OK] ms-DS-MachineAccountQuota is now 0. Non-admin users can no longer create computer accounts." -ForegroundColor Green
+    } else {
+        Write-Host "[FAIL] Verification failed. ms-DS-MachineAccountQuota reads $VerifiedMAQ after the change attempt." -ForegroundColor Red
+        Write-Host "       Review the domain object manually and check replication status." -ForegroundColor Yellow
+    }
+# End of Set-MachineAccountQuota function
 }
