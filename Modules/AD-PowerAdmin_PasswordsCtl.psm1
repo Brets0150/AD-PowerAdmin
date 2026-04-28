@@ -937,7 +937,7 @@ function Start-MonthlyPasswordAudit {
     # Check if the $global:WeakPasswordAudit is set to $true. If it is, then run weak password process.
     if ($global:WeakPasswordAudit -eq $true) {
         # Set the $AdPwdAuditData variable to the output of the Get-ADPasswordAudit function.
-        $AdPwdAuditData = Get-PasswordAudit -SearchOUbase $global:PasswordQualityTestSearchOUbase -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile
+        $AdPwdAuditData = Get-PasswordAudit -SearchOUbase $global:PasswordQualityTestSearchOUbase -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile -NtlmHashDataDir $global:NtlmHashDataDir
         # With the $AdPwdAuditData variable, run the Invoke-WeakPwdProcess function.
         Invoke-WeakPwdProcess -AdPwTestData $AdPwdAuditData
         # If it is the first day of the month, then run Get-PasswordAuditAdminReport.

@@ -168,12 +168,23 @@
 # Use directory mode when:
 #   - You want efficient incremental weekly updates (strongly recommended).
 #   - You have already completed the first 70 GB download.
+#   - You want audits to complete in seconds rather than scanning a 70 GB flat file.
 #
 # How the audit uses it:
-#   A custom function (Test-NtlmHashesInDirectory) groups AD accounts by hash prefix, reads
-#   only the matching range files, and merges breached accounts into the audit results. The
-#   outcome is identical to single-file mode -- breached users are notified and follow-up
-#   tasks are scheduled.
+#   A custom function (Test-NtlmHashesInDirectory) performs a prefix-based lookup instead
+#   of scanning the full dataset. It collects all AD account NT hashes and groups them by
+#   their 5-character hash prefix. It then reads only the range files whose names match
+#   those prefixes -- every other file in the directory is ignored entirely.
+#
+#   A typical AD environment with hundreds or thousands of users has at most a few hundred
+#   unique 5-character prefixes, so the audit opens only a few hundred files even though
+#   the directory contains roughly one million. This is why directory-mode audits complete
+#   in seconds regardless of the total database size. Fast completion is by design and does
+#   not indicate partial or incomplete processing -- every AD account is evaluated against
+#   its matching range file; only the irrelevant range files are skipped.
+#
+#   The outcome is identical to single-file mode: breached users are notified by email,
+#   follow-up tasks are scheduled, and the monthly admin report reflects all findings.
 #
 # To use directory mode:
 #   1. Set $global:NtlmHashDataDir to a folder name (relative to the script directory).

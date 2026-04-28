@@ -708,15 +708,23 @@ Function Invoke-HibpDirectoryDownload {
         }
 
         function Write-TsvLineLocal {
-            param([string]$Path, [object[]]$Values)
+            param([string]$Path, [object[]]$Values, [bool]$Create = $false)
             $safe = foreach ($v in $Values) {
                 if ($null -eq $v) { '' } else { ([string]$v).Replace("`t", ' ').Replace("`r", ' ').Replace("`n", ' ') }
             }
-            Add-Content -LiteralPath $Path -Encoding UTF8 -Value ($safe -join "`t")
+            $bytes  = [System.Text.Encoding]::UTF8.GetBytes(($safe -join "`t") + "`n")
+            $mode   = if ($Create) { [System.IO.FileMode]::Create } else { [System.IO.FileMode]::Append }
+            $fs     = $null
+            try {
+                $fs = [System.IO.File]::Open($Path, $mode, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+                $fs.Write($bytes, 0, $bytes.Length)
+            } finally {
+                if ($null -ne $fs) { $fs.Dispose() }
+            }
         }
 
-        Set-Content -LiteralPath $WorkerResultPath  -Encoding UTF8 -Value "Prefix`tStatus`tBytes`tETag`tLastModified`tLength`tSha256`tLineCount`tDownloadedUtc`tMessage"
-        Set-Content -LiteralPath $WorkerFailurePath -Encoding UTF8 -Value "Prefix`tError"
+        Write-TsvLineLocal $WorkerResultPath  @('Prefix','Status','Bytes','ETag','LastModified','Length','Sha256','LineCount','DownloadedUtc','Message') -Create $true
+        Write-TsvLineLocal $WorkerFailurePath @('Prefix','Error') -Create $true
 
         foreach ($prefix in $WorkerPrefixes) {
             $finalPath = Join-Path $WorkerRangeDirectory ("$prefix.txt")
@@ -779,12 +787,15 @@ Function Invoke-HibpDirectoryDownload {
     $workerCount = [Math]::Max(1, [Math]::Min($WorkerCount, $Prefixes.Count))
     $buckets     = Split-HibpPrefixBuckets -Items $Prefixes -BucketCount $workerCount
     $jobs        = @()
+    $resultPaths = @()
+    $modeName    = if ($UseNtlm) { 'ntlm' } else { 'sha1' }
 
     for ($i = 0; $i -lt $workerCount; $i++) {
         $bucketArray = @($buckets[$i].ToArray())
         if ($bucketArray.Count -eq 0) { continue }
         $resultPath  = Join-Path $jobRoot ("worker-$i-results.tsv")
         $failurePath = Join-Path $jobRoot ("worker-$i-failures.tsv")
+        $resultPaths += $resultPath
         $jobs += Start-Job -ScriptBlock $workerScript -ArgumentList @(
             $bucketArray,
             $RangeDirectory,
@@ -800,7 +811,41 @@ Function Invoke-HibpDirectoryDownload {
         )
     }
 
-    Wait-Job -Job $jobs | Out-Null
+    [datetime]$progressStart = [DateTime]::UtcNow
+    [int]$totalPrefixes      = $Prefixes.Count
+    do {
+        [int]$activeJobs = @($jobs | Where-Object { $_.State -notin @('Completed','Failed','Stopped') }).Count
+        [int]$doneCount  = 0
+        foreach ($rf in $resultPaths) {
+            if (Test-Path -LiteralPath $rf) {
+                try {
+                    $fs = [System.IO.File]::Open($rf, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                    try {
+                        $sr        = New-Object System.IO.StreamReader($fs)
+                        $lineCount = 0
+                        while ($null -ne $sr.ReadLine()) { $lineCount++ }
+                        $sr.Dispose()
+                    } finally {
+                        $fs.Dispose()
+                    }
+                    if ($lineCount -gt 1) { $doneCount += $lineCount - 1 }
+                } catch { }
+            }
+        }
+        [int]$pct       = if ($totalPrefixes -gt 0) { [Math]::Min(99, [int](($doneCount / $totalPrefixes) * 100)) } else { 0 }
+        $elapsedSec     = ([DateTime]::UtcNow - $progressStart).TotalSeconds
+        [int]$eta       = -1
+        if ($doneCount -gt 10 -and $elapsedSec -gt 0) {
+            $eta = [int](($totalPrefixes - $doneCount) / ($doneCount / $elapsedSec))
+        }
+        Write-Progress -Activity "Downloading HIBP range files ($modeName)" `
+                       -Status ("{0:N0} of {1:N0} prefixes  |  {2}%  |  {3} worker(s) active" -f $doneCount, $totalPrefixes, $pct, $activeJobs) `
+                       -PercentComplete $pct `
+                       -SecondsRemaining $eta
+        if ($activeJobs -gt 0) { Start-Sleep -Seconds 2 }
+    } while ($activeJobs -gt 0)
+    Write-Progress -Activity "Downloading HIBP range files ($modeName)" -Completed
+
     foreach ($job in $jobs) {
         Receive-Job -Job $job | Out-Null
         Remove-Job  -Job $job -Force
@@ -818,7 +863,6 @@ Function Invoke-HibpDirectoryDownload {
         BytesDownloaded = [int64]0
     }
 
-    $modeName    = if ($UseNtlm) { 'ntlm' } else { 'sha1' }
     $failureLog  = Join-Path $global:ReportsPath ("{0}-hibp-failures-{1}.log" -f $modeName, (Get-Date -Format 'yyyyMMdd-HHmmss'))
     $failureLines = New-Object 'System.Collections.Generic.List[string]'
 
@@ -931,6 +975,11 @@ Function Invoke-HibpSingleFileDownload {
         BytesDownloaded = [int64]0
     }
 
+    [int]$totalPrefixes  = $Prefixes.Count
+    [int]$doneCount      = 0
+    [string]$modeLabel   = if ($UseNtlm) { 'NTLM' } else { 'SHA1' }
+    [datetime]$progressStart = [DateTime]::UtcNow
+
     $writer = $null
     try {
         $writer = New-Object System.IO.StreamWriter($partOutput, $false, [System.Text.Encoding]::ASCII, 1048576)
@@ -959,6 +1008,17 @@ Function Invoke-HibpSingleFileDownload {
                     if ($null -ne $reader) { $reader.Dispose() }
                 }
                 $stats.Downloaded++
+                $doneCount++
+                [int]$pct   = if ($totalPrefixes -gt 0) { [Math]::Min(99, [int](($doneCount / $totalPrefixes) * 100)) } else { 0 }
+                $elapsedSec = ([DateTime]::UtcNow - $progressStart).TotalSeconds
+                [int]$eta   = -1
+                if ($doneCount -gt 0 -and $elapsedSec -gt 0) {
+                    $eta = [int](($totalPrefixes - $doneCount) / ($doneCount / $elapsedSec))
+                }
+                Write-Progress -Activity "Downloading HIBP single file ($modeLabel)" `
+                               -Status ("{0:N0} of {1:N0} prefixes  |  {2}% complete" -f $doneCount, $totalPrefixes, $pct) `
+                               -PercentComplete $pct `
+                               -SecondsRemaining $eta
                 Remove-Item -LiteralPath $tempRange -Force -ErrorAction SilentlyContinue
             }
             catch {
@@ -971,6 +1031,7 @@ Function Invoke-HibpSingleFileDownload {
     finally {
         if ($null -ne $writer) { $writer.Dispose() }
     }
+    Write-Progress -Activity "Downloading HIBP single file ($modeLabel)" -Completed
 
     Move-Item -LiteralPath $partOutput -Destination $OutputPath -Force
     if (-not (Test-Path -LiteralPath $OutputPath)) {

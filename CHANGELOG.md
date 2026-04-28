@@ -7,6 +7,17 @@
 
 ---
 
+### Modules/AD-PowerAdmin_PasswordsCtl.psm1 -- HIBP directory mode missing from scheduled audit
+
+**Fixed:**
+- `Start-MonthlyPasswordAudit` -- Added the missing `-NtlmHashDataDir $global:NtlmHashDataDir` argument to its internal `Get-PasswordAudit` call. Without this, the scheduled daily/monthly audit silently skipped the entire HIBP range-file directory check: `Get-PasswordAudit` received an empty `$NtlmHashDataDir`, the guard at line 317 evaluated false, and `Test-NtlmHashesInDirectory` was never called. The audit produced results with no breached-password detection when directory mode was configured.
+
+**Why it changed:** `Get-PasswordAuditAdminReport` and `Invoke-WeakPwdProcess` both pass `-NtlmHashDataDir` correctly; only the scheduled-job entry point `Start-MonthlyPasswordAudit` omitted the parameter. The bug meant that directory-mode HIBP checking worked correctly when run interactively from the menu but was completely bypassed during automated daily and monthly runs.
+
+**Impact:** Scheduled password audits now correctly evaluate all AD account NT hashes against the HIBP range-file directory. No other logic changed.
+
+---
+
 ### Commits Not Yet Pushed
 
 | Commit | Date | Summary |
