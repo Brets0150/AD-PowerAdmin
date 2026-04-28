@@ -20,6 +20,33 @@
 
 ---
 
+### Modules/AD-PowerAdmin_GPOMgr.psm1 and AD-PowerAdmin_GPOMgr.psd1 -- New Module
+
+**Added:**
+- `Initialize-Module` -- Satisfies the AD-PowerAdmin module load contract. Registers no menu items or unattended jobs. This module is a shared infrastructure library; all functions are called programmatically by other modules.
+- `Find-ADPAGPO` -- Searches for Group Policy Objects by exact name (`-Name`) or wildcard pattern (`-Pattern`). Always returns an array so callers can check `.Count -eq 0` for "not found" without null guards. Wraps `Get-GPO -Name` for exact matches and `Get-GPO -All | Where-Object` for pattern searches.
+- `Test-ADPAGPO` -- Validates that a named GPO exists, is enabled (not AllSettingsDisabled), and optionally contains expected registry settings and links. Registry settings are verified by parsing the GPO's XML report. Links are verified via `Get-GPInheritance`. Writes `[PASS]` / `[FAIL]` per check unless `-Quiet` is specified. Returns `[bool]`. Intended for use by other modules to verify their GPO is still in the expected state.
+- `New-ADPAGPO` -- Idempotently creates a GPO by name. If a GPO with the given name already exists, returns the existing object and writes an `[OK]` message without modifying anything. Supports `-WhatIf`. Returns the GPO object or `$null` on failure.
+- `Set-ADPAGPORegistrySetting` -- Applies a single registry-backed Administrative Template setting to a named GPO via `Set-GPRegistryValue`. Accepts `-Key`, `-ValueName`, `-Type` (String/ExpandString/Binary/DWord/MultiString/QWord), and `-Value`. Supports `-WhatIf` and `-Confirm`.
+- `Remove-ADPAGPORegistrySetting` -- Removes a specific registry-backed setting from a named GPO via `Remove-GPRegistryValue`. Idempotent -- returns `$true` if the setting is absent after the call. Treats "value not found" errors from the cmdlet as success. Supports `-WhatIf` and `-Confirm`.
+- `Add-ADPAGPOLink` -- Links a GPO to an OU, domain, or site. Validates the target distinguished name exists in Active Directory before linking. Idempotent -- if the link already exists, calls `Set-GPLink` to enforce the desired `LinkEnabled` and `Enforced` state. Supports `-WhatIf` and `-Confirm`.
+- `Remove-ADPAGPOLink` -- Removes a GPO link from a target without deleting the GPO. Idempotent -- returns `$true` if the link is absent after the call. Supports `-WhatIf` and `-Confirm`.
+- `Set-ADPAGPOPermission` -- Configures a security filtering entry on a named GPO via `Set-GPPermission`. Accepts `-TargetName`, `-TargetType` (User/Computer/Group), and `-PermissionLevel` (GpoRead/GpoApply/GpoEdit/GpoEditDeleteModifySecurity/None). Supports `-WhatIf` and `-Confirm`.
+- `Export-ADPAGPOReport` -- Generates HTML and/or XML audit reports for a named GPO via `Get-GPOReport`. Saves files to `$global:ReportsPath` with a sanitized GPO name and timestamp in the filename. Returns a `[PSCustomObject]` with `HtmlPath` and `XmlPath` properties.
+- `Remove-ADPAGPO` -- Deletes a GPO using a multi-step safe workflow: verifies the GPO exists, counts and displays all active links, refuses to delete a linked GPO unless `-RemoveLinks` is specified, exports reports when `-ExportBeforeDelete` is set or when the GPO has active links, removes links if `-RemoveLinks` is specified, then deletes after explicit confirmation. Supports `-WhatIf` and `-Confirm` with `ConfirmImpact=High`.
+- `Install-ADPAGPOBaseline` -- Primary inter-module API. Accepts a declarative `$GpoDefinition` hashtable (Name, Description, Links, Permissions, RegistrySettings) and idempotently creates, configures, and links the described GPO by orchestrating `New-ADPAGPO`, `Set-ADPAGPORegistrySetting`, `Set-ADPAGPOPermission`, and `Add-ADPAGPOLink`. Returns a structured result object with GpoName, Exists, Created, Modified, Linked, Links, Status, and Errors fields. The caller determines all GPO content; this module makes no policy decisions. Supports `-WhatIf`.
+- `Remove-ADPAGPOBaseline` -- Removes a GPO that was deployed from a definition hashtable by extracting `Name` from the definition and delegating to `Remove-ADPAGPO`. Supports `-RemoveLinks`, `-WhatIf`, and `-Confirm`.
+- `Search-ADPAGPOSetting` -- Scans all GPOs in the domain for a specific registry key and optional value name by parsing each GPO's XML report. Accepts `-Key`, `-ValueName`, `-ExpectedValue`, and `-Force` (suppresses progress output for programmatic use). Returns an array of result objects (GpoName, GpoId, Key, ValueName, ActualValue, Matches). Used by other modules to detect existing policies before deploying a new GPO for the same setting, preventing duplicate or conflicting configurations.
+
+**Why it was built:**
+Multiple planned AD-PowerAdmin security features require Group Policy as their enforcement mechanism. Without a shared module, each feature would implement its own GPO creation, configuration, and lifecycle management -- fragmenting maintenance and making it impossible to detect when two modules create conflicting GPOs targeting the same registry keys on overlapping OUs. The GPOMgr module centralizes GPO mechanics into a single tested infrastructure layer and provides a declarative API (`Install-ADPAGPOBaseline`) that consuming modules call instead of reimplementing GPO plumbing. The module is intentionally neutral: it enforces no naming conventions and defines no security standards. Policy decisions belong entirely to the modules that use this infrastructure.
+
+**Impact:**
+- Establishes `Install-ADPAGPOBaseline` and `Search-ADPAGPOSetting` as the shared GPO infrastructure API for all future modules requiring GPO deployment.
+- No interactive menu entries, no unattended jobs, and no changes to `AD-PowerAdmin_settings.ps1`.
+
+---
+
 ### Modules/AD-PowerAdmin_Honeypot.psm1 and AD-PowerAdmin_Honeypot.psd1 -- New Module
 
 **Added:**
@@ -39,6 +66,50 @@ Password spraying against Active Directory is a leading initial-access technique
 - Adds the HoneypotHourlyMonitor unattended job to $global:UnattendedJobs.
 - Adds four new configuration variables to AD-PowerAdmin_settings.ps1: $global:HoneypotAudit, $global:HoneypotUsername, $global:HoneypotDenyGroup, $global:HoneypotOU.
 - Creates a Windows scheduled task named AD-PowerAdmin_HoneypotMonitor when installed.
+
+---
+
+### Modules/AD-PowerAdmin_Honeypot.psm1 -- GPO Automation Enhancement
+
+**Changed:**
+- `Install-HoneypotAccount` -- The provisioning wizard now automatically creates, configures, and links the deny-logon GPO (`AD-PowerAdmin_HoneypotDenyLogon`) to the domain root as step 6 of the wizard. The previous manual GPO configuration instruction block displayed after provisioning has been removed. The post-completion message now states that Group Policy propagation typically takes 5-10 minutes rather than directing the administrator to configure a GPO manually.
+- `Test-HoneytokenUserSafety` -- Added two new safety checks: GPO existence (verifies `AD-PowerAdmin_HoneypotDenyLogon` is present in the domain) and domain-root link validation (verifies the GPO is actively linked to the domain root). Both checks write `[OK]` or `[FAIL]` with explanatory messages. Either failure sets `$AllPassed = $false` and contributes to the overall RESULT.
+- `Remove-HoneypotAccount` -- Added Step 6 (optional GPO removal) between the deny-logon group cleanup and the settings-clear step. If the GPO `AD-PowerAdmin_HoneypotDenyLogon` exists, the administrator is offered the option to remove it; otherwise the step is skipped with an informational message. The original settings-clear step is now Step 7. The `.DESCRIPTION` docblock is updated to reflect seven steps.
+- `New-HoneytokenUser` -- Removed the block of Yellow-colored output lines that displayed manual GPO configuration guidance. This guidance is now obsolete because the wizard automates GPO creation.
+
+**Added (private helpers):**
+- `Get-HoneypotGPOName` -- Returns the fixed GPO name `'AD-PowerAdmin_HoneypotDenyLogon'` used consistently by all GPO-related functions.
+- `Set-HoneypotGPOUserRights` -- Writes the five deny-logon Privilege Rights (`SeDenyInteractiveLogonRight`, `SeDenyRemoteInteractiveLogonRight`, `SeDenyBatchLogonRight`, `SeDenyServiceLogonRight`, `SeDenyNetworkLogonRight`) for a given group SID directly into the GPO's `GptTmpl.inf` in SYSVOL as UTF-16 LE. Also increments the computer-policy version in `GPT.INI` (low 16 bits of the 32-bit version counter) and updates the GPO's AD object (`versionNumber` and `gPCMachineExtensionNames`) to register the Security Settings CSE GUID `{827D319E-6EAC-11D2-A4EA-00C04F79F83A}` with tool `{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}` so domain clients recognize and apply the change.
+- `Install-HoneypotGPO` -- Orchestrates GPO deployment: calls `Install-ADPAGPOBaseline` from the GPOMgr module to create and link the GPO, retrieves the GPO GUID via `Get-GPO`, and delegates to `Set-HoneypotGPOUserRights` to write the Privilege Rights into SYSVOL.
+- `Remove-HoneypotGPO` -- Calls `Remove-ADPAGPO -RemoveLinks` to delete the honeytoken GPO and all its links. Idempotent -- writes an informational message if the GPO is already absent.
+
+**Why this changed:**
+The original installation required administrators to manually create a GPO and configure five User Rights Assignments for the deny-logon group. This manual step was error-prone, frequently skipped during testing, and undermined the goal of a single-wizard deployment. The deny-logon restriction is the safety mechanism that prevents the honeytoken account from being used even if the password is guessed; without it, a successful credential guess could result in an actual compromise. Automating the GPO ensures the restriction is always in place and consistent.
+
+**Impact:**
+- The installation wizard is now fully automated: no post-wizard manual steps are required.
+- `Test-HoneytokenUserSafety` now reports on GPO health in addition to account attributes, providing a complete picture of the detection configuration.
+- The removal workflow now offers GPO cleanup, preventing orphaned GPOs from accumulating in environments where the honeytoken is reinstalled with a different deny-group name.
+- The GPOMgr module (`Install-ADPAGPOBaseline`, `Find-ADPAGPO`, `Remove-ADPAGPO`, `Test-ADPAGPO`) is now a runtime dependency of the Honeypot module; both modules must be present in `Modules/` for the Honeypot module to function.
+
+---
+
+### Modules/AD-PowerAdmin_Honeypot.psm1 and AD-PowerAdmin_settings.ps1 -- Configurable Monitor Interval
+
+**Added:**
+- `$global:HoneypotMonitorIntervalMinutes` (settings file) -- New integer variable that controls both how often the honeytoken monitor scheduled task fires and how far back the Security log search looks. The lookback window is this value plus one additional minute to prevent timing gaps between consecutive executions. Default is 60 (minutes). Example: setting 15 runs the task every 15 minutes and reviews the past 16 minutes of logs.
+
+**Changed:**
+- `New-HoneypotScheduledTask` -- The task repetition interval is now read from `$global:HoneypotMonitorIntervalMinutes` (falling back to 60 if the value is absent or zero) rather than being hardcoded to 1 hour. The trigger's first-run time is set to now plus one interval rather than snapping to the next whole hour, ensuring the task fires promptly regardless of the configured interval. Task description and success message now report the actual interval value.
+- `Start-HoneypotMonitor` -- The lookback window (`$StartTime`) is now `$global:HoneypotMonitorIntervalMinutes + 1` minutes rather than a fixed 1 hour. Log messages report the actual lookback duration.
+
+**Why this changed:**
+A 60-minute detection window is adequate for overnight monitoring but too coarse for high-security environments where a password spray could produce dozens of attempts within a few minutes. Configuring a 15-minute interval reduces the maximum time between an event occurring and the administrator receiving an alert from up to 60 minutes to up to 15 minutes. The one-minute buffer prevents the gap that would otherwise exist if a task runs at exactly the same second each cycle and the prior cycle missed events logged in the final second of its window.
+
+**Impact:**
+- Environments that do not change the setting retain the existing 60-minute behavior; no operational change.
+- Setting `$global:HoneypotMonitorIntervalMinutes = 15` and re-running the install wizard (which recreates the scheduled task) applies the new interval immediately.
+- The setting does not affect `Show-HoneypotReport`; that function always prompts for an explicit time range.
 
 ---
 

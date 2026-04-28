@@ -304,10 +304,20 @@
 ##############################################################################################
 # Honeytoken Account Settings
 # -------------------[Optional]------------------- #
-# Enable the hourly unattended honeytoken authentication event monitor.
+# Enable the unattended honeytoken authentication event monitor.
 # Set to $true automatically when the honeypot install wizard completes.
 # Set to $false to disable monitoring without removing the account.
 [bool]$global:HoneypotAudit = $true
+
+# -------------------[Optional]------------------- #
+# How often (in minutes) the honeytoken monitor scheduled task runs.
+# This value also controls how far back the Security log search looks:
+# the lookback window is this value plus one additional minute to prevent
+# timing gaps between consecutive task executions.
+# Example: 15 means the task runs every 15 minutes and reviews the past 16 minutes.
+# Example: 60 means the task runs every 60 minutes and reviews the past 61 minutes.
+# Default is 60 minutes.
+[int]$global:HoneypotMonitorIntervalMinutes = 15
 
 # The sAMAccountName of the configured honeytoken user account.
 # Set automatically by the honeypot install wizard. Do not edit manually.

@@ -274,27 +274,20 @@ Function New-HoneytokenUser {
         }
     }
 
-    Write-Host "" -ForegroundColor White
-    Write-Host "  IMPORTANT: Group Policy must be configured manually for '$DenyGroupName'." -ForegroundColor Yellow
-    Write-Host "  Assign the following GPO User Rights Assignments to '$DenyGroupName':" -ForegroundColor Yellow
-    Write-Host "    - Deny log on locally" -ForegroundColor Yellow
-    Write-Host "    - Deny log on through Remote Desktop Services" -ForegroundColor Yellow
-    Write-Host "    - Deny log on as a batch job" -ForegroundColor Yellow
-    Write-Host "    - Deny log on as a service" -ForegroundColor Yellow
-    Write-Host "    - Deny access to this computer from the network" -ForegroundColor Yellow
-    Write-Host "" -ForegroundColor White
-
     return $true
 }
 
 Function New-HoneypotScheduledTask {
-    # Creates a Windows scheduled task that runs the honeytoken hourly monitor via AD-PowerAdmin.
+    # Creates a Windows scheduled task that runs the honeytoken monitor via AD-PowerAdmin.
+    # The repetition interval is driven by $global:HoneypotMonitorIntervalMinutes.
     param(
         [Parameter(Mandatory=$true)][string]$ScriptPath
     )
 
+    [int]$IntervalMinutes = if ($global:HoneypotMonitorIntervalMinutes -gt 0) { $global:HoneypotMonitorIntervalMinutes } else { 60 }
+
     [string]$TaskName = 'AD-PowerAdmin_HoneypotMonitor'
-    [string]$TaskDesc = 'AD-PowerAdmin: Hourly honeytoken authentication event monitor. Detects password spray and unauthorized access attempts against the configured honeytoken account.'
+    [string]$TaskDesc = "AD-PowerAdmin: Honeytoken authentication event monitor (every $IntervalMinutes min). Detects password spray and unauthorized access attempts against the configured honeytoken account."
 
     # Remove the task if it already exists so we can recreate it cleanly.
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
@@ -302,9 +295,9 @@ Function New-HoneypotScheduledTask {
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     }
 
-    # Trigger: start at the next whole hour, repeat every hour indefinitely.
-    $NextHour = (Get-Date).Date.AddHours(([int](Get-Date).Hour) + 1)
-    $Trigger  = New-ScheduledTaskTrigger -Once -At $NextHour -RepetitionInterval (New-TimeSpan -Hours 1)
+    # First run is one interval from now; then repeats every interval indefinitely.
+    $FirstRun = (Get-Date).AddMinutes($IntervalMinutes)
+    $Trigger  = New-ScheduledTaskTrigger -Once -At $FirstRun -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
 
     $Action = New-ScheduledTaskAction `
         -Execute 'PowerShell.exe' `
@@ -333,7 +326,7 @@ Function New-HoneypotScheduledTask {
                                -Description $TaskDesc | Out-Null
 
         if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-            Write-Host "  [OK] Hourly scheduled task '$TaskName' created (first run at $NextHour)." -ForegroundColor Green
+            Write-Host "  [OK] Scheduled task '$TaskName' created (every $IntervalMinutes min, first run at $FirstRun)." -ForegroundColor Green
         } else {
             Write-Host "  [FAIL] Scheduled task creation failed." -ForegroundColor Red
         }
@@ -359,9 +352,9 @@ Function Set-HoneypotSettings {
     # This is called only during install and removal -- not during normal operation.
     param(
         [Parameter(Mandatory=$true)][bool]$Audit,
-        [Parameter(Mandatory=$true)][string]$Username,
-        [Parameter(Mandatory=$true)][string]$DenyGroup,
-        [Parameter(Mandatory=$true)][string]$OU
+        [Parameter(Mandatory=$true)][AllowEmptyString()][string]$Username,
+        [Parameter(Mandatory=$true)][AllowEmptyString()][string]$DenyGroup,
+        [Parameter(Mandatory=$true)][AllowEmptyString()][string]$OU
     )
 
     [string]$SettingsFile = "$global:ThisScriptDir\AD-PowerAdmin_settings.ps1"
@@ -390,6 +383,218 @@ Function Set-HoneypotSettings {
     Write-Host "  [OK] Honeytoken settings written to settings file." -ForegroundColor Green
 }
 
+Function Get-HoneypotGPOName {
+    # Returns the fixed GPO name used by the Honeypot module for the deny-logon policy.
+    return 'AD-PowerAdmin_HoneypotDenyLogon'
+}
+
+Function Set-HoneypotGPOUserRights {
+    # Writes the five deny-logon Privilege Rights for the specified group SID into the
+    # GPO's GptTmpl.inf in SYSVOL, then increments the GPT.INI version counter and
+    # updates the GPO's AD object so domain clients detect and apply the change.
+    param(
+        [Parameter(Mandatory=$true)][System.Guid]$GpoGuid,
+        [Parameter(Mandatory=$true)][string]$GroupSid
+    )
+
+    try {
+        $Domain = Get-ADDomain
+    } catch {
+        Write-Host "  [FAIL] Could not retrieve domain information: $_" -ForegroundColor Red
+        return $false
+    }
+
+    # Build SYSVOL paths from the GPO GUID.
+    [string]$GuidStr     = '{' + $GpoGuid.ToString().ToUpper() + '}'
+    [string]$SysvolBase  = "\\$($Domain.DNSRoot)\SYSVOL\$($Domain.DNSRoot)\Policies\$GuidStr"
+    [string]$GptTmplDir  = "$SysvolBase\Machine\Microsoft\Windows NT\SecEdit"
+    [string]$GptTmplPath = "$GptTmplDir\GptTmpl.inf"
+    [string]$GptIniPath  = "$SysvolBase\GPT.INI"
+
+    # Ensure the SecEdit directory exists in SYSVOL.
+    if (-not (Test-Path $GptTmplDir)) {
+        try {
+            New-Item -ItemType Directory -Path $GptTmplDir -Force | Out-Null
+            Write-Host "  [OK] Created SYSVOL SecEdit directory." -ForegroundColor Green
+        } catch {
+            Write-Host "  [FAIL] Could not create SYSVOL directory '$GptTmplDir': $_" -ForegroundColor Red
+            return $false
+        }
+    }
+
+    # Build the GptTmpl.inf content. The signature value '$CHICAGO$' cannot appear
+    # in a double-quoted string without variable expansion swallowing it; use a
+    # single-quoted intermediate variable so the here-string expands it correctly.
+    [string]$Sig = 'signature="$CHICAGO$"'
+    [string]$GptTmplContent = @"
+[Unicode]
+Unicode=yes
+[Version]
+$Sig
+Revision=1
+[Privilege Rights]
+SeDenyInteractiveLogonRight = *$GroupSid
+SeDenyRemoteInteractiveLogonRight = *$GroupSid
+SeDenyBatchLogonRight = *$GroupSid
+SeDenyServiceLogonRight = *$GroupSid
+SeDenyNetworkLogonRight = *$GroupSid
+"@
+
+    # Write as UTF-16 LE (required by the Windows Security Configuration Engine).
+    try {
+        [System.IO.File]::WriteAllText($GptTmplPath, $GptTmplContent, [System.Text.Encoding]::Unicode)
+        Write-Host "  [OK] Written GptTmpl.inf to SYSVOL." -ForegroundColor Green
+    } catch {
+        Write-Host "  [FAIL] Could not write GptTmpl.inf: $_" -ForegroundColor Red
+        return $false
+    }
+
+    # Read the current GPT.INI version counter.
+    # The 32-bit version has high 16 bits = user config version and low 16 bits = computer config version.
+    # Machine (computer) policy changes require incrementing the low 16 bits.
+    [int]$CurrentVersion = 0
+    try {
+        [string]$GptIniContent = Get-Content $GptIniPath -Raw -ErrorAction Stop
+        if ($GptIniContent -match 'Version=(\d+)') {
+            $CurrentVersion = [int]$Matches[1]
+        }
+    } catch {
+        Write-Host "  [WARN] Could not read GPT.INI (will create new version entry): $_" -ForegroundColor Yellow
+        [string]$GptIniContent = "[General]`r`nVersion=0`r`n"
+    }
+
+    [int]$UserVer    = ($CurrentVersion -shr 16) -band 0xFFFF
+    [int]$CompVer    = $CurrentVersion -band 0xFFFF
+    [int]$NewVersion = ($UserVer -shl 16) -bor ($CompVer + 1)
+
+    try {
+        [string]$UpdatedIni = $GptIniContent -replace 'Version=\d+', "Version=$NewVersion"
+        [System.IO.File]::WriteAllText($GptIniPath, $UpdatedIni, [System.Text.Encoding]::ASCII)
+        Write-Host "  [OK] GPT.INI version incremented ($CurrentVersion -> $NewVersion)." -ForegroundColor Green
+    } catch {
+        Write-Host "  [FAIL] Could not update GPT.INI: $_" -ForegroundColor Red
+        return $false
+    }
+
+    # Update the GPO's AD object: versionNumber and gPCMachineExtensionNames.
+    # Security Settings CSE GUID: {827D319E-6EAC-11D2-A4EA-00C04F79F83A}
+    # Associated tool GUID:       {803E14A0-B4FB-11D0-A0D0-00A0C90F574B}
+    try {
+        [string]$GpoDn  = "CN=$GuidStr,CN=Policies,CN=System,$($Domain.DistinguishedName)"
+        [string]$SecExt = '[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]'
+        $GpoAdObj       = Get-ADObject -Identity $GpoDn -Properties gPCMachineExtensionNames -ErrorAction Stop
+        [string]$ExistExt = $GpoAdObj.gPCMachineExtensionNames
+
+        if ([string]::IsNullOrWhiteSpace($ExistExt)) {
+            [string]$NewExts = $SecExt
+        } elseif ($ExistExt -notlike '*827D319E-6EAC-11D2-A4EA-00C04F79F83A*') {
+            [string]$NewExts = $ExistExt + $SecExt
+        } else {
+            [string]$NewExts = $ExistExt
+        }
+
+        Set-ADObject -Identity $GpoDn -Replace @{
+            versionNumber            = $NewVersion
+            gPCMachineExtensionNames = $NewExts
+        }
+        Write-Host "  [OK] GPO AD object updated (versionNumber, gPCMachineExtensionNames)." -ForegroundColor Green
+    } catch {
+        Write-Host "  [FAIL] Could not update GPO AD object: $_" -ForegroundColor Red
+        return $false
+    }
+
+    return $true
+}
+
+Function Install-HoneypotGPO {
+    # Creates the honeytoken deny-logon GPO via GPOMgr, links it to the domain root,
+    # and writes the Privilege Rights for the deny-logon group into SYSVOL GptTmpl.inf.
+    param(
+        [Parameter(Mandatory=$true)][string]$DenyGroupName
+    )
+
+    [string]$GpoName = Get-HoneypotGPOName
+
+    try {
+        $Domain = Get-ADDomain
+    } catch {
+        Write-Host "  [FAIL] Could not retrieve domain: $_" -ForegroundColor Red
+        return $false
+    }
+
+    # Resolve the deny-logon group SID for GptTmpl.inf privilege rights.
+    $DenyGroupObj = Get-ADGroup -Filter "Name -eq '$DenyGroupName'" -Properties SID -ErrorAction SilentlyContinue
+    if (-not $DenyGroupObj) {
+        Write-Host "  [FAIL] Deny-logon group '$DenyGroupName' not found. Create the group before installing the GPO." -ForegroundColor Red
+        return $false
+    }
+    [string]$GroupSid = $DenyGroupObj.SID.Value
+
+    Write-Host "  Creating GPO '$GpoName' ..." -ForegroundColor White
+
+    # Create and link the GPO using GPOMgr's Install-ADPAGPOBaseline.
+    $GpoDefinition = @{
+        Name        = $GpoName
+        Description = 'AD-PowerAdmin Honeypot Module: Denies all logon rights to the honeytoken deny-logon group. Managed by AD-PowerAdmin -- do not edit manually.'
+        Links       = @($Domain.DistinguishedName)
+    }
+
+    try {
+        $Result = Install-ADPAGPOBaseline -GpoDefinition $GpoDefinition
+    } catch {
+        Write-Host "  [FAIL] GPO baseline creation failed: $_" -ForegroundColor Red
+        return $false
+    }
+
+    # Verify the GPO exists regardless of whether it was newly created or already present.
+    $GpoCheck = Find-ADPAGPO -Name $GpoName
+    if ($GpoCheck.Count -eq 0) {
+        Write-Host "  [FAIL] GPO '$GpoName' was not found after creation attempt." -ForegroundColor Red
+        if ($Result -and $Result.Errors) { $Result.Errors | ForEach-Object { Write-Host "    $_" -ForegroundColor Red } }
+        return $false
+    }
+
+    Write-Host "  [OK] GPO '$GpoName' created and linked to domain root." -ForegroundColor Green
+
+    # Retrieve the GPO GUID for SYSVOL path construction.
+    try {
+        $GpoObj  = Get-GPO -Name $GpoName -ErrorAction Stop
+        $GpoGuid = $GpoObj.Id
+    } catch {
+        Write-Host "  [FAIL] Could not retrieve GPO GUID for '$GpoName': $_" -ForegroundColor Red
+        return $false
+    }
+
+    # Write the deny-logon Privilege Rights into SYSVOL GptTmpl.inf.
+    $RightsOk = Set-HoneypotGPOUserRights -GpoGuid $GpoGuid -GroupSid $GroupSid
+    if (-not $RightsOk) {
+        Write-Host "  [FAIL] Could not write User Rights Assignments to GptTmpl.inf." -ForegroundColor Red
+        return $false
+    }
+
+    Write-Host "  [OK] GPO '$GpoName' fully configured with deny-logon User Rights Assignments." -ForegroundColor Green
+    return $true
+}
+
+Function Remove-HoneypotGPO {
+    # Removes the honeytoken deny-logon GPO and all its scope-of-management links.
+    [string]$GpoName = Get-HoneypotGPOName
+
+    $Existing = Find-ADPAGPO -Name $GpoName
+    if ($Existing.Count -eq 0) {
+        Write-Host "  [INFO] GPO '$GpoName' not found (may already have been removed)." -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "  Removing GPO '$GpoName' ..." -ForegroundColor White
+    try {
+        Remove-ADPAGPO -Name $GpoName -RemoveLinks -Confirm:$false
+        Write-Host "  [OK] GPO '$GpoName' removed." -ForegroundColor Green
+    } catch {
+        Write-Host "  [FAIL] Could not remove GPO '$GpoName': $_" -ForegroundColor Red
+    }
+}
+
 # ===========================================================================
 # Public Functions (exported; called from menu/submenu or as unattended jobs)
 # ===========================================================================
@@ -412,12 +617,10 @@ Function Install-HoneypotAccount {
                PasswordNeverExpires, CannotChangePassword, long random password.
             4. Creates or validates the deny-logon security group and adds the account to it.
             5. Validates account safety (no privileged groups, no delegation).
-            6. Writes the configuration to AD-PowerAdmin_settings.ps1.
-            7. Creates an hourly Windows scheduled task to monitor Security logs.
-
-            GPO NOTE: The deny-logon group must be assigned the following GPO User Rights
-            manually after installation: Deny log on locally; Deny log on through RDS;
-            Deny log on as a batch job; Deny log on as a service; Deny network logon.
+            6. Creates and links the deny-logon GPO to the domain root and writes the
+               five deny-logon Privilege Rights for the deny-logon group into SYSVOL.
+            7. Writes the configuration to AD-PowerAdmin_settings.ps1.
+            8. Creates an hourly Windows scheduled task to monitor Security logs.
 
     .EXAMPLE
         Install-HoneypotAccount
@@ -548,6 +751,14 @@ Function Install-HoneypotAccount {
     Test-HoneytokenUserSafety -SamAccountName $ChosenProfile.SamAccountName
 
     Write-Host ''
+    Write-Host 'Creating deny-logon Group Policy Object ...' -ForegroundColor White
+    $GpoOk = Install-HoneypotGPO -DenyGroupName $DenyGroup
+    if (-not $GpoOk) {
+        Write-Host '[WARN] GPO creation failed. The account is provisioned but deny-logon policy was not applied automatically.' -ForegroundColor Yellow
+        Write-Host '       Resolve the GPO error and re-run the install wizard, or configure the GPO manually.' -ForegroundColor Yellow
+    }
+
+    Write-Host ''
     Write-Host 'Writing configuration to settings file ...' -ForegroundColor White
     Set-HoneypotSettings -Audit $true -Username $ChosenProfile.SamAccountName -DenyGroup $DenyGroup -OU $OuDn
 
@@ -560,8 +771,8 @@ Function Install-HoneypotAccount {
     Write-Host '  Honeytoken account provisioning complete.' -ForegroundColor Green
     Write-Host ('=' * 70) -ForegroundColor Green
     Write-Host ''
-    Write-Host 'Required follow-up:' -ForegroundColor Yellow
-    Write-Host "  1. Configure GPO User Rights Assignments for '$DenyGroup' (instructions above)." -ForegroundColor Yellow
+    Write-Host 'Recommended follow-up:' -ForegroundColor Yellow
+    Write-Host "  1. Allow 5-10 minutes for Group Policy to propagate to all domain controllers." -ForegroundColor Yellow
     Write-Host "  2. Confirm scheduled task 'AD-PowerAdmin_HoneypotMonitor' appears in Task Scheduler." -ForegroundColor Yellow
     Write-Host "  3. Run 'Verify Account Safety' from this menu to confirm the account is hardened." -ForegroundColor Yellow
     Write-Host ''
@@ -668,6 +879,23 @@ Function Test-HoneytokenUserSafety {
         Write-Host "  [WARN] Deny-logon group '$DenyGroup' not found. Run the install wizard to create it." -ForegroundColor Yellow
     }
 
+    # Deny-logon GPO existence and domain-root link check.
+    [string]$GpoName  = Get-HoneypotGPOName
+    $GpoFound         = Find-ADPAGPO -Name $GpoName
+    if ($GpoFound.Count -eq 0) {
+        Write-Host "  [FAIL] Deny-logon GPO '$GpoName' does not exist. Run the install wizard to create it." -ForegroundColor Red
+        $AllPassed = $false
+    } else {
+        [string]$DomainDn = (Get-ADDomain).DistinguishedName
+        [bool]$GpoLinked  = Test-ADPAGPO -Name $GpoName -Links @($DomainDn) -Quiet
+        if ($GpoLinked) {
+            Write-Host "  [OK]   Deny-logon GPO '$GpoName' exists and is linked to domain root." -ForegroundColor Green
+        } else {
+            Write-Host "  [FAIL] Deny-logon GPO '$GpoName' exists but is not linked to the domain root." -ForegroundColor Red
+            $AllPassed = $false
+        }
+    }
+
     # Privileged group membership.
     [string[]]$PrivGroups = @(
         'Domain Admins', 'Enterprise Admins', 'Schema Admins', 'Administrators',
@@ -738,17 +966,20 @@ Function Start-HoneypotMonitor {
         return
     }
 
-    [datetime]$StartTime = (Get-Date).AddHours(-1)
+    [int]$IntervalMinutes = if ($global:HoneypotMonitorIntervalMinutes -gt 0) { $global:HoneypotMonitorIntervalMinutes } else { 60 }
+    [int]$LookbackMinutes = $IntervalMinutes + 1
+
+    [datetime]$StartTime = (Get-Date).AddMinutes(-$LookbackMinutes)
     [datetime]$EndTime   = Get-Date
     [string]$ReportDate  = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     [string]$Username    = $global:HoneypotUsername
 
-    Write-Host "Honeytoken monitor: checking for activity against '$Username' since $StartTime" -ForegroundColor White
+    Write-Host "Honeytoken monitor: checking for activity against '$Username' since $StartTime (lookback: $LookbackMinutes min)" -ForegroundColor White
 
     $Events = Get-HoneypotEvents -StartTime $StartTime -EndTime $EndTime -Username $Username
 
     if (-not $Events -or $Events.Count -eq 0) {
-        Write-Host 'No honeytoken authentication events detected in the past hour.' -ForegroundColor Green
+        Write-Host "No honeytoken authentication events detected in the past $LookbackMinutes minutes." -ForegroundColor Green
         return
     }
 
@@ -933,7 +1164,8 @@ Function Remove-HoneypotAccount {
             Step 3: Disables the AD account.
             Step 4: Optionally deletes the account permanently (explicit confirmation required).
             Step 5: Optionally removes the deny-logon group if it has no remaining members.
-            Step 6: Clears the honeytoken configuration from AD-PowerAdmin_settings.ps1.
+            Step 6: Optionally removes the deny-logon GPO (AD-PowerAdmin_HoneypotDenyLogon).
+            Step 7: Clears the honeytoken configuration from AD-PowerAdmin_settings.ps1.
 
             Each destructive step is confirmed interactively before execution.
 
@@ -1050,8 +1282,24 @@ Function Remove-HoneypotAccount {
         Write-Host ''
     }
 
-    # Step 6: Clear settings.
-    Write-Host 'Step 6: Clearing honeytoken configuration from settings file ...' -ForegroundColor White
+    # Step 6: Optional GPO removal.
+    Write-Host 'Step 6: Removing deny-logon Group Policy Object (optional).' -ForegroundColor White
+    [string]$HoneypotGpoName = Get-HoneypotGPOName
+    $GpoExists = Find-ADPAGPO -Name $HoneypotGpoName
+    if ($GpoExists.Count -gt 0) {
+        $RemoveGpo = Read-Host "  Remove GPO '$HoneypotGpoName'? (y/N)"
+        if ($RemoveGpo -match '^[Yy]$') {
+            Remove-HoneypotGPO
+        } else {
+            Write-Host "  GPO '$HoneypotGpoName' left in place." -ForegroundColor White
+        }
+    } else {
+        Write-Host "  [INFO] GPO '$HoneypotGpoName' not found (may already have been removed)." -ForegroundColor Yellow
+    }
+    Write-Host ''
+
+    # Step 7: Clear settings.
+    Write-Host 'Step 7: Clearing honeytoken configuration from settings file ...' -ForegroundColor White
     Set-HoneypotSettings -Audit $false -Username '' -DenyGroup 'GG_Honeytoken_DenyLogon' -OU ''
 
     Write-Host ''
