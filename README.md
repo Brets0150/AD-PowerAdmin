@@ -20,7 +20,7 @@ Here is a quick list of features
 - Active Directory security best-practice audit: checks for common misconfigurations and weak settings across the domain.
 - Active Directory ACL audit: identifies high-risk Access Control Entries and accounts configured with DCSync delegation rights.
 - Active Directory object search: interactive lookup of users, computers, and other AD objects.
-- Download and manage the Have I Been Pwned NTLM password hash database used for breach detection, with automated install of the required .NET SDK and downloader tool. Supports both single-file and incremental directory modes; directory mode only re-downloads changed hash ranges, making weekly updates far more efficient than the full 70 GB dataset.
+- Download and manage the Have I Been Pwned NTLM password hash database used for breach detection. The downloader is embedded pure PowerShell 5.1 with no external tools or runtimes required. Supports both single-file and incremental directory modes; directory mode uses ETag-based comparison to only re-download changed hash ranges, making weekly updates far more efficient than the full 70 GB dataset.
 - Machine Account Quota audit: checks ms-DS-MachineAccountQuota, finds computer accounts created by non-admin users via ms-DS-CreatorSID, and flags computers with Resource-Based Constrained Delegation configured (msDS-AllowedToActOnBehalfOfOtherIdentity).
 - Machine Account Quota remediation: sets ms-DS-MachineAccountQuota to 0 to eliminate the attack surface for non-admin computer account creation.
 - Event log analysis: search for account lockout events (4740), view currently locked-out users with an unlock option, and search for failed logon events (4625).
