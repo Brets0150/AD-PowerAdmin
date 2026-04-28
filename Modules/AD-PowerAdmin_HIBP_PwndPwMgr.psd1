@@ -30,7 +30,7 @@
 
     # Description of the functionality provided by this module
     Description = @'
-    AD-PowerAdmin_HIBP_PwndPwMgr is a module that allows will install the Have I Been Pwned, Pwnded Password database downloader and keep that database up to date.
+    AD-PowerAdmin_HIBP_PwndPwMgr manages the Have I Been Pwned NTLM password hash database used by the AD password quality audit. It embeds a pure PowerShell 5.1 downloader with ETag-based incremental updates and parallel Start-Job workers -- no .NET SDK or external executables required.
 '@
 
     # Minimum version of the Windows PowerShell engine required by this module
@@ -72,14 +72,11 @@
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
     FunctionsToExport = @(
         'Initialize-Module',
+        'Start-HibpDownload',
         'Get-HibpPasswordHashesFiles',
         'Get-WeakPasswordsList',
-        'Install-HibpHashDownloader',
-        'Install-DotnetSdk',
-        'Test-DotnetInstalled',
         'Test-HibpToolsInstalled',
         'Uninstall-HibpTools',
-        'Uninstall-DotnetSdk',
         'Show-HibpTroubleshootingGuide'
     )
     # IF YOU DO NOT EXPORT THE FUNCTIONS, THEN THE FUNCTIONS WILL NOT BE AVAILABLE TO THE MAIN SCRIPT.
@@ -124,21 +121,35 @@
 
             # ReleaseNotes of this module
             ReleaseNotes = @'
+            v1.1 Beta:
+            - Architectural change: replaced .NET SDK + haveibeenpwned-downloader.exe toolchain
+              with an embedded pure PowerShell 5.1 downloader. No external installs required.
+            - Added Start-HibpDownload: full-featured NTLM hash downloader with ETag-based
+              incremental updates, parallel Start-Job workers, .part-file safety, and retry
+              logic. Supports both directory mode and single-file mode.
+            - Added 13 private helper functions adapted from Invoke-HibpPwnedPasswordsDownload
+              v3.4: Initialize-HibpTls12, Resolve-HibpLocalPath, ConvertTo-HibpPrefix,
+              Expand-HibpPrefixes, Get-HibpRangeUri, Get-HibpHeaderValue,
+              Invoke-HibpRangeDownload, Test-HibpRangeFile, Import-HibpManifest,
+              Export-HibpManifest, Split-HibpPrefixBuckets, Invoke-HibpDirectoryDownload,
+              Invoke-HibpSingleFileDownload.
+            - Removed Test-DotnetInstalled, Install-DotnetSdk, Install-HibpHashDownloader,
+              Uninstall-DotnetSdk (no longer applicable without the .NET toolchain).
+            - Changed Get-HibpPasswordHashesFiles: now a thin settings-aware wrapper around
+              Start-HibpDownload; reads global:NtlmHashDataDir to select directory vs
+              single-file mode; first-run detection via manifest presence.
+            - Changed Test-HibpToolsInstalled: now checks API reachability via HttpWebRequest
+              and whether local hash data has been downloaded.
+            - Changed Uninstall-HibpTools: removes .NET artifact cleanup; now deletes hash
+              data files only (file or directory per configured mode).
+            - Changed Show-HibpTroubleshootingGuide: rewritten for pure-PS architecture;
+              removed all .NET SDK content; added PS-native failure scenarios.
+            - Changed Initialize-Module: removed HibpInstall submenu item; updated labels
+              for HibpTest and HibpUninstall to reflect the new architecture.
             v1.0 Beta:
             - Rewrote Initialize-Module to register a single main-menu entry that opens a
-              reusable submenu via Enter-SubMenu (new framework-level function).
-            - Fixed Test-DotnetInstalled: corrected typo, replaced unreliable .Version check
-              with dotnet --version exit-code test, added local install-dir fallback.
-            - Fixed Install-DotnetSdk: PATH is now refreshed for the current session after
-              a local install so subsequent dotnet calls succeed immediately.
-            - Fixed Install-HibpHashDownloader: NuGet source add is skipped when already
-              registered; dotnet tool install exit-code 1 is ignored when the tool is
-              already installed.
-            - Fixed Get-HibpPasswordHashesFiles: corrected -n flag syntax (positional
-              outputFile now separate from -n boolean flag), changed download directory
-              to $global:ThisScriptDir so PasswordsCtl finds the file, added -o overwrite
-              flag, fixed working-directory save/restore, returns $true on success.
-            - Added Test-HibpToolsInstalled: pre-flight check for both dotnet and the exe.
+              reusable submenu via Enter-SubMenu.
+            - Added Test-HibpToolsInstalled: pre-flight check for dotnet and the exe.
             - Renamed Uninstall-DotNetSDK to Uninstall-DotnetSdk for naming consistency.
 '@
 

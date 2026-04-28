@@ -20,6 +20,50 @@
 
 ---
 
+### Modules/AD-PowerAdmin_HIBP_PwndPwMgr.psm1 and AD-PowerAdmin_HIBP_PwndPwMgr.psd1 -- Embedded Pure-PS Downloader
+
+**Architectural change:** Replaced the .NET SDK + `haveibeenpwned-downloader.exe` toolchain with a pure PowerShell 5.1 downloader embedded directly in the module. No external installs, no runtime dependencies, and no subprocess invocations.
+
+**Added:**
+- `Start-HibpDownload` -- Full-featured NTLM hash downloader. Supports directory mode (ETag-based incremental updates via ~1 million range files) and single-file mode (monolithic sorted flat file). Parallel `Start-Job` workers for concurrent range downloads; `.part`-file safety pattern; per-prefix retry logic with configurable count and timeout; failure log written to `$global:ReportsPath`. Parameters: `-OutputFile`, `-Parallelism` (0 = auto-detect), `-Overwrite`, `-Single`, `-Ntlm`, `-Update`, `-VerifyOnly`, `-Prefix`, `-RequestTimeoutSeconds`, `-Retries`, `-ContinueOnError`.
+- `Initialize-HibpTls12` (private) -- Forces TLS 1.2 for `System.Net.HttpWebRequest` in the current session.
+- `Resolve-HibpLocalPath` (private) -- Resolves PowerShell provider paths to filesystem absolute paths.
+- `ConvertTo-HibpPrefix` (private) -- Normalizes and validates a single 5-character hex prefix value.
+- `Expand-HibpPrefixes` (private) -- Expands a prefix list or range specifier to a full `[string[]]` of 5-character hex prefixes.
+- `Get-HibpRangeUri` (private) -- Builds the HIBP API URL for a given prefix and hash mode.
+- `Get-HibpHeaderValue` (private) -- Safely reads a single HTTP response header without throwing on missing keys.
+- `Invoke-HibpRangeDownload` (private) -- Downloads a single prefix range to a `.part` file with retry logic; renames to final filename only after validation succeeds.
+- `Test-HibpRangeFile` (private) -- Validates that a downloaded range file contains valid `SUFFIX:count` lines.
+- `Import-HibpManifest` (private) -- Reads the manifest TSV into a hashtable keyed by prefix, tracking ETag and modification timestamp per range.
+- `Export-HibpManifest` (private) -- Writes the manifest hashtable to TSV atomically via a `.part` file.
+- `Split-HibpPrefixBuckets` (private) -- Distributes a prefix list evenly across a set of parallel worker buckets.
+- `Invoke-HibpDirectoryDownload` (private) -- Orchestrates parallel `Start-Job` workers for directory mode; contains a self-contained `$workerScript` scriptblock that re-declares all required helpers with a `Local` suffix because `Start-Job` spawns new PS processes that do not inherit module functions.
+- `Invoke-HibpSingleFileDownload` (private) -- Sequential single-file download with a streaming `StreamWriter`; no parallel workers needed for monolithic output.
+
+**Removed:**
+- `Test-DotnetInstalled` -- No .NET runtime check needed; the downloader is pure PowerShell.
+- `Install-DotnetSdk` -- No .NET SDK installation required.
+- `Install-HibpHashDownloader` -- No external executable to install.
+- `Uninstall-DotnetSdk` -- No SDK to remove.
+
+**Changed:**
+- `Get-HibpPasswordHashesFiles` -- Rewritten as a thin settings-aware wrapper around `Start-HibpDownload`. Reads `$global:NtlmHashDataDir` to select directory vs single-file mode. Detects first run via manifest file presence. Passes `-ContinueOnError` and checks `$stats.Failed` to allow partial success on the ~1 million prefix download. Retains disk-space display and confirmation prompt. Calls `Get-WeakPasswordsList` after the hash download completes.
+- `Test-HibpToolsInstalled` -- Rewritten. Now performs an HTTP connectivity check against `api.pwnedpasswords.com/range/00000?mode=ntlm` via `HttpWebRequest` and reports whether local hash data (file or directory) has been downloaded. Returns `$true` if the API is reachable; data presence is informational.
+- `Uninstall-HibpTools` -- .NET artifact removal eliminated. Now identifies the configured hash data (file or directory), displays approximate size, prompts for confirmation, and deletes it.
+- `Show-HibpTroubleshootingGuide` -- Fully rewritten for the pure-PS architecture. All .NET SDK content removed. New sections: CloudFlare rate limiting, network timeout handling, partial-download resume, `.part`-file safety pattern, and single-file vs directory mode rationale.
+- `Initialize-Module` -- Removed `HibpInstall` submenu item. Updated `HibpTest` label to "Test HIBP Readiness". Updated `HibpUninstall` label to "Remove HIBP Hash Data". Submenu is now 5 items instead of 6.
+
+**Why it changed:**
+The prior architecture required a two-step install (dotnet SDK + tool install), created environment variable dependencies (`DOTNET_ROOT`, `PATH`), and used a subprocess call to invoke the downloader -- all sources of failure that appeared in routine use. The pure PowerShell replacement eliminates every external dependency. Because v3.4 of the research script uses `throw` instead of `exit`, its functions can be called directly in the current session without spawning a subprocess, which is required for embedding in a module. ETag-based incremental updates in directory mode are the primary operational improvement: after the ~70 GB first run, weekly refreshes download only changed ranges (typically a few hundred MB).
+
+**Impact:**
+- No .NET SDK or tool install step required before using the HIBP sub-menu.
+- `.gitignore` entries for `Modules/haveibeenpwned-downloader.exe`, `Modules/.dotnet`, and `Modules/.store` have been removed.
+- `FunctionsToExport` in the `.psd1` updated: removed `Install-HibpHashDownloader`, `Install-DotnetSdk`, `Test-DotnetInstalled`, `Uninstall-DotnetSdk`; added `Start-HibpDownload`.
+- No changes to `AD-PowerAdmin_settings.ps1` or the password audit module (`AD-PowerAdmin_PasswordsCtl`) are required.
+
+---
+
 ### Modules/AD-PowerAdmin_GPOMgr.psm1 and AD-PowerAdmin_GPOMgr.psd1 -- New Module
 
 **Added:**
