@@ -30,9 +30,9 @@ Function Initialize-Module {
                     Command = "Get-SysvolScriptInventory"
                 }
                 'SysvolSecrets' = @{
-                    Title   = "Secret Scan"
-                    Label   = "Scan SYSVOL and NETLOGON scripts for embedded credentials, plaintext passwords, API tokens, and dangerous execution patterns. Classifies findings as Critical or High risk."
-                    Command = "Search-SysvolSecrets"
+                    Title   = "Credential & Risk Pattern Scan"
+                    Label   = "Scan SYSVOL and NETLOGON scripts for embedded credentials (passwords, tokens, API keys) and high-risk execution patterns (IEX, encoded commands, WebClient downloads, RunAs). Classifies findings as Critical or High."
+                    Command = "Search-SysvolScriptRisks"
                 }
                 'SysvolGppCpassword' = @{
                     Title   = "GPP cpassword Scan"
@@ -187,16 +187,17 @@ Function Get-SysvolScriptInventory {
     return $Results
 }
 
-Function Search-SysvolSecrets {
+Function Search-SysvolScriptRisks {
     <#
     .SYNOPSIS
-    Scans SYSVOL and NETLOGON scripts for embedded credentials and dangerous execution patterns.
+    Scans SYSVOL and NETLOGON scripts for embedded credentials and high-risk execution patterns.
 
     .DESCRIPTION
-    === SYSVOL Secret Scan ===
+    === SYSVOL Credential & Risk Pattern Scan ===
         Searches all script and configuration files in SYSVOL and NETLOGON for patterns
-        associated with embedded credentials (passwords, tokens, API keys) and dangerous
-        execution behavior (ExecutionPolicy Bypass, IEX, WebClient downloads, encoded commands).
+        associated with embedded credentials (passwords, tokens, API keys) and high-risk
+        execution behavior (ExecutionPolicy Bypass, IEX, WebClient downloads, encoded commands,
+        RunAs, net use with credentials, SQL authentication flags).
 
         Critical patterns are matched using regex. High patterns are matched as literal strings.
         Findings are classified as Critical or High risk based on the matched pattern.
@@ -206,7 +207,7 @@ Function Search-SysvolSecrets {
         All matches are exported for human triage -- no automatic filtering is applied.
 
     .EXAMPLE
-    Search-SysvolSecrets
+    Search-SysvolScriptRisks
 
     .NOTES
     #>
@@ -215,7 +216,7 @@ Function Search-SysvolSecrets {
 
     $IsConsolidated = (-not [string]::IsNullOrWhiteSpace($ReportFile))
     if (-not $IsConsolidated) {
-        $ReportFile = "$global:ReportsPath\SysvolAudit-Secrets_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').txt"
+        $ReportFile = "$global:ReportsPath\SysvolAudit-ScriptRisks_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').txt"
         if (Test-Path -LiteralPath $ReportFile) { Remove-Item -LiteralPath $ReportFile -Force -ErrorAction SilentlyContinue }
     }
 
@@ -283,8 +284,8 @@ Function Search-SysvolSecrets {
     }
 
     if ($Results.Count -eq 0) {
-        Write-Host "[INFO] No credential or dangerous patterns found in SYSVOL or NETLOGON scripts."
-        Show-AuditReport -Data @() -Title "SYSVOL Secret Scan" `
+        Write-Host "[INFO] No credential or risk patterns found in SYSVOL or NETLOGON scripts."
+        Show-AuditReport -Data @() -Title "SYSVOL Credential & Risk Pattern Scan" `
             -HeaderFields @('FilePath','Location','LineNumber','MatchedPattern','RiskLevel') `
             -DetailFields @('LineContent') -OutputFile $ReportFile
         return $Results
@@ -292,10 +293,10 @@ Function Search-SysvolSecrets {
 
     $CritCount = @($Results | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
     $HighCount  = @($Results | Where-Object { $_.RiskLevel -eq 'High'     }).Count
-    Write-Host "[INFO] Secret scan complete. Critical: $CritCount  High: $HighCount"
+    Write-Host "[INFO] Credential & risk pattern scan complete. Critical: $CritCount  High: $HighCount"
     Write-Host "[NOTE] Review LineContent for each finding -- matches may include comments or documentation."
-    Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-Secrets" -Force:$Force
-    Show-AuditReport -Data $Results -Title "SYSVOL Secret Scan" `
+    Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-ScriptRisks" -Force:$Force
+    Show-AuditReport -Data $Results -Title "SYSVOL Credential & Risk Pattern Scan" `
         -HeaderFields @('FilePath','Location','LineNumber','MatchedPattern','RiskLevel') `
         -DetailFields @('LineContent') -OutputFile $ReportFile
     return $Results
@@ -498,6 +499,49 @@ Function Search-SysvolPermissions {
     return $Results
 }
 
+Function Get-DelegationExplanation {
+    # Private helper: builds VulnerabilityDetail, Impact, and Remediation text for a GPO delegation finding.
+    Param(
+        [string]$GpoName,
+        [string]$TrusteeName,
+        [string]$TrusteeType,
+        [string]$Permission,
+        [string]$LinkedToTier0,
+        [string]$GpoStatus
+    )
+
+    $PermDesc = switch ($Permission) {
+        'GpoEdit'                     { 'edit access (can modify all settings in the GPO: startup and logon script assignments, registry policy, security settings, software deployment packages, and administrative template values)' }
+        'GpoEditDeleteModifySecurity' { 'full delegated control (can edit, delete, and modify the security descriptor of the GPO itself, including adding or revoking other principals'' delegations)' }
+        'GpoCustom'                   { 'a non-standard custom permission set (the exact capabilities depend on the custom access mask; a custom delegation on a production GPO is itself anomalous and requires verification)' }
+        default                       { "$Permission access" }
+    }
+
+    $TierContext = switch ($LinkedToTier0) {
+        'Yes'     { "This GPO is linked to the Domain Controllers OU or the domain root. Changes take effect on Domain Controllers (DC OU link) or on all domain-joined computers and users (domain root link)." }
+        'No'      { "This GPO is not currently linked to the Domain Controllers OU or domain root. It applies to whatever OUs, sites, or domain scope it is linked to -- check the GPO''s Links tab in GPMC to determine scope." }
+        'Unknown' { "Whether this GPO is linked to the Domain Controllers OU or domain root could not be determined during this scan. Review the Links tab in GPMC." }
+        default   { "" }
+    }
+
+    $VulnerabilityDetail = "The identity '$TrusteeName' (type: $TrusteeType) holds $PermDesc on GPO '$GpoName' (GPO Status: $GpoStatus). '$TrusteeName' is outside the expected Tier-0 administrative set (Domain Admins, Enterprise Admins, SYSTEM, Group Policy Creator Owners, CREATOR OWNER). $TierContext Any account matching '$TrusteeName' can exercise this permission using GPMC or GroupPolicy PowerShell cmdlets without requiring Domain Admin rights."
+
+    $ImpactBase = "An attacker who compromises any account satisfying '$TrusteeName' can: add or replace startup and logon scripts to execute arbitrary code on every machine in this GPO's scope; modify registry policy to install persistence or disable endpoint controls; alter security policy (e.g., disable password complexity, audit logging, or firewall rules); or add a Software Installation package pointing to a malicious MSI file. "
+    $Impact = if ($LinkedToTier0 -eq 'Yes') {
+        $ImpactBase + "Because this GPO applies to Domain Controllers or the full domain, any GPO modification results in code execution in SYSTEM or Domain Admin context across the entire Active Directory environment. This is a direct, single-step path to full domain compromise."
+    } else {
+        $ImpactBase + "Startup script modifications execute as SYSTEM on affected computers at every boot. Logon script modifications execute in the authenticated user''s context at every logon. Either path enables credential harvesting, lateral movement, or privilege escalation against accounts that authenticate to systems in this GPO''s scope."
+    }
+
+    $Remediation = "1. Open Group Policy Management Console (gpmc.msc). 2. In the left pane, expand Group Policy Objects and select '$GpoName'. 3. Click the Delegation tab in the right pane. 4. Locate the row for '$TrusteeName'. 5. If this delegation has no documented business justification: click Remove to revoke it. 6. If delegation is legitimately required: click Edit Security and reduce the permission to Read only -- never GpoEdit or GpoEditDeleteModifySecurity for non-Tier-0 identities. 7. GPO edit rights should be held exclusively by Domain Admins or Group Policy Creator Owners. 8. After revoking, run 'gpresult /r' on affected systems to confirm expected policy still applies."
+
+    return @{
+        VulnerabilityDetail = $VulnerabilityDetail
+        Impact              = $Impact
+        Remediation         = $Remediation
+    }
+}
+
 Function Search-GpoDelegation {
     <#
     .SYNOPSIS
@@ -584,16 +628,23 @@ Function Search-GpoDelegation {
             } else { 'Unknown' }
             $RiskLevel = if ($LinkedToTier0 -eq 'Yes') { 'Critical' } else { 'High' }
 
+            $Expl = Get-DelegationExplanation -GpoName $Gpo.DisplayName -TrusteeName $TrusteeName `
+                -TrusteeType $Perm.Trustee.SidType.ToString() -Permission $Perm.Permission.ToString() `
+                -LinkedToTier0 $LinkedToTier0 -GpoStatus $Gpo.GpoStatus.ToString()
+
             $Results.Add([PSCustomObject]@{
-                GPOName       = $Gpo.DisplayName
-                GPOGuid       = $Gpo.Id.ToString()
-                GPOStatus     = $Gpo.GpoStatus.ToString()
-                Trustee       = $TrusteeName
-                TrusteeType   = $Perm.Trustee.SidType.ToString()
-                TrusteeSid    = $Perm.Trustee.Sid.ToString()
-                Permission    = $Perm.Permission.ToString()
-                LinkedToTier0 = $LinkedToTier0
-                RiskLevel     = $RiskLevel
+                GPOName             = $Gpo.DisplayName
+                GPOGuid             = $Gpo.Id.ToString()
+                GPOStatus           = $Gpo.GpoStatus.ToString()
+                Trustee             = $TrusteeName
+                TrusteeType         = $Perm.Trustee.SidType.ToString()
+                TrusteeSid          = $Perm.Trustee.Sid.ToString()
+                Permission          = $Perm.Permission.ToString()
+                LinkedToTier0       = $LinkedToTier0
+                RiskLevel           = $RiskLevel
+                VulnerabilityDetail = $Expl.VulnerabilityDetail
+                Impact              = $Expl.Impact
+                Remediation         = $Expl.Remediation
             })
         }
     }
@@ -601,8 +652,8 @@ Function Search-GpoDelegation {
     if ($Results.Count -eq 0) {
         Write-Host "[INFO] No excessive GPO delegation found."
         Show-AuditReport -Data @() -Title "GPO Delegation Audit" `
-            -HeaderFields @('GPOName','GPOStatus','Trustee','TrusteeType','Permission','LinkedToTier0') `
-            -OutputFile $ReportFile
+            -HeaderFields @('GPOName','GPOGuid','GPOStatus','Trustee','TrusteeType','Permission','LinkedToTier0') `
+            -DetailFields @('VulnerabilityDetail','Impact','Remediation') -OutputFile $ReportFile
         return $Results
     }
 
@@ -611,8 +662,8 @@ Function Search-GpoDelegation {
     Write-Host "[INFO] GPO delegation audit complete. Critical: $CritCount  High: $HighCount"
     Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-GpoDelegation" -Force:$Force
     Show-AuditReport -Data $Results -Title "GPO Delegation Audit" `
-        -HeaderFields @('GPOName','GPOStatus','Trustee','TrusteeType','Permission','LinkedToTier0') `
-        -OutputFile $ReportFile
+        -HeaderFields @('GPOName','GPOGuid','GPOStatus','Trustee','TrusteeType','Permission','LinkedToTier0') `
+        -DetailFields @('VulnerabilityDetail','Impact','Remediation') -OutputFile $ReportFile
     return $Results
 }
 
@@ -776,6 +827,10 @@ Function Search-GpoExternalScriptPaths {
                     elseif ($Line -match '\.exe') { $ScriptType = 'Executable' }
                     elseif ($Line -match '\.msi') { $ScriptType = 'Installer' }
 
+                    # Drive-map GPO settings use a path= XML attribute for the share path and carry no
+                    # script extension. Mounting a shared folder is not a script execution risk.
+                    if ($ScriptType -eq 'Unknown' -and ($Line -match 'path="\\\\' -or $Line -match "path='\\\\")) { return }
+
                     $UncMatch        = [regex]::Match($Line, '\\\\[^\s<>"]+')
                     $ReferencedShare = if ($UncMatch.Success) { $UncMatch.Value.TrimEnd('\') } else { '' }
 
@@ -799,19 +854,35 @@ Function Search-GpoExternalScriptPaths {
         }
     }
 
+    # Build a lookup map from each distinct UNC path back to the GPO(s) that reference it.
+    # Multiple GPOs can reference the same external path; all are recorded.
+    $PathToGpoMap = @{}
+    foreach ($Ref in $Results) {
+        $Key = $Ref.ReferencedShare.ToLower()
+        if ([string]::IsNullOrWhiteSpace($Key)) { continue }
+        if (-not $PathToGpoMap.ContainsKey($Key)) {
+            $PathToGpoMap[$Key] = [System.Collections.Generic.List[PSCustomObject]]::new()
+        }
+        $PathToGpoMap[$Key].Add([PSCustomObject]@{
+            GPOName    = $Ref.GPOName
+            GPOGuid    = $Ref.GPOGuid
+            ScriptType = $Ref.ScriptType
+        })
+    }
+
     $PermResults = [System.Collections.Generic.List[PSCustomObject]]::new()
 
     if ($Results.Count -eq 0) {
         Write-Host "[INFO] No external GPO script references found."
         Export-AdPowerAdminData -Data $Results     -ReportName "SysvolAudit-ExternalPaths"           -Force:$Force
-        Export-AdPowerAdminData -Data $PermResults -ReportName "SysvolAudit-ExternalPathPermissions" -Force:$Force
-        Show-AuditReport -Data $Results     -Title "External GPO Script Paths" `
-            -HeaderFields @('GPOName','ScriptType','ReferencedShare') `
+        Export-AdPowerAdminData -Data @()          -ReportName "SysvolAudit-ExternalPathPermissions" -Force:$Force
+        Show-AuditReport -Data $Results -Title "External GPO Script Paths" `
+            -HeaderFields @('GPOName','GPOGuid','ScriptType','ReferencedShare') `
             -DetailFields @('LineContent') -OutputFile $ReportFile
-        Show-AuditReport -Data $PermResults -Title "External Path Permissions" `
-            -HeaderFields @('ExternalPath','ObjectType','Identity','FileSystemRights','AccessControlType','Note') `
+        Show-AuditReport -Data @() -Title "External Path Permissions" `
+            -HeaderFields @('ExternalPath','ObjectType','IdentitiesAndRights','SourceGPOName','GPOSetting') `
             -DetailFields @('SecurityImpact','ExploitScenario','AccessRequired','LeastPrivDev') -OutputFile $ReportFile
-        return @{ PathRefs = $Results; PermFindings = $PermResults }
+        return @{ PathRefs = $Results; PermFindings = @() }
     }
 
     $HighCount   = @($Results | Where-Object { $_.RiskLevel -eq 'High'   }).Count
@@ -819,8 +890,8 @@ Function Search-GpoExternalScriptPaths {
     Write-Host "[INFO] External script path review complete. High: $HighCount (external server)  Medium: $MediumCount (domain share)"
     Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-ExternalPaths" -Force:$Force
 
-    # Evaluate ACLs on every discovered external path.
-    $ExecExts      = @('.ps1', '.bat', '.cmd', '.vbs', '.js', '.wsf', '.hta', '.exe', '.msi', '.dll', '.com')
+    # Evaluate ACLs on every distinct external path and record individual ACE rows.
+    $ExecExts        = @('.ps1', '.bat', '.cmd', '.vbs', '.js', '.wsf', '.hta', '.exe', '.msi', '.dll', '.com')
     $RiskyPrincipals = @('Everyone', 'Authenticated Users', 'Domain Users', 'Domain Computers', 'BUILTIN\Users')
     $RiskyRightsRx   = 'Write|Modify|FullControl|CreateFiles|CreateDirectories|ChangePermissions|TakeOwnership'
 
@@ -830,6 +901,12 @@ Function Search-GpoExternalScriptPaths {
         if ([string]::IsNullOrWhiteSpace($TargetPath)) { continue }
         if (-not $CheckedPaths.Add($TargetPath))       { continue }
 
+        # Resolve GPO traceability: which GPO(s) reference this path, and in what capacity.
+        $GpoRefs       = if ($PathToGpoMap.ContainsKey($TargetPath.ToLower())) { $PathToGpoMap[$TargetPath.ToLower()] } else { @() }
+        $SrcGpoName    = ($GpoRefs | ForEach-Object { $_.GPOName }    | Select-Object -Unique) -join '; '
+        $SrcGpoGuid    = ($GpoRefs | ForEach-Object { $_.GPOGuid }    | Select-Object -Unique) -join '; '
+        $SrcGpoSetting = ($GpoRefs | ForEach-Object { "$($_.ScriptType) Script Reference" } | Select-Object -Unique) -join ', '
+
         if (-not (Test-Path -LiteralPath $TargetPath -ErrorAction SilentlyContinue)) {
             $PermResults.Add([PSCustomObject]@{
                 ExternalPath      = $TargetPath
@@ -838,10 +915,13 @@ Function Search-GpoExternalScriptPaths {
                 FileSystemRights  = 'N/A'
                 AccessControlType = 'N/A'
                 RiskLevel         = 'Info'
-                SecurityImpact    = 'Path could not be reached. If the server is decommissioned, its DNS name may be re-registerable by an attacker (DNS tombstoning). Verify the referenced server is still active and the share is intentional.'
-                ExploitScenario   = 'If the DNS name of the referenced server is no longer registered, an attacker can register a machine with that hostname, host a malicious share at the expected path, and serve a malicious script to any GPO execution cycle that requests it.'
-                AccessRequired    = 'Ability to register a hostname matching the original server (requires a domain computer account or DNS record creation rights).'
-                LeastPrivDev      = 'GPO script paths should always resolve to active, monitored infrastructure. References to offline or decommissioned servers are an orphaned attack surface.'
+                SourceGPOName     = $SrcGpoName
+                SourceGPOGuid     = $SrcGpoGuid
+                GPOSetting        = $SrcGpoSetting
+                SecurityImpact    = 'Path could not be reached from the scanning host. If the server is decommissioned, its DNS name may be re-registerable by an attacker (DNS tombstoning), allowing them to host a malicious share at the expected path.'
+                ExploitScenario   = 'If the referenced server is offline or decommissioned, an attacker can register a new machine using the same hostname, host a share at the expected path, and serve a malicious script to any GPO execution cycle that requests it. The GPO has no way to verify that the server is the original legitimate host.'
+                AccessRequired    = 'Ability to register a DNS hostname matching the original server (requires a domain computer account or DNS record creation rights).'
+                LeastPrivDev      = 'GPO script paths should always resolve to active, monitored infrastructure. A reference to an offline or decommissioned server is an orphaned attack surface that bypasses all access control on the share because the original ACLs no longer exist.'
                 Note              = 'Path not reachable from this host'
             })
             continue
@@ -867,15 +947,15 @@ Function Search-GpoExternalScriptPaths {
             foreach ($P in $RiskyPrincipals) {
                 if ($Identity -like "*$P*") { $PrincipalMatch = $true; break }
             }
-            if (-not $PrincipalMatch)          { continue }
+            if (-not $PrincipalMatch)             { continue }
             if ($Rights -notmatch $RiskyRightsRx) { continue }
 
             if ($IsExec -and $IsFile -and ($Identity -like '*Everyone*' -or $Identity -like '*Authenticated Users*' -or $Identity -like '*Domain Users*')) {
-                $RiskLevel = 'Critical'
+                $AceRisk = 'Critical'
             } elseif ($IsExec -or (-not $IsFile)) {
-                $RiskLevel = 'High'
+                $AceRisk = 'High'
             } else {
-                $RiskLevel = 'Medium'
+                $AceRisk = 'Medium'
             }
 
             $Expl = Get-AceExplanation -TargetPath $TargetPath -ObjectType $ObjectType -IsExec $IsExec -Identity $Identity -Rights $Rights
@@ -886,7 +966,10 @@ Function Search-GpoExternalScriptPaths {
                 Identity          = $Identity
                 FileSystemRights  = $Rights
                 AccessControlType = $Ace.AccessControlType.ToString()
-                RiskLevel         = $RiskLevel
+                RiskLevel         = $AceRisk
+                SourceGPOName     = $SrcGpoName
+                SourceGPOGuid     = $SrcGpoGuid
+                GPOSetting        = $SrcGpoSetting
                 SecurityImpact    = $Expl.SecurityImpact
                 ExploitScenario   = $Expl.ExploitScenario
                 AccessRequired    = $Expl.AccessRequired
@@ -896,23 +979,52 @@ Function Search-GpoExternalScriptPaths {
         }
     }
 
-    if ($PermResults.Count -gt 0) {
-        $PermCritCount = @($PermResults | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
-        $PermHighCount = @($PermResults | Where-Object { $_.RiskLevel -eq 'High'     }).Count
-        Write-Host "[INFO] External path permission check complete. Critical: $PermCritCount  High: $PermHighCount"
+    # Consolidate individual ACE rows into one grouped record per path.
+    # The CSV export retains all individual ACE rows for forensic completeness.
+    # The terminal report shows the grouped view: each path once, with all identities summarised.
+    $SeverityOrder = @{ 'Critical' = 0; 'High' = 1; 'Medium' = 2; 'Info' = 3 }
+    $GroupedPermResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $PermResults | Group-Object -Property ExternalPath | ForEach-Object {
+        $Group    = $_.Group
+        $TopEntry = $Group | Sort-Object { $SeverityOrder[$_.RiskLevel] } | Select-Object -First 1
+        $IdentitySummary = ($Group | ForEach-Object {
+            "$($_.Identity): $($_.FileSystemRights) [$($_.RiskLevel)]"
+        }) -join ' | '
+        $GroupedPermResults.Add([PSCustomObject]@{
+            ExternalPath        = $_.Name
+            ObjectType          = $TopEntry.ObjectType
+            RiskLevel           = $TopEntry.RiskLevel
+            IdentitiesAndRights = $IdentitySummary
+            SourceGPOName       = $TopEntry.SourceGPOName
+            SourceGPOGuid       = $TopEntry.SourceGPOGuid
+            GPOSetting          = $TopEntry.GPOSetting
+            SecurityImpact      = $TopEntry.SecurityImpact
+            ExploitScenario     = $TopEntry.ExploitScenario
+            AccessRequired      = $TopEntry.AccessRequired
+            LeastPrivDev        = $TopEntry.LeastPrivDev
+            Note                = $TopEntry.Note
+        })
+    }
+
+    if ($GroupedPermResults.Count -gt 0) {
+        $PermCritCount = @($GroupedPermResults | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+        $PermHighCount = @($GroupedPermResults | Where-Object { $_.RiskLevel -eq 'High'     }).Count
+        Write-Host "[INFO] External path permission check complete. $PermCritCount Critical path(s), $PermHighCount High path(s)."
     } else {
         Write-Host "[INFO] External path permission check complete. No risky ACEs found."
     }
-    Export-AdPowerAdminData -Data $PermResults -ReportName "SysvolAudit-ExternalPathPermissions" -Force:$Force
+
+    # Export individual ACE rows to CSV (forensic record); grouped data used for terminal display.
+    Export-AdPowerAdminData -Data $PermResults        -ReportName "SysvolAudit-ExternalPathPermissions" -Force:$Force
 
     Show-AuditReport -Data $Results -Title "External GPO Script Paths" `
-        -HeaderFields @('GPOName','ScriptType','ReferencedShare') `
+        -HeaderFields @('GPOName','GPOGuid','ScriptType','ReferencedShare') `
         -DetailFields @('LineContent') -OutputFile $ReportFile
-    Show-AuditReport -Data $PermResults -Title "External Path Permissions" `
-        -HeaderFields @('ExternalPath','ObjectType','Identity','FileSystemRights','AccessControlType','Note') `
+    Show-AuditReport -Data $GroupedPermResults -Title "External Path Permissions" `
+        -HeaderFields @('ExternalPath','ObjectType','IdentitiesAndRights','SourceGPOName','SourceGPOGuid','GPOSetting','Note') `
         -DetailFields @('SecurityImpact','ExploitScenario','AccessRequired','LeastPrivDev') -OutputFile $ReportFile
 
-    return @{ PathRefs = $Results; PermFindings = $PermResults }
+    return @{ PathRefs = $Results; PermFindings = $GroupedPermResults }
 }
 
 Function Start-SysvolAudit {
@@ -955,7 +1067,7 @@ Function Start-SysvolAudit {
     Write-Host "========================================"
 
     $InventoryResults  = Get-SysvolScriptInventory     -Force -ReportFile $AuditReportFile
-    $SecretsResults    = Search-SysvolSecrets          -Force -ReportFile $AuditReportFile
+    $SecretsResults    = Search-SysvolScriptRisks       -Force -ReportFile $AuditReportFile
     $GppResults        = Search-SysvolGppCpassword     -Force -ReportFile $AuditReportFile
     $SysvolPermResults = Search-SysvolPermissions      -Force -ReportFile $AuditReportFile
     $GpoDelResults     = Search-GpoDelegation          -Force -ReportFile $AuditReportFile
@@ -984,7 +1096,7 @@ Function Start-SysvolAudit {
     Write-Host "[SYSVOL Audit Summary]"
     Write-Host "-------------------------------------------------------"
     Write-Host ("Script Inventory:        {0} files found"                          -f $InventoryCount)
-    Write-Host ("Secret Scan:             {0} Critical, {1} High"                  -f $SecretCrit, $SecretHigh)
+    Write-Host ("Credential & Risk Scan:  {0} Critical, {1} High"                  -f $SecretCrit, $SecretHigh)
     Write-Host ("GPP cpassword:           {0} Critical, {1} Info (empty)"          -f $GppCrit, $GppInfo)
     Write-Host ("Permission Scan:         {0} Critical, {1} High"                  -f $SysvolPermCrit, $SysvolPermHigh)
     Write-Host ("GPO Delegation:          {0} Critical, {1} High"                  -f $GpoDelCrit, $GpoDelHigh)
@@ -998,7 +1110,7 @@ Function Start-SysvolAudit {
     if (($TotalCritical -gt 0 -or $TotalHigh -gt 0) -and $global:ADAdminEmail) {
         $Body  = "AD-PowerAdmin SYSVOL Security Audit detected $TotalCritical Critical and $TotalHigh High finding(s).`r`n`r`n"
         $Body += "Script Inventory:        $InventoryCount files`r`n"
-        $Body += "Secret Scan:             $SecretCrit Critical, $SecretHigh High`r`n"
+        $Body += "Credential & Risk Scan:  $SecretCrit Critical, $SecretHigh High`r`n"
         $Body += "GPP cpassword:           $GppCrit Critical, $GppInfo Info (empty)`r`n"
         $Body += "Permission Scan:         $SysvolPermCrit Critical, $SysvolPermHigh High`r`n"
         $Body += "GPO Delegation:          $GpoDelCrit Critical, $GpoDelHigh High`r`n"
@@ -1017,7 +1129,7 @@ Function Start-SysvolAudit {
         "[SYSVOL Audit Summary]",
         "-------------------------------------------------------",
         ("Script Inventory:        {0} files found"             -f $InventoryCount),
-        ("Secret Scan:             {0} Critical, {1} High"      -f $SecretCrit, $SecretHigh),
+        ("Credential & Risk Scan:  {0} Critical, {1} High"      -f $SecretCrit, $SecretHigh),
         ("GPP cpassword:           {0} Critical, {1} Info"      -f $GppCrit, $GppInfo),
         ("Permission Scan:         {0} Critical, {1} High"      -f $SysvolPermCrit, $SysvolPermHigh),
         ("GPO Delegation:          {0} Critical, {1} High"      -f $GpoDelCrit, $GpoDelHigh),

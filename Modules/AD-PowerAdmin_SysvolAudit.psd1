@@ -8,7 +8,7 @@
     FunctionsToExport = @(
         'Initialize-Module',
         'Get-SysvolScriptInventory',
-        'Search-SysvolSecrets',
+        'Search-SysvolScriptRisks',
         'Search-SysvolGppCpassword',
         'Search-SysvolPermissions',
         'Search-GpoDelegation',
