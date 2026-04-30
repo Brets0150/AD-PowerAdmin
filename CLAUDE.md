@@ -638,7 +638,6 @@ The test for whether to abstract: if you copy-paste a block from one function to
 These are intentionally excluded:
 
 - `Reports/` -- runtime output, not source
-- `Modules/AD-PowerAdmin_HIBP_PwndPwMgr.*` -- Alpha, not ready
 - `Modules/AD-PowerAdmin_Azure.*` -- Alpha, not ready
 - `AD-PowerAdmin_Debug.log` -- debug transcript
 - `junk.ps1` -- scratch file

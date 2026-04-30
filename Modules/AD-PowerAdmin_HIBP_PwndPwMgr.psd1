@@ -11,7 +11,7 @@
     RootModule = 'AD-PowerAdmin_HIBP_PwndPwMgr.psm1'
 
     # Version number of this module.
-    ModuleVersion = '1.0'
+    ModuleVersion = '1.1'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -117,10 +117,13 @@
             # IconUri = ''
 
             # Channel: Alpha, Beta, Production
-            Channel = 'Beta'
+            Channel = 'Production'
 
             # ReleaseNotes of this module
             ReleaseNotes = @'
+            v1.1 Production:
+            - Promoted from Beta to Production. Pure PowerShell HIBP downloader validated
+              through real-world operation. No functional changes from v1.1 Beta.
             v1.1 Beta:
             - Architectural change: replaced .NET SDK + haveibeenpwned-downloader.exe toolchain
               with an embedded pure PowerShell 5.1 downloader. No external installs required.

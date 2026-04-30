@@ -7,6 +7,18 @@
 
 ---
 
+### Modules/AD-PowerAdmin_HIBP_PwndPwMgr.psd1 -- Promoted to Production
+
+**Changed:**
+- Module channel promoted from `Beta` to `Production`. The embedded pure PowerShell HIBP downloader has been exercised through real-world full and incremental downloads and is stable for production use.
+- `ModuleVersion` bumped from `1.0` to `1.1` to align the manifest version field with the v1.1 architectural release documented in the existing release notes.
+
+**Why it changed:** The v1.1 architecture replaced the previous .NET SDK + `haveibeenpwned-downloader.exe` toolchain with a fully self-contained pure PowerShell 5.1 implementation requiring no external installs or runtime dependencies. That implementation has been validated and there are no known issues. Promoting to Production makes it eligible for default installations and removes the Beta-channel caveat from operator tooling.
+
+**Impact:** The HIBP database management submenu is now Production-channel. The overall channel reported by `Get-ADPAVersion` will increase if this was the only non-Production module in the load set.
+
+---
+
 ### Modules/AD-PowerAdmin_Installer.psm1 and AD-PowerAdmin_Installer.psd1 -- Module Update Feature
 
 **Added:**
