@@ -168,6 +168,35 @@ A 60-minute detection window is adequate for overnight monitoring but too coarse
 
 ---
 
+### Modules/AD-PowerAdmin_SysvolAudit.psm1 -- External Path GPO Name and GUID Split
+
+**Fixed:**
+- `Search-GpoExternalScriptPaths` -- `$GpoMap` was declared as `@{}`, which uses a case-sensitive string comparer. On Windows, the path stored as a key (`$OutFile`) and the path returned by `Get-ChildItem` (`$XmlFile.FullName`) are identical in content but may differ in case depending on path resolution. This caused the lookup to silently return `$null`, triggering the fallback. The fallback set `SourceGPOName` to `$XmlFile.BaseName` (the raw filename, which includes both the GUID and sanitized display name as a single string) and `SourceGPOGuid` to an empty string. `Show-AuditReport` skips empty fields, so only "Source GPO" appeared in output showing the combined `{guid}_{name}` value rather than the two separate labeled lines the HeaderFields were designed to produce.
+- `Search-GpoExternalScriptPaths` -- Even when the lookup fails, the fallback now correctly parses `SourceGPOName` and `SourceGPOGuid` as separate values from the filename (format: `{guid}_{safename}`), so both fields are populated and display on separate lines in all cases.
+
+**Changed:**
+- `$GpoMap` declaration changed from `@{}` to `[System.Collections.Hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)` to prevent case-mismatch lookup failures.
+- Fallback parsing now uses the regex `^([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})_(.+)$` to extract the GUID (group 1) and sanitized display name (group 2) separately from the filename, rather than using the full basename as a single string.
+
+**Impact:** The terminal report now shows GPO Name and GPO GUID on separate labeled lines (`Source GPO` and `Source GPO GUID`) for every external path finding, both when the GpoMap lookup succeeds and when it falls back to filename parsing.
+
+---
+
+### Modules/AD-PowerAdmin_SysvolAudit.psm1 -- GpoCustom False-Positive Filter and Display Fix
+
+**Fixed:**
+- `Search-GpoDelegation` -- `CustomRights` field was absent from the `Show-AuditReport` call on the results path. The field was correctly added to the empty-results path in a prior change but was omitted from the matching call that renders actual findings. Result: the resolved raw AD rights were never displayed in the terminal report even when findings were present.
+- `Search-GpoDelegation` -- `GpoCustom` findings were not filtered by the resolved rights level. A trustee holding only `ReadProperty`/`ReadControl`/`ListChildren` (the standard read-only delegation used for deny-apply targeting) resolved as `GpoCustom` and was flagged High. Read-only `GpoCustom` ACEs are not delegation risks; only write-level ACEs (`WriteProperty`, `CreateChild`, `DeleteChild`, `DeleteTree`, `GenericAll`, `GenericWrite`) represent exploitable permissions.
+
+**Changed:**
+- `Search-GpoDelegation` -- After `Get-GpoCustomRights` resolves the raw rights for a `GpoCustom` finding, the code now checks whether any write-level indicator appears in the resolved string. If resolution succeeded and no write-level right is present, the finding is skipped. If resolution failed (diagnostic message returned), the finding is retained because the risk level cannot be determined. If write-level rights are confirmed, the finding is retained as before.
+
+**Why it changed:** Testing revealed that a security group holding "Read + Deny Apply Group Policy" on a GPO -- a standard exclusion pattern used to prevent a GPO from applying to specific users or computers -- produced a spurious High finding. The group's permission did not map to a standard GPMC level and was therefore classified `GpoCustom`, but its actual AD rights were entirely read-level. The filter eliminates this category of false positive without masking genuinely dangerous custom delegations.
+
+**Impact:** Legitimate read-only `GpoCustom` ACEs (deny-apply targeting, WMI filter evaluation) no longer appear as delegation findings. Write-level `GpoCustom` ACEs continue to be flagged. When the `CustomRights` field could not be resolved, the finding is still reported so it can be investigated manually.
+
+---
+
 ### Modules/AD-PowerAdmin_SysvolAudit.psm1 -- Email Alerts Removed
 
 **Removed:**

@@ -479,27 +479,49 @@ SeDenyNetworkLogonRight = *$GroupSid
     # Update the GPO's AD object: versionNumber and gPCMachineExtensionNames.
     # Security Settings CSE GUID: {827D319E-6EAC-11D2-A4EA-00C04F79F83A}
     # Associated tool GUID:       {803E14A0-B4FB-11D0-A0D0-00A0C90F574B}
+    #
+    # Search by displayName rather than constructing the DN from the GUID string.
+    # AD may store the GPO CN with a different GUID casing than $GpoGuid.ToString() produces,
+    # and a mismatched DN causes "Directory object not found" even when the object exists.
+    [string]$GpoDisplayName = Get-HoneypotGPOName
+    [string]$PoliciesBase   = "CN=Policies,CN=System,$($Domain.DistinguishedName)"
+    [string]$SecExt         = '[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]'
+
     try {
-        [string]$GpoDn  = "CN=$GuidStr,CN=Policies,CN=System,$($Domain.DistinguishedName)"
-        [string]$SecExt = '[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]'
-        $GpoAdObj       = Get-ADObject -Identity $GpoDn -Properties gPCMachineExtensionNames -ErrorAction Stop
-        [string]$ExistExt = $GpoAdObj.gPCMachineExtensionNames
+        $GpoAdObj = Get-ADObject `
+            -LDAPFilter "(&(objectClass=groupPolicyContainer)(displayName=$GpoDisplayName))" `
+            -SearchBase $PoliciesBase `
+            -Properties gPCMachineExtensionNames `
+            -ErrorAction Stop
+    } catch {
+        Write-Host "  [FAIL] Error searching for GPO AD object: $_" -ForegroundColor Red
+        return $false
+    }
 
-        if ([string]::IsNullOrWhiteSpace($ExistExt)) {
-            [string]$NewExts = $SecExt
-        } elseif ($ExistExt -notlike '*827D319E-6EAC-11D2-A4EA-00C04F79F83A*') {
-            [string]$NewExts = $ExistExt + $SecExt
-        } else {
-            [string]$NewExts = $ExistExt
-        }
+    if (-not $GpoAdObj) {
+        Write-Host "  [FAIL] Could not locate GPO AD object for '$GpoDisplayName' in $PoliciesBase." -ForegroundColor Red
+        return $false
+    }
 
+    [string]$GpoDn    = $GpoAdObj.DistinguishedName
+    [string]$ExistExt = $GpoAdObj.gPCMachineExtensionNames
+
+    if ([string]::IsNullOrWhiteSpace($ExistExt)) {
+        [string]$NewExts = $SecExt
+    } elseif ($ExistExt -notlike '*827D319E-6EAC-11D2-A4EA-00C04F79F83A*') {
+        [string]$NewExts = $ExistExt + $SecExt
+    } else {
+        [string]$NewExts = $ExistExt
+    }
+
+    try {
         Set-ADObject -Identity $GpoDn -Replace @{
             versionNumber            = $NewVersion
             gPCMachineExtensionNames = $NewExts
         }
         Write-Host "  [OK] GPO AD object updated (versionNumber, gPCMachineExtensionNames)." -ForegroundColor Green
     } catch {
-        Write-Host "  [FAIL] Could not update GPO AD object: $_" -ForegroundColor Red
+        Write-Host "  [FAIL] Could not update GPO AD object '$GpoDn': $_" -ForegroundColor Red
         return $false
     }
 

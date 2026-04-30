@@ -700,12 +700,20 @@ Function Search-GpoDelegation {
             $RiskLevel = if ($LinkedToTier0 -eq 'Yes') { 'Critical' } else { 'High' }
 
             # For GpoCustom, resolve the actual raw AD rights before building the explanation.
+            # If resolution succeeds and no write-level rights are present, this is a read-only
+            # or deny-only ACE (e.g., Deny Apply Group Policy used for targeting exclusions) and
+            # is not a delegation risk -- skip it. Only flag when write-level rights are confirmed
+            # or when the resolution itself failed (unknown risk is treated as risky).
             $CustomRights = ''
             if ($Perm.Permission.ToString() -eq 'GpoCustom') {
                 $CustomRights = Get-GpoCustomRights -GpoId $Gpo.Id `
                     -TrusteeSid $Perm.Trustee.Sid.ToString() `
                     -TrusteeName $TrusteeName `
                     -DomainDn $DomainDn
+
+                $ResolutionSucceeded = $CustomRights -notmatch '^\('
+                $HasWriteAccess      = $CustomRights -match 'Write|CreateChild|DeleteChild|DeleteTree|GenericAll|GenericWrite'
+                if ($ResolutionSucceeded -and -not $HasWriteAccess) { continue }
             }
 
             $Expl = Get-DelegationExplanation -GpoName $Gpo.DisplayName -TrusteeName $TrusteeName `
@@ -744,7 +752,7 @@ Function Search-GpoDelegation {
     Write-Host "[INFO] GPO delegation audit complete. Critical: $CritCount  High: $HighCount"
     Export-AdPowerAdminData -Data $Results -ReportName "SysvolAudit-GpoDelegation" -Force:$Force
     Show-AuditReport -Data $Results -Title "GPO Delegation Audit" `
-        -HeaderFields @('GPOName','GPOGuid','GPOStatus','Trustee','TrusteeType','Permission','LinkedToTier0') `
+        -HeaderFields @('GPOName','GPOGuid','GPOStatus','Trustee','TrusteeType','Permission','CustomRights','LinkedToTier0') `
         -DetailFields @('VulnerabilityDetail','Impact','Remediation') -OutputFile $ReportFile
     return $Results
 }
@@ -884,7 +892,9 @@ Function Search-GpoExternalScriptPaths {
     try {
         New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 
-        $GpoMap = @{}
+        # Case-insensitive comparer avoids lookup failures when the path returned by
+        # Get-ChildItem differs in case from the string used to create the file.
+        $GpoMap = [System.Collections.Hashtable]::new([System.StringComparer]::OrdinalIgnoreCase)
         foreach ($Gpo in (Get-GPO -All -ErrorAction SilentlyContinue)) {
             $SafeName = $Gpo.DisplayName -replace '[\\/:*?"<>|]', '_'
             $OutFile  = "$TempDir\$($Gpo.Id)_$SafeName.xml"
@@ -892,10 +902,15 @@ Function Search-GpoExternalScriptPaths {
             $GpoMap[$OutFile] = @{ Name = $Gpo.DisplayName; Guid = $Gpo.Id.ToString() }
         }
 
+        $GuidFilePattern = '^([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})_(.+)$'
+
         foreach ($XmlFile in (Get-ChildItem -Path $TempDir -Filter '*.xml' -File -ErrorAction SilentlyContinue)) {
             $GpoInfo = $GpoMap[$XmlFile.FullName]
-            $GpoName = if ($GpoInfo) { $GpoInfo.Name } else { $XmlFile.BaseName }
-            $GpoGuid = if ($GpoInfo) { $GpoInfo.Guid } else { '' }
+            # Fallback: parse the GUID and sanitized display name separately from the filename.
+            # The filename format is {guid}_{safename} so both components are recoverable
+            # without conflating them into a single field.
+            $GpoName = if ($GpoInfo) { $GpoInfo.Name } elseif ($XmlFile.BaseName -match $GuidFilePattern) { $Matches[2] } else { $XmlFile.BaseName }
+            $GpoGuid = if ($GpoInfo) { $GpoInfo.Guid } elseif ($XmlFile.BaseName -match $GuidFilePattern) { $Matches[1] } else { '' }
 
             Select-String -Path $XmlFile.FullName -Pattern '\\\\' -ErrorAction SilentlyContinue |
                 Where-Object { $_.Line -notmatch '\\SYSVOL\\' -and $_.Line -notmatch '\\NETLOGON' } |

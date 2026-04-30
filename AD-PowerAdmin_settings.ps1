@@ -332,14 +332,14 @@
 
 # The sAMAccountName of the configured honeytoken user account.
 # Set automatically by the honeypot install wizard. Do not edit manually.
-[string]$global:HoneypotUsername = ''
+[string]$global:HoneypotUsername = 'adm_helpdesk_temp'
 
 # The name of the deny-logon security group that blocks the honeytoken account from all logon types.
 # Updated by the honeypot install wizard if a custom name is chosen during provisioning.
-[string]$global:HoneypotDenyGroup = ''
+[string]$global:HoneypotDenyGroup = 'GG_Honeytoken_DenyLogon'
 
 # The DistinguishedName of the OU where the honeytoken user account was created.
 # Set automatically by the honeypot install wizard. Do not edit manually.
-[string]$global:HoneypotOU = ''
+[string]$global:HoneypotOU = 'OU=Network.Clients,DC=tdcme,DC=loc'
 
 ##############################################################################################
