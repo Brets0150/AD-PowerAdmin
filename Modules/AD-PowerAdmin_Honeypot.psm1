@@ -347,14 +347,16 @@ Function Remove-HoneypotScheduledTask {
 }
 
 Function Set-HoneypotSettings {
-    # Updates the four honeytoken configuration variables in AD-PowerAdmin_settings.ps1
-    # and syncs them into the current session's global scope.
+    # Updates honeytoken configuration variables in AD-PowerAdmin_settings.ps1 and syncs
+    # them into the current session's global scope.
+    # $IntervalMinutes = -1 (default) means leave the existing interval unchanged.
     # This is called only during install and removal -- not during normal operation.
     param(
         [Parameter(Mandatory=$true)][bool]$Audit,
         [Parameter(Mandatory=$true)][AllowEmptyString()][string]$Username,
         [Parameter(Mandatory=$true)][AllowEmptyString()][string]$DenyGroup,
-        [Parameter(Mandatory=$true)][AllowEmptyString()][string]$OU
+        [Parameter(Mandatory=$true)][AllowEmptyString()][string]$OU,
+        [Parameter(Mandatory=$false)][int]$IntervalMinutes = -1
     )
 
     [string]$SettingsFile = "$global:ThisScriptDir\AD-PowerAdmin_settings.ps1"
@@ -372,13 +374,18 @@ Function Set-HoneypotSettings {
     $Content = $Content -replace "(\[string\]\`$global:HoneypotDenyGroup\s*=\s*')[^']*(')",           ('${1}' + $DenyGroup + '${2}')
     $Content = $Content -replace "(\[string\]\`$global:HoneypotOU\s*=\s*')[^']*(')",                  ('${1}' + $OU       + '${2}')
 
+    if ($IntervalMinutes -ge 1) {
+        $Content = $Content -replace '(\[int\]\$global:HoneypotMonitorIntervalMinutes\s*=\s*)\d+', ('${1}' + $IntervalMinutes)
+        $global:HoneypotMonitorIntervalMinutes = $IntervalMinutes
+    }
+
     [System.IO.File]::WriteAllText($SettingsFile, $Content, [System.Text.Encoding]::UTF8)
 
     # Sync the updated values into the running session so callers see the changes immediately.
-    $global:HoneypotAudit    = $Audit
-    $global:HoneypotUsername = $Username
+    $global:HoneypotAudit     = $Audit
+    $global:HoneypotUsername  = $Username
     $global:HoneypotDenyGroup = $DenyGroup
-    $global:HoneypotOU       = $OU
+    $global:HoneypotOU        = $OU
 
     Write-Host "  [OK] Honeytoken settings written to settings file." -ForegroundColor Green
 }
@@ -635,14 +642,15 @@ Function Install-HoneypotAccount {
             The wizard performs the following steps:
             1. Presents a curated list of realistic-looking service account usernames.
             2. Collects the target OU DistinguishedName for account placement.
-            3. Creates the AD user with hardened attributes: no SPNs, no delegation,
+            3. Prompts for the deny-logon group name and the monitoring check interval.
+            4. Creates the AD user with hardened attributes: no SPNs, no delegation,
                PasswordNeverExpires, CannotChangePassword, long random password.
-            4. Creates or validates the deny-logon security group and adds the account to it.
-            5. Validates account safety (no privileged groups, no delegation).
-            6. Creates and links the deny-logon GPO to the domain root and writes the
+            5. Creates or validates the deny-logon security group and adds the account to it.
+            6. Validates account safety (no privileged groups, no delegation).
+            7. Creates and links the deny-logon GPO to the domain root and writes the
                five deny-logon Privilege Rights for the deny-logon group into SYSVOL.
-            7. Writes the configuration to AD-PowerAdmin_settings.ps1.
-            8. Creates an hourly Windows scheduled task to monitor Security logs.
+            8. Writes all configuration (including the monitor interval) to AD-PowerAdmin_settings.ps1.
+            9. Creates a Windows scheduled task using the configured monitor interval.
 
     .EXAMPLE
         Install-HoneypotAccount
@@ -744,13 +752,29 @@ Function Install-HoneypotAccount {
     $CustomGroup = Read-Host 'Press ENTER to accept or type a different group name'
     if (-not [string]::IsNullOrWhiteSpace($CustomGroup)) { $DenyGroup = $CustomGroup.Trim() }
 
+    # Collect the monitoring check interval.
+    Write-Host ''
+    Write-Host 'How often should the monitor check Security logs for honeytoken activity?' -ForegroundColor White
+    Write-Host 'This sets both the scheduled task interval and the log lookback window (interval + 1 min).' -ForegroundColor Gray
+    [int]$MonitorInterval = 15
+    $RawInterval = Read-Host 'Check interval in minutes (press ENTER for default: 15)'
+    if (-not [string]::IsNullOrWhiteSpace($RawInterval)) {
+        [int]$ParsedInterval = 0
+        if ([int]::TryParse($RawInterval.Trim(), [ref]$ParsedInterval) -and $ParsedInterval -gt 0) {
+            $MonitorInterval = $ParsedInterval
+        } else {
+            Write-Host "  Invalid value. Using default of 15 minutes." -ForegroundColor Yellow
+        }
+    }
+
     # Show summary and ask for final confirmation.
     Write-Host ''
     Write-Host 'Summary:' -ForegroundColor White
-    Write-Host ("  Username    : {0}" -f $ChosenProfile.SamAccountName) -ForegroundColor White
-    Write-Host ("  Display Name: {0}" -f $ChosenProfile.DisplayName)     -ForegroundColor White
-    Write-Host ("  OU          : {0}" -f $OuDn)                          -ForegroundColor White
-    Write-Host ("  Deny Group  : {0}" -f $DenyGroup)                     -ForegroundColor White
+    Write-Host ("  Username         : {0}" -f $ChosenProfile.SamAccountName) -ForegroundColor White
+    Write-Host ("  Display Name     : {0}" -f $ChosenProfile.DisplayName)     -ForegroundColor White
+    Write-Host ("  OU               : {0}" -f $OuDn)                          -ForegroundColor White
+    Write-Host ("  Deny Group       : {0}" -f $DenyGroup)                     -ForegroundColor White
+    Write-Host ("  Monitor Interval : {0} minutes" -f $MonitorInterval)       -ForegroundColor White
     Write-Host ''
 
     $FinalConfirm = Read-Host 'Proceed with account creation? (y/N)'
@@ -782,10 +806,10 @@ Function Install-HoneypotAccount {
 
     Write-Host ''
     Write-Host 'Writing configuration to settings file ...' -ForegroundColor White
-    Set-HoneypotSettings -Audit $true -Username $ChosenProfile.SamAccountName -DenyGroup $DenyGroup -OU $OuDn
+    Set-HoneypotSettings -Audit $true -Username $ChosenProfile.SamAccountName -DenyGroup $DenyGroup -OU $OuDn -IntervalMinutes $MonitorInterval
 
     Write-Host ''
-    Write-Host 'Creating hourly monitoring scheduled task ...' -ForegroundColor White
+    Write-Host "Creating monitoring scheduled task (every $MonitorInterval minutes) ..." -ForegroundColor White
     New-HoneypotScheduledTask -ScriptPath $global:ThisScript
 
     Write-Host ''
@@ -915,6 +939,32 @@ Function Test-HoneytokenUserSafety {
         } else {
             Write-Host "  [FAIL] Deny-logon GPO '$GpoName' exists but is not linked to the domain root." -ForegroundColor Red
             $AllPassed = $false
+        }
+    }
+
+    # Scheduled task interval vs configured setting.
+    [string]$MonitorTaskName    = 'AD-PowerAdmin_HoneypotMonitor'
+    [int]$ConfiguredMinutes     = if ($global:HoneypotMonitorIntervalMinutes -gt 0) { $global:HoneypotMonitorIntervalMinutes } else { 15 }
+    $MonitorTask = Get-ScheduledTask -TaskName $MonitorTaskName -ErrorAction SilentlyContinue
+    if (-not $MonitorTask) {
+        Write-Host "  [FAIL] Scheduled task '$MonitorTaskName' not found. Run the install wizard to create it." -ForegroundColor Red
+        $AllPassed = $false
+    } else {
+        [int]$TaskMinutes    = 0
+        $TaskTrigger = $MonitorTask.Triggers | Select-Object -First 1
+        if ($TaskTrigger -and $TaskTrigger.Repetition -and $TaskTrigger.Repetition.Interval) {
+            [string]$IsoInterval = $TaskTrigger.Repetition.Interval
+            if      ($IsoInterval -match '^PT(\d+)H$')      { $TaskMinutes = [int]$Matches[1] * 60 }
+            elseif  ($IsoInterval -match '^PT(\d+)M$')      { $TaskMinutes = [int]$Matches[1] }
+            elseif  ($IsoInterval -match '^PT(\d+)H(\d+)M$'){ $TaskMinutes = ([int]$Matches[1] * 60) + [int]$Matches[2] }
+        }
+        if ($TaskMinutes -gt 0 -and $TaskMinutes -eq $ConfiguredMinutes) {
+            Write-Host "  [OK]   Monitor task interval ($TaskMinutes min) matches configured setting." -ForegroundColor Green
+        } elseif ($TaskMinutes -gt 0) {
+            Write-Host "  [FAIL] Monitor task interval ($TaskMinutes min) does not match setting ($ConfiguredMinutes min). Re-run the install wizard to sync." -ForegroundColor Red
+            $AllPassed = $false
+        } else {
+            Write-Host "  [WARN] Could not parse scheduled task repetition interval '$($TaskTrigger.Repetition.Interval)'." -ForegroundColor Yellow
         }
     }
 
