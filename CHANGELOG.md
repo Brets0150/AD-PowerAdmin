@@ -7,6 +7,33 @@
 
 ---
 
+### Modules/AD-PowerAdmin_Installer.psm1 and AD-PowerAdmin_Installer.psd1 -- Module Update Feature
+
+**Added:**
+- `Update-ADPowerAdminModules` -- Downloads the latest `.psm1` and `.psd1` files from the
+  AD-PowerAdmin GitHub repository and replaces local copies. Before overwriting, each changed
+  file is backed up to a timestamped folder under `$global:ReportsPath\ModuleBackups\`. Files
+  already matching the remote copy are left untouched. Files with no remote counterpart
+  (local-only modules) are skipped gracefully. Addresses the operational need to keep security
+  audit modules current without manual file replacement.
+- `Get-ADPowerAdminLatestReleaseTag` (private) -- Queries the GitHub Releases API
+  (`api.github.com/repos/Brets0150/AD-PowerAdmin/releases/latest`) and returns the latest
+  release tag string. Used by `Update-ADPowerAdminModules` when the Release channel is active.
+
+**Changed:**
+- `Initialize-Module` -- Added "Update Modules" item to the AD-PowerAdmin Management submenu,
+  pointing to `Update-ADPowerAdminModules`.
+
+### AD-PowerAdmin_settings.ps1 -- UpdateChannel Setting
+
+**Added:**
+- `$global:UpdateChannel` -- Controls the update source used by `Update-ADPowerAdminModules`.
+  `'Release'` (default) fetches the latest officially tagged GitHub release; `'Development'`
+  fetches the live main branch. This allows administrators running development builds to receive
+  in-progress fixes without waiting for a release.
+
+---
+
 ### Modules/AD-PowerAdmin_PasswordsCtl.psm1 -- HIBP directory mode missing from scheduled audit
 
 **Fixed:**

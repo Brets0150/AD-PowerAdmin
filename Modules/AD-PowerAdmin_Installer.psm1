@@ -42,6 +42,11 @@ Function Initialize-Module {
                     Label   = "Install PowerShell 7 on the system using WinGet."
                     Command = "Install-PowerShell7"
                 }
+                'UpdateModules' = @{
+                    Title   = "Update Modules"
+                    Label   = "Download and apply the latest module files from GitHub. Channel (Release or Development) is set by UpdateChannel in settings."
+                    Command = "Update-ADPowerAdminModules"
+                }
             }
         }
     }
@@ -1013,4 +1018,158 @@ function Remove-AdPowerAdmin {
         }
     }
 # End of the Remove-AdPowerAdmin function.
+}
+
+function Get-ADPowerAdminLatestReleaseTag {
+    <#
+    .SYNOPSIS
+    Queries the GitHub Releases API and returns the latest release tag string.
+
+    .DESCRIPTION
+    Calls https://api.github.com/repos/Brets0150/AD-PowerAdmin/releases/latest and
+    returns the tag_name field (e.g. 'v0.6.2'). Returns $null on failure.
+
+    .NOTES
+    Private helper for Update-ADPowerAdminModules. Not exported.
+    #>
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    try {
+        $ApiUrl  = 'https://api.github.com/repos/Brets0150/AD-PowerAdmin/releases/latest'
+        $Release = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing -ErrorAction Stop
+        return $Release.tag_name
+    } catch {
+        Write-Host "ERROR: Failed to query GitHub Releases API. $_" -ForegroundColor Red
+        return $null
+    }
+# End of the Get-ADPowerAdminLatestReleaseTag function.
+}
+
+function Update-ADPowerAdminModules {
+    <#
+    .SYNOPSIS
+    Downloads the latest module files from GitHub and applies them locally.
+
+    .DESCRIPTION
+    Fetches every .psm1 and .psd1 file found in the local Modules directory from
+    the GitHub repository. The source is determined by $global:UpdateChannel:
+      'Development' -- pulls from the main branch (latest uncommitted work).
+      'Release'     -- pulls from the most recent GitHub Release tag (default).
+
+    Files that differ from the remote copy are backed up to a timestamped folder
+    under $global:ReportsPath\ModuleBackups\ before being overwritten. Files that
+    match the remote copy are left untouched. Files with no remote counterpart
+    (local-only modules) are skipped with a warning.
+
+    A restart of PowerShell is required after updating for the new module code
+    to take effect in the current session.
+
+    .EXAMPLE
+    Update-ADPowerAdminModules
+
+    .NOTES
+    Requires internet access to raw.githubusercontent.com and, for the Release
+    channel, to api.github.com.
+    #>
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    # Determine the Git ref to pull from.
+    [string]$Channel = if ($global:UpdateChannel) { $global:UpdateChannel } else { 'Release' }
+
+    if ($Channel -eq 'Development') {
+        [string]$GitRef = 'main'
+        Write-Host "Update channel: Development (main branch)" -ForegroundColor Cyan
+    } else {
+        Write-Host "Update channel: Release -- querying GitHub for latest release tag..." -ForegroundColor Cyan
+        [string]$GitRef = Get-ADPowerAdminLatestReleaseTag
+        if (-not $GitRef) {
+            Write-Host "ERROR: Could not determine the latest release tag. Aborting update." -ForegroundColor Red
+            return
+        }
+        Write-Host "Latest release tag: $GitRef" -ForegroundColor Cyan
+    }
+
+    [string]$BaseUrl = "https://raw.githubusercontent.com/Brets0150/AD-PowerAdmin/$GitRef/Modules/"
+
+    # Collect local module files (.psm1 and .psd1).
+    [array]$LocalFiles = Get-ChildItem -Path $global:ModulesPath -Filter '*.ps?1' -File |
+        Where-Object { $_.Extension -in '.psm1', '.psd1' }
+
+    if ($LocalFiles.Count -eq 0) {
+        Write-Host "No module files found in $global:ModulesPath. Nothing to update." -ForegroundColor Yellow
+        return
+    }
+
+    # Create a timestamped backup directory.
+    [string]$Timestamp  = (Get-Date -Format 'yyyyMMdd_HHmmss')
+    [string]$BackupRoot = Join-Path $global:ReportsPath 'ModuleBackups'
+    [string]$BackupDir  = Join-Path $BackupRoot $Timestamp
+    [bool]$BackupCreated = $false
+
+    # Tracking counters.
+    [System.Collections.Generic.List[string]]$Updated   = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]]$Current   = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]]$Skipped   = [System.Collections.Generic.List[string]]::new()
+
+    Write-Host ""
+    Write-Host "Checking $($LocalFiles.Count) module file(s) against $GitRef ..." -ForegroundColor Cyan
+    Write-Host ""
+
+    foreach ($LocalFile in $LocalFiles) {
+        [string]$FileName  = $LocalFile.Name
+        [string]$RemoteUrl = "$BaseUrl$FileName"
+        [string]$TempFile  = Join-Path $env:TEMP "$FileName.update"
+
+        try {
+            # Download the remote file to a temp location.
+            Invoke-WebRequest -Uri $RemoteUrl -OutFile $TempFile -UseBasicParsing -ErrorAction Stop
+
+            # Compare remote content to local content (line-joined to normalise EOL).
+            [string]$RemoteContent = (Get-Content -Path $TempFile -Raw) -replace "`r`n", "`n"
+            [string]$LocalContent  = (Get-Content -Path $LocalFile.FullName -Raw) -replace "`r`n", "`n"
+
+            if ($RemoteContent -eq $LocalContent) {
+                Write-Host "  [UP TO DATE]  $FileName" -ForegroundColor Green
+                $Current.Add($FileName)
+            } else {
+                # Create backup directory on first use.
+                if (-not $BackupCreated) {
+                    New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
+                    $BackupCreated = $true
+                }
+                # Back up the existing local file.
+                Copy-Item -Path $LocalFile.FullName -Destination (Join-Path $BackupDir $FileName) -Force
+                # Overwrite local file with downloaded content.
+                Copy-Item -Path $TempFile -Destination $LocalFile.FullName -Force
+                Write-Host "  [UPDATED]     $FileName" -ForegroundColor Yellow
+                $Updated.Add($FileName)
+            }
+        } catch {
+            # A 404 means this file has no remote counterpart (local-only module).
+            if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+                Write-Host "  [SKIPPED]     $FileName  (not found on remote -- local-only module)" -ForegroundColor Gray
+            } else {
+                Write-Host "  [ERROR]       $FileName  -- $_" -ForegroundColor Red
+            }
+            $Skipped.Add($FileName)
+        } finally {
+            if (Test-Path $TempFile) { Remove-Item $TempFile -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    # Summary report.
+    Write-Host ""
+    Write-Host "--- Update Summary ---" -ForegroundColor Cyan
+    Write-Host "  Updated   : $($Updated.Count)" -ForegroundColor Yellow
+    Write-Host "  Up to date: $($Current.Count)" -ForegroundColor Green
+    Write-Host "  Skipped   : $($Skipped.Count)" -ForegroundColor Gray
+    if ($BackupCreated) {
+        Write-Host "  Backups saved to: $BackupDir" -ForegroundColor Cyan
+    }
+
+    if ($Updated.Count -gt 0) {
+        Write-Host ""
+        Write-Host "NOTE: Restart PowerShell for updated modules to take effect in this session." -ForegroundColor Yellow
+    }
+# End of the Update-ADPowerAdminModules function.
 }

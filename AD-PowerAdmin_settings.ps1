@@ -51,6 +51,14 @@
 
 ##############################################################################################
 # -------------------[Optional]------------------- #
+# Module update channel. Controls which source is used when "Update Modules" is run from the
+# AD-PowerAdmin Management menu.
+#   'Release'     -- downloads the latest officially released version from GitHub Releases.
+#   'Development' -- downloads the current main branch files directly from GitHub.
+[string]$global:UpdateChannel = 'Release'
+
+##############################################################################################
+# -------------------[Optional]------------------- #
 # Enable or disable the Daily tasks that will be run.
 [bool]$global:KerberosKRBTGTAudit      = $true
 [bool]$global:InactiveComputerAudit    = $true
