@@ -901,6 +901,7 @@ Function Show-AuditReport {
         'SourceGPOName'       = 'Source GPO'
         'SourceGPOGuid'       = 'Source GPO GUID'
         'GPOSetting'          = 'GPO Setting'
+        'CustomRights'        = 'Custom Rights Detail'
     }
     foreach ($K in $FieldLabels.Keys) { $LabelMap[$K] = $FieldLabels[$K] }
 

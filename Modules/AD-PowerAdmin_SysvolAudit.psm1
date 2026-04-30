@@ -56,7 +56,7 @@ Function Initialize-Module {
                 }
                 'SysvolFullAudit' = @{
                     Title   = "Full SYSVOL Audit"
-                    Label   = "Run all six SYSVOL audit checks in sequence: inventory, secret scan, GPP cpassword, permissions, GPO delegation, and external paths. Emails Critical findings to the administrator."
+                    Label   = "Run all six SYSVOL audit checks in sequence: inventory, credential and risk pattern scan, GPP cpassword, permissions, GPO delegation, and external paths. Prints a findings summary on completion."
                     Command = "Start-SysvolAudit"
                 }
             }
@@ -76,7 +76,7 @@ Function Initialize-Module {
     $global:UnattendedJobs += @{
         'SysvolGppCpasswordCheck' = @{
             Title    = "SYSVOL GPP cpassword Check"
-            Label    = "Daily scheduled check for GPP cpassword values in SYSVOL. Emails the administrator immediately if any are found. Controlled by the SysvolGppCpasswordAudit setting."
+            Label    = "Daily scheduled check for GPP cpassword values in SYSVOL. Writes a Critical warning to the console if any are found. Controlled by the SysvolGppCpasswordAudit setting."
             Module   = "AD-PowerAdmin_SysvolAudit"
             Function = "Start-SysvolGppCpasswordCheck"
             Daily    = $true
@@ -499,6 +499,69 @@ Function Search-SysvolPermissions {
     return $Results
 }
 
+Function Get-GpoCustomRights {
+    # Private helper: reads the raw AD security descriptor of a GPO object and returns a
+    # human-readable string listing every Allow ACE for the specified trustee SID.
+    # Used to expand the generic 'GpoCustom' label into its actual constituent rights.
+    Param(
+        [guid]$GpoId,
+        [string]$TrusteeSid,
+        [string]$TrusteeName,
+        [string]$DomainDn
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DomainDn)) {
+        return '(domain DN unavailable; cannot read raw GPO ACL)'
+    }
+
+    # Well-known extended right GUIDs that appear in GPO security descriptors.
+    $KnownExtRights = @{
+        'edacfd8f-ffb3-11d1-b41d-00a0c968f939' = 'Apply Group Policy'
+        'be2bb760-7f46-11d2-b9ad-00c04f79f805' = 'Update Group Policy'
+        '59ba2f42-79a2-11d0-9020-00c04fc2d3cf' = 'General Information'
+        'bc0ac240-79a9-11d0-9020-00c04fc2d4cf' = 'Group Membership'
+        '77b5b886-944a-11d1-aebd-0000f80367c1' = 'Personal Information'
+        'e45795b2-9455-11d1-aebd-0000f80367c1' = 'Email Information'
+    }
+
+    try {
+        $GpoAdPath = "AD:\CN={$($GpoId.ToString().ToUpper())},CN=Policies,CN=System,$DomainDn"
+        $Acl       = Get-Acl -Path $GpoAdPath -ErrorAction Stop
+    } catch {
+        return "(unable to read raw GPO AD ACL: $($_.Exception.Message))"
+    }
+
+    $Lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($Ace in $Acl.Access) {
+        if ($Ace.AccessControlType.ToString() -ne 'Allow') { continue }
+
+        # Match by SID (most reliable); fall back to name substring match for untranslatable accounts.
+        $AceSidStr = ''
+        try { $AceSidStr = $Ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}
+        $NameMatch = $Ace.IdentityReference.Value -like "*$TrusteeName*"
+        if ($AceSidStr -ne $TrusteeSid -and -not $NameMatch) { continue }
+
+        $RightsStr  = $Ace.ActiveDirectoryRights.ToString()
+        $ObjGuidStr = if ($Ace.ObjectType) { $Ace.ObjectType.ToString().ToLower() } else { '' }
+
+        if ($ObjGuidStr -and $ObjGuidStr -ne '00000000-0000-0000-0000-000000000000') {
+            $ExtName = if ($KnownExtRights.ContainsKey($ObjGuidStr)) {
+                $KnownExtRights[$ObjGuidStr]
+            } else {
+                "attribute/right {$($Ace.ObjectType)}"
+            }
+            $Lines.Add("$RightsStr on [$ExtName]")
+        } else {
+            $Lines.Add($RightsStr)
+        }
+    }
+
+    if ($Lines.Count -eq 0) {
+        return '(no matching Allow ACEs found in the raw GPO AD security descriptor for this trustee)'
+    }
+    return ($Lines | Select-Object -Unique) -join '; '
+}
+
 Function Get-DelegationExplanation {
     # Private helper: builds VulnerabilityDetail, Impact, and Remediation text for a GPO delegation finding.
     Param(
@@ -507,13 +570,20 @@ Function Get-DelegationExplanation {
         [string]$TrusteeType,
         [string]$Permission,
         [string]$LinkedToTier0,
-        [string]$GpoStatus
+        [string]$GpoStatus,
+        [string]$ResolvedCustomRights = ''
     )
 
     $PermDesc = switch ($Permission) {
         'GpoEdit'                     { 'edit access (can modify all settings in the GPO: startup and logon script assignments, registry policy, security settings, software deployment packages, and administrative template values)' }
         'GpoEditDeleteModifySecurity' { 'full delegated control (can edit, delete, and modify the security descriptor of the GPO itself, including adding or revoking other principals'' delegations)' }
-        'GpoCustom'                   { 'a non-standard custom permission set (the exact capabilities depend on the custom access mask; a custom delegation on a production GPO is itself anomalous and requires verification)' }
+        'GpoCustom'                   {
+            if ($ResolvedCustomRights) {
+                "a custom permission set. The specific Active Directory rights granted to this trustee are: $ResolvedCustomRights"
+            } else {
+                'a non-standard custom permission set (the exact capabilities depend on the custom access mask; a custom delegation on a production GPO is itself anomalous and requires verification)'
+            }
+        }
         default                       { "$Permission access" }
     }
 
@@ -593,8 +663,9 @@ Function Search-GpoDelegation {
         'Administrator'
     )
 
-    $Results   = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $Results    = [System.Collections.Generic.List[PSCustomObject]]::new()
     $Tier0Guids = @()
+    $DomainDn   = ''
 
     try {
         $DomainDn    = (Get-ADDomain -ErrorAction Stop).DistinguishedName
@@ -628,9 +699,19 @@ Function Search-GpoDelegation {
             } else { 'Unknown' }
             $RiskLevel = if ($LinkedToTier0 -eq 'Yes') { 'Critical' } else { 'High' }
 
+            # For GpoCustom, resolve the actual raw AD rights before building the explanation.
+            $CustomRights = ''
+            if ($Perm.Permission.ToString() -eq 'GpoCustom') {
+                $CustomRights = Get-GpoCustomRights -GpoId $Gpo.Id `
+                    -TrusteeSid $Perm.Trustee.Sid.ToString() `
+                    -TrusteeName $TrusteeName `
+                    -DomainDn $DomainDn
+            }
+
             $Expl = Get-DelegationExplanation -GpoName $Gpo.DisplayName -TrusteeName $TrusteeName `
                 -TrusteeType $Perm.Trustee.SidType.ToString() -Permission $Perm.Permission.ToString() `
-                -LinkedToTier0 $LinkedToTier0 -GpoStatus $Gpo.GpoStatus.ToString()
+                -LinkedToTier0 $LinkedToTier0 -GpoStatus $Gpo.GpoStatus.ToString() `
+                -ResolvedCustomRights $CustomRights
 
             $Results.Add([PSCustomObject]@{
                 GPOName             = $Gpo.DisplayName
@@ -640,6 +721,7 @@ Function Search-GpoDelegation {
                 TrusteeType         = $Perm.Trustee.SidType.ToString()
                 TrusteeSid          = $Perm.Trustee.Sid.ToString()
                 Permission          = $Perm.Permission.ToString()
+                CustomRights        = $CustomRights
                 LinkedToTier0       = $LinkedToTier0
                 RiskLevel           = $RiskLevel
                 VulnerabilityDetail = $Expl.VulnerabilityDetail
@@ -652,7 +734,7 @@ Function Search-GpoDelegation {
     if ($Results.Count -eq 0) {
         Write-Host "[INFO] No excessive GPO delegation found."
         Show-AuditReport -Data @() -Title "GPO Delegation Audit" `
-            -HeaderFields @('GPOName','GPOGuid','GPOStatus','Trustee','TrusteeType','Permission','LinkedToTier0') `
+            -HeaderFields @('GPOName','GPOGuid','GPOStatus','Trustee','TrusteeType','Permission','CustomRights','LinkedToTier0') `
             -DetailFields @('VulnerabilityDetail','Impact','Remediation') -OutputFile $ReportFile
         return $Results
     }
@@ -1044,7 +1126,6 @@ Function Start-SysvolAudit {
 
         Each check exports its own timestamped CSV to the Reports directory.
         After all checks complete, a summary table is printed to the console.
-        If any Critical findings are present, an alert email is sent to the administrator.
 
     .EXAMPLE
     Start-SysvolAudit
@@ -1107,23 +1188,6 @@ Function Start-SysvolAudit {
     Write-Host ("Total High Findings:     {0}"                                      -f $TotalHigh)
     Write-Host ""
 
-    if (($TotalCritical -gt 0 -or $TotalHigh -gt 0) -and $global:ADAdminEmail) {
-        $Body  = "AD-PowerAdmin SYSVOL Security Audit detected $TotalCritical Critical and $TotalHigh High finding(s).`r`n`r`n"
-        $Body += "Script Inventory:        $InventoryCount files`r`n"
-        $Body += "Credential & Risk Scan:  $SecretCrit Critical, $SecretHigh High`r`n"
-        $Body += "GPP cpassword:           $GppCrit Critical, $GppInfo Info (empty)`r`n"
-        $Body += "Permission Scan:         $SysvolPermCrit Critical, $SysvolPermHigh High`r`n"
-        $Body += "GPO Delegation:          $GpoDelCrit Critical, $GpoDelHigh High`r`n"
-        $Body += "External Script Paths:   $ExtHigh High (external server), $ExtMedium Medium (domain share)`r`n"
-        $Body += "Ext. Path Permissions:   $ExtPermCrit Critical, $ExtPermHigh High`r`n`r`n"
-        $Body += "Review the CSV reports in the Reports directory for full details."
-
-        Send-Email -ToEmail   $global:ADAdminEmail `
-                   -FromEmail $global:FromEmail `
-                   -Subject   "AD-PowerAdmin: SYSVOL Audit - $TotalCritical Critical, $TotalHigh High Finding(s)" `
-                   -Body      $Body
-    }
-
     $SummaryLines = @(
         "",
         "[SYSVOL Audit Summary]",
@@ -1153,8 +1217,8 @@ Function Start-SysvolGppCpasswordCheck {
     === SYSVOL GPP cpassword Daily Check ===
         Lightweight daily scan targeting only GPP XML files for cpassword values.
         Respects the SysvolGppCpasswordAudit setting -- returns silently if set to $false.
-        If any cpassword values are found, an immediate alert email is sent to the
-        administrator. No action is taken if the scan produces no findings.
+        If any cpassword values are found, a Critical warning is written to the console.
+        No action is taken if the scan produces no findings.
 
     .EXAMPLE
     Start-SysvolGppCpasswordCheck
@@ -1168,19 +1232,5 @@ Function Start-SysvolGppCpasswordCheck {
     $CritResults = @($Results | Where-Object { $_.RiskLevel -eq 'Critical' })
     if ($CritResults.Count -eq 0) { return }
 
-    if ($global:ADAdminEmail) {
-        $Body  = "[CRITICAL] AD-PowerAdmin detected $($CritResults.Count) GPP cpassword value(s) with non-empty values in SYSVOL.`r`n`r`n"
-        $Body += "The AES-256 decryption key for cpassword was publicly disclosed (MS14-025).`r`n"
-        $Body += "These credentials must be treated as exposed until rotated and the GPP files removed.`r`n`r`n"
-        $Body += "Affected files:`r`n"
-        foreach ($Finding in $CritResults) {
-            $Body += "  $($Finding.FilePath) (line $($Finding.LineNumber))`r`n"
-        }
-        $Body += "`r`nReview the CSV report in the Reports directory for full details."
-
-        Send-Email -ToEmail   $global:ADAdminEmail `
-                   -FromEmail $global:FromEmail `
-                   -Subject   "[CRITICAL] GPP cpassword Found in SYSVOL - Immediate Action Required" `
-                   -Body      $Body
-    }
+    Write-Host "[CRITICAL] $($CritResults.Count) GPP cpassword value(s) found in SYSVOL. Review the CSV report in the Reports directory."
 }

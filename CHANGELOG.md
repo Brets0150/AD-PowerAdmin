@@ -168,6 +168,32 @@ A 60-minute detection window is adequate for overnight monitoring but too coarse
 
 ---
 
+### Modules/AD-PowerAdmin_SysvolAudit.psm1 -- Email Alerts Removed
+
+**Removed:**
+- Email alert from `Start-SysvolAudit` -- the block that built an audit-summary email body and called `Send-Email` when Critical or High findings were present has been removed. The function now prints the console summary table and writes the consolidated report file; no external communication occurs.
+- Email alert from `Start-SysvolGppCpasswordCheck` -- the block that called `Send-Email` when cpassword values were found has been removed. A `Write-Host` `[CRITICAL]` line is written to the console instead.
+
+**Changed:**
+- `Start-SysvolGppCpasswordCheck` -- now writes `"[CRITICAL] N GPP cpassword value(s) found in SYSVOL. Review the CSV report in the Reports directory."` when findings are present, rather than constructing and sending an email.
+- Submenu label for `SysvolFullAudit` updated to remove "Emails Critical findings to the administrator."
+- Unattended job label for `SysvolGppCpasswordCheck` updated to remove "Emails the administrator immediately if any are found."
+- DESCRIPTION docstrings in both functions updated to remove email references.
+
+---
+
+### Modules/AD-PowerAdmin_SysvolAudit.psm1 -- GpoCustom Permission Expansion
+
+**Changed:**
+- `Search-GpoDelegation` -- When a trustee holds `GpoCustom` permission, the audit now reads the raw Active Directory security descriptor of the GPO object (`CN={GUID},CN=Policies,CN=System,<DomainDN>`) via `Get-Acl` and enumerates every Allow ACE for that trustee's SID. The resolved rights are surfaced in a new `CustomRights` header field (visible only on `GpoCustom` findings -- the field is skipped for all other permission types). The resolved rights are also incorporated into the `VulnerabilityDetail` narrative so the explanation states the exact rights granted rather than the generic "custom permission set" description. If the AD ACL cannot be read (permissions error, offline DC, domain DN unavailable), the field reports the specific failure reason rather than failing silently. `$DomainDn` is now declared before the try/catch block so it remains accessible for ACL lookups even when Tier-0 link enrichment partially fails.
+
+**Added:**
+- `Get-GpoCustomRights` (private helper) -- Given a GPO GUID, a trustee SID, and the domain DN, opens `AD:\CN={GUID},CN=Policies,CN=System,<DomainDN>` via `Get-Acl` and collects every Allow ACE for the specified trustee. For ACEs with a non-null `ObjectType`, it resolves the GUID against a table of known GPO extended rights (Apply Group Policy, Update Group Policy, and common property set GUIDs). Returns a semicolon-separated string of right descriptions; returns a diagnostic message if no matching ACEs are found or the ACL is unreadable. Trustee matching uses SID comparison as primary with identity-reference name substring as fallback for accounts whose SIDs cannot be translated.
+
+**Why:** Test results showed `GpoCustom` in the Permission column with no explanation of what rights were actually granted. An administrator cannot determine from "GpoCustom" alone whether the delegation is intentional (e.g., read-only with Apply Group Policy) or dangerous (e.g., write-property on all attributes). The resolved rights make that determination possible directly from the report.
+
+---
+
 ### Modules/AD-PowerAdmin_SysvolAudit.psm1 -- Post-Testing Refinements
 
 **Changed:**
@@ -226,7 +252,7 @@ SYSVOL is replicated to every domain controller and is universally readable by a
 **Impact:** `Show-AuditReport` is exported and available to all modules that import Utils. No changes to existing callers.
 
 **Changed (post-testing refinement):**
-- `Show-AuditReport` built-in label map extended with seven new field names introduced by the SysvolAudit post-testing refinements: `VulnerabilityDetail` -> 'Vulnerability', `Impact` -> 'Impact', `Remediation` -> 'Remediation', `IdentitiesAndRights` -> 'Identities & Rights', `SourceGPOName` -> 'Source GPO', `SourceGPOGuid` -> 'Source GPO GUID', `GPOSetting` -> 'GPO Setting'.
+- `Show-AuditReport` built-in label map extended with seven new field names introduced by the SysvolAudit post-testing refinements: `VulnerabilityDetail` -> 'Vulnerability', `Impact` -> 'Impact', `Remediation` -> 'Remediation', `IdentitiesAndRights` -> 'Identities & Rights', `SourceGPOName` -> 'Source GPO', `SourceGPOGuid` -> 'Source GPO GUID', `GPOSetting` -> 'GPO Setting'. Additionally: `CustomRights` -> 'Custom Rights Detail' (for the GpoCustom permission expansion).
 
 ---
 
