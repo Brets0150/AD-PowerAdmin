@@ -487,26 +487,49 @@ SeDenyNetworkLogonRight = *$GroupSid
     # Security Settings CSE GUID: {827D319E-6EAC-11D2-A4EA-00C04F79F83A}
     # Associated tool GUID:       {803E14A0-B4FB-11D0-A0D0-00A0C90F574B}
     #
-    # Search by displayName rather than constructing the DN from the GUID string.
-    # AD may store the GPO CN with a different GUID casing than $GpoGuid.ToString() produces,
-    # and a mismatched DN causes "Directory object not found" even when the object exists.
+    # New-GPO (called via Install-ADPAGPOBaseline) always writes to the PDC emulator.
+    # Querying a different DC before replication completes causes "object not found".
+    # Target the PDC emulator explicitly for both read and write to eliminate that race.
+    [string]$PDC            = $Domain.PDCEmulator
     [string]$GpoDisplayName = Get-HoneypotGPOName
     [string]$PoliciesBase   = "CN=Policies,CN=System,$($Domain.DistinguishedName)"
+    [string]$LdapFilter     = "(&(objectClass=groupPolicyContainer)(displayName=$GpoDisplayName))"
     [string]$SecExt         = '[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]'
+
+    Write-Host ("  Locating GPO AD object on PDC emulator ({0}) ..." -f $PDC) -ForegroundColor Gray
 
     try {
         $GpoAdObj = Get-ADObject `
-            -LDAPFilter "(&(objectClass=groupPolicyContainer)(displayName=$GpoDisplayName))" `
+            -Server $PDC `
+            -LDAPFilter $LdapFilter `
             -SearchBase $PoliciesBase `
             -Properties gPCMachineExtensionNames `
             -ErrorAction Stop
     } catch {
-        Write-Host "  [FAIL] Error searching for GPO AD object: $_" -ForegroundColor Red
+        Write-Host "  [FAIL] Error searching for GPO AD object on '$PDC': $_" -ForegroundColor Red
         return $false
     }
 
     if (-not $GpoAdObj) {
-        Write-Host "  [FAIL] Could not locate GPO AD object for '$GpoDisplayName' in $PoliciesBase." -ForegroundColor Red
+        Write-Host "  [FAIL] Could not locate GPO AD object for '$GpoDisplayName' on '$PDC'." -ForegroundColor Red
+        Write-Host "  [DIAG] DC queried  : $PDC" -ForegroundColor Yellow
+        Write-Host "  [DIAG] LDAP filter : $LdapFilter" -ForegroundColor Yellow
+        Write-Host "  [DIAG] Search base : $PoliciesBase" -ForegroundColor Yellow
+        Write-Host "  [DIAG] GPOs found in $PoliciesBase on $PDC :" -ForegroundColor Yellow
+        try {
+            $AllGpos = Get-ADObject -Server $PDC -SearchBase $PoliciesBase `
+                -LDAPFilter '(objectClass=groupPolicyContainer)' `
+                -Properties displayName -ErrorAction Stop
+            if ($AllGpos) {
+                $AllGpos | ForEach-Object {
+                    Write-Host ("  [DIAG]   CN={0}  displayName={1}" -f $_.Name, $_.displayName) -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "  [DIAG]   (none found -- GPO replication may still be in progress)" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host ("  [DIAG]   Could not enumerate GPOs: {0}" -f $_) -ForegroundColor Yellow
+        }
         return $false
     }
 
@@ -522,13 +545,13 @@ SeDenyNetworkLogonRight = *$GroupSid
     }
 
     try {
-        Set-ADObject -Identity $GpoDn -Replace @{
+        Set-ADObject -Server $PDC -Identity $GpoDn -Replace @{
             versionNumber            = $NewVersion
             gPCMachineExtensionNames = $NewExts
         }
-        Write-Host "  [OK] GPO AD object updated (versionNumber, gPCMachineExtensionNames)." -ForegroundColor Green
+        Write-Host ("  [OK] GPO AD object updated on {0} (versionNumber, gPCMachineExtensionNames)." -f $PDC) -ForegroundColor Green
     } catch {
-        Write-Host "  [FAIL] Could not update GPO AD object '$GpoDn': $_" -ForegroundColor Red
+        Write-Host "  [FAIL] Could not update GPO AD object '$GpoDn' on '$PDC': $_" -ForegroundColor Red
         return $false
     }
 

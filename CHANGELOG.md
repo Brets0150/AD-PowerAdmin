@@ -195,6 +195,23 @@ A 60-minute detection window is adequate for overnight monitoring but too coarse
 
 ---
 
+### Modules/AD-PowerAdmin_Honeypot.psm1 -- GPO AD Object PDC Emulator Targeting Fix
+
+**Fixed:**
+- `Set-HoneypotGPOUserRights` -- `Get-ADObject` and `Set-ADObject` now explicitly target the PDC emulator (`$Domain.PDCEmulator`) when locating and updating the GPO's AD object. Previously, both calls queried the nearest available DC, which may not yet have received the GPO via replication. Because `New-GPO` (called via `Install-ADPAGPOBaseline`) always writes to the PDC emulator, the GPO was invisible on other DCs until replication completed, causing `Get-ADObject` to return nothing and the function to fail with "Could not locate GPO AD object".
+
+**Changed:**
+- `Set-HoneypotGPOUserRights` -- Added a status line showing which PDC emulator is being queried before the `Get-ADObject` call. On failure to locate the GPO AD object, the function now emits `[DIAG]` lines reporting: the DC queried, the LDAP filter used, the search base, and a list of every `groupPolicyContainer` object found on that DC -- or an explicit "(none found)" notice if replication is still in progress. Success messages now include the PDC emulator hostname to confirm the correct DC was targeted.
+
+**Why it changed:**
+`New-GPO` always writes to the PDC emulator, but `Get-ADObject` without an explicit `-Server` resolves to the nearest DC (site-local) which may not have received the new object yet. This race is reliable on multi-DC domains: the window between GPO creation and full replication is typically 15-60 seconds. Targeting the PDC emulator explicitly for both the read and write eliminates the race. The added diagnostic output allows an administrator to diagnose any future failure by showing exactly what the query found on the authoritative DC, distinguishing between a missing GPO, a naming mismatch, and a replication problem.
+
+**Impact:**
+- GPO AD object updates no longer fail due to DC replication lag in multi-DC environments.
+- If the GPO still cannot be located on the PDC emulator, the diagnostic output lists all GPOs visible to that DC, enabling immediate root-cause identification without manual AD browsing.
+
+---
+
 ### Modules/AD-PowerAdmin_SysvolAudit.psm1 -- External Path GPO Name and GUID Split
 
 **Fixed:**
