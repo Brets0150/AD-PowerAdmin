@@ -103,6 +103,14 @@ Function New-HoneypotRandomPassword {
 Function Get-HoneypotEventsBatch {
     # Queries one DC for honeytoken authentication events in the given time window.
     # Enriches each matching event with Severity, DomainController, and HoneytokenAccount properties.
+    #
+    # Uses an XPath query so the DC evaluates the TargetUserName filter before sending any
+    # data over the network. With FilterHashtable the DC would send every authentication event
+    # in the window (potentially hundreds) and PowerShell would filter them locally -- the XPath
+    # approach sends only events targeting the honeytoken account (typically zero on a clean run).
+    #
+    # The client-side username check below is kept as a safety net for any edge cases where
+    # the XPath filter does not fully cover the event format (e.g. unusual field ordering).
     param(
         [Parameter(Mandatory=$true)][string]$ComputerName,
         [Parameter(Mandatory=$true)][string]$Username,
@@ -110,27 +118,41 @@ Function Get-HoneypotEventsBatch {
         [Parameter(Mandatory=$true)][datetime]$EndTime
     )
 
-    [int[]]$WatchedIds = @(4624, 4625, 4768, 4771, 4740)
+    # Windows Event Log XPath requires UTC timestamps in ISO 8601 format.
+    [string]$UtcStart = $StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.000Z')
+    [string]$UtcEnd   = $EndTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.000Z')
 
-    $FilterHash = @{
-        LogName   = 'Security'
-        Id        = $WatchedIds
-        StartTime = $StartTime
-        EndTime   = $EndTime
-    }
+    # XPath evaluated by the DC Event Log service before any events cross the network.
+    # TargetUserName exact match covers NTLM and standard Kerberos events.
+    # The starts-with clause covers cross-realm Kerberos events where the realm is
+    # appended to the account name (e.g. svc_backup_sync@DOMAIN.COM).
+    [string]$XPath = (
+        "*[System[" +
+            "(EventID=4624 or EventID=4625 or EventID=4768 or EventID=4771 or EventID=4740)" +
+            " and TimeCreated[@SystemTime>='{0}' and @SystemTime<='{1}']" +
+        "] and EventData[" +
+            "Data[@Name='TargetUserName']='{2}'" +
+            " or starts-with(Data[@Name='TargetUserName'],'{2}@')" +
+        "]]" -f $UtcStart, $UtcEnd, $Username
+    )
 
+    [datetime]$QueryStart = Get-Date
     try {
-        $RawEvents = Get-WinEvent -ComputerName $ComputerName -FilterHashtable $FilterHash -ErrorAction SilentlyContinue
+        $RawEvents = Get-WinEvent -ComputerName $ComputerName -LogName 'Security' `
+            -FilterXPath $XPath -ErrorAction SilentlyContinue
     } catch {
         Write-Host ("    [DC-WARN] {0}: Security log query failed -- {1}" -f $ComputerName, $_) -ForegroundColor Yellow
         return @()
     }
+    [double]$QuerySec = ((Get-Date) - $QueryStart).TotalSeconds
 
     [int]$RawCount = if ($RawEvents) { $RawEvents.Count } else { 0 }
-    Write-Host ("    [DC-DATA] {0}: {1} raw event(s) retrieved matching IDs 4624/4625/4768/4771/4740" -f $ComputerName, $RawCount) -ForegroundColor DarkGray
+    Write-Host ("    [DC-DATA] {0}: {1} event(s) for '{2}' returned in {3:N1}s (server-side XPath filter)" -f $ComputerName, $RawCount, $Username, $QuerySec) -ForegroundColor DarkGray
 
     if (-not $RawEvents) { return @() }
 
+    # Events are returned only when honeytoken activity is detected -- parse and enrich them.
+    [datetime]$ParseStart = Get-Date
     $Enriched = @()
     foreach ($Evt in $RawEvents) {
         # Flatten EventData XML fields onto the event object so callers can use dot notation.
@@ -139,7 +161,7 @@ Function Get-HoneypotEventsBatch {
             Add-Member -InputObject $Evt -MemberType NoteProperty -Name $_.Name -Value $_.'#text' -Force
         }
 
-        # Only include events targeting the honeytoken username.
+        # Client-side username safety check.
         $TargetUser = if ($Evt.TargetUserName) { $Evt.TargetUserName.Split('@')[0] } else { '' }
         if ($TargetUser -ne $Username) { continue }
 
@@ -150,6 +172,8 @@ Function Get-HoneypotEventsBatch {
 
         $Enriched += $Evt
     }
+    Write-Host ("    [DC-PARSE] {0}: XML enrichment for {1} event(s) took {2:N1}s" -f $ComputerName, $RawCount, ((Get-Date) - $ParseStart).TotalSeconds) -ForegroundColor DarkGray
+
     return $Enriched
 }
 
