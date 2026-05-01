@@ -4,6 +4,24 @@
 
 ---
 
+### Modules/AD-PowerAdmin_ExchangeAdSecurity.psd1 -- Promoted to Production
+
+**Changed:**
+- Module channel promoted from `Beta` to `Production`. The audit and remediation functions
+  have been validated against a live domain and produce correct output in both Exchange and
+  non-Exchange environments. All functions degrade gracefully when Exchange groups are absent.
+- `ReleaseNotes` updated to document the v1.0 Production promotion milestone.
+
+**Why it changed:** The module has been exercised in a production domain environment. All
+five public functions (domain root ACE audit, group membership audit, group ACL risk audit,
+full orchestrated report, and guided ACE removal) operate correctly. No functional changes
+were required; this is a maturity promotion only.
+
+**Impact:** The Exchange AD Security module is now Production-channel. The overall channel
+reported by `Get-ADPAVersion` will reflect this promotion.
+
+---
+
 ### Modules/AD-PowerAdmin_LogMgr.psd1 -- Promoted to Production
 
 **Changed:**

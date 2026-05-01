@@ -26,8 +26,8 @@
         PSData = @{
             Tags         = @()
             ProjectUri   = 'https://github.com/Brets0150/AD-PowerAdmin'
-            Channel      = 'Beta'
-            ReleaseNotes = 'v1.0 Beta - Initial release. Detects Exchange-to-DCSync escalation paths via domain root ACL audit, Exchange group membership audit, Exchange group ACL control audit, and guided dangerous ACE removal.'
+            Channel      = 'Production'
+            ReleaseNotes = 'v1.0 Production - Initial release. Detects Exchange-to-DCSync escalation paths via domain root ACL audit, Exchange group membership audit, Exchange group ACL control audit, and guided dangerous ACE removal. Includes categorized text report with per-finding attack scenarios and remediation steps.'
         }
     }
 }

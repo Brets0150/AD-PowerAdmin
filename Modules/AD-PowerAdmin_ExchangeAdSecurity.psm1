@@ -842,7 +842,6 @@ Function Get-ExchangeAuditReport {
                    -Body $EmailBody
     }
 
-    Write-Host "  Generating text report..." -ForegroundColor Cyan
     $TextReport = New-ExchangeAuditTextReport `
         -DomainRootAceResults  $DomainRootAceResults `
         -GroupMembershipResults $GroupMembershipResults `
@@ -850,6 +849,9 @@ Function Get-ExchangeAuditReport {
         -DcSyncExchangeResults $DcSyncExchangeResults `
         -OverallSeverity       $OverallSeverity `
         -SuspectMembers        $SuspectMembers
+
+    Write-Host ""
+    Write-Host $TextReport
 
     $TextReportPath = "$global:ReportsPath\ExchangeAdSecurityReport_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
     try {
