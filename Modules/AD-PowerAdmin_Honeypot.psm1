@@ -123,17 +123,17 @@ Function Get-HoneypotEventsBatch {
     [string]$UtcEnd   = $EndTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.000Z')
 
     # XPath evaluated by the DC Event Log service before any events cross the network.
-    # TargetUserName exact match covers NTLM and standard Kerberos events.
-    # The starts-with clause covers cross-realm Kerberos events where the realm is
-    # appended to the account name (e.g. svc_backup_sync@DOMAIN.COM).
+    # Windows Event Log XPath supports exact-match Data element predicates but does not
+    # support string functions such as starts-with() inside EventData predicates.
+    # Exact match on TargetUserName covers all five event types for standard Windows
+    # authentication (NTLM and Kerberos). The client-side Split('@')[0] check below
+    # acts as a safety net for the rare cross-realm Kerberos case where the realm
+    # suffix is appended to the account name.
     [string]$XPath = (
         "*[System[" +
             "(EventID=4624 or EventID=4625 or EventID=4768 or EventID=4771 or EventID=4740)" +
             " and TimeCreated[@SystemTime>='{0}' and @SystemTime<='{1}']" +
-        "] and EventData[" +
-            "Data[@Name='TargetUserName']='{2}'" +
-            " or starts-with(Data[@Name='TargetUserName'],'{2}@')" +
-        "]]" -f $UtcStart, $UtcEnd, $Username
+        "] and EventData[Data[@Name='TargetUserName']='{2}']]" -f $UtcStart, $UtcEnd, $Username
     )
 
     [datetime]$QueryStart = Get-Date
