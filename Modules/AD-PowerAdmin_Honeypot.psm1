@@ -122,9 +122,12 @@ Function Get-HoneypotEventsBatch {
     try {
         $RawEvents = Get-WinEvent -ComputerName $ComputerName -FilterHashtable $FilterHash -ErrorAction SilentlyContinue
     } catch {
-        Write-Host "  [WARN] Could not query Security log on '$ComputerName': $_" -ForegroundColor Yellow
+        Write-Host ("    [DC-WARN] {0}: Security log query failed -- {1}" -f $ComputerName, $_) -ForegroundColor Yellow
         return @()
     }
+
+    [int]$RawCount = if ($RawEvents) { $RawEvents.Count } else { 0 }
+    Write-Host ("    [DC-DATA] {0}: {1} raw event(s) retrieved matching IDs 4624/4625/4768/4771/4740" -f $ComputerName, $RawCount) -ForegroundColor DarkGray
 
     if (-not $RawEvents) { return @() }
 
@@ -164,18 +167,33 @@ Function Get-HoneypotEvents {
     }
 
     try {
-        $DomainControllers = Get-ADDomainController -Filter * | Select-Object -ExpandProperty HostName
+        $DomainControllers = @(Get-ADDomainController -Filter * | Select-Object -ExpandProperty HostName)
     } catch {
         Write-Host "  [FAIL] Could not enumerate domain controllers: $_" -ForegroundColor Red
         return @()
     }
 
+    Write-Host ("  Querying {0} domain controller(s) -- window: {1} to {2}" -f $DomainControllers.Count, $StartTime.ToString('HH:mm:ss'), $EndTime.ToString('HH:mm:ss')) -ForegroundColor Gray
+
+    [datetime]$QueryStart = Get-Date
     $AllEvents = @()
     foreach ($DC in $DomainControllers) {
-        Write-Host "  Querying $DC ..." -ForegroundColor Gray
-        $DCEvents  = Get-HoneypotEventsBatch -ComputerName $DC -Username $Username -StartTime $StartTime -EndTime $EndTime
+        [datetime]$DCStart = Get-Date
+        Write-Host ("  [{0}] Start  : {1}" -f $DCStart.ToString('HH:mm:ss'), $DC) -ForegroundColor Gray
+
+        $DCEvents = Get-HoneypotEventsBatch -ComputerName $DC -Username $Username -StartTime $StartTime -EndTime $EndTime
+
+        [datetime]$DCEnd     = Get-Date
+        [double]$ElapsedSec  = ($DCEnd - $DCStart).TotalSeconds
+        [int]$DCMatchCount   = if ($DCEvents) { $DCEvents.Count } else { 0 }
+        Write-Host ("  [{0}] Finish : {1} -- {2} matching event(s) -- {3:N1}s" -f $DCEnd.ToString('HH:mm:ss'), $DC, $DCMatchCount, $ElapsedSec) -ForegroundColor Gray
+
         $AllEvents += $DCEvents
     }
+
+    [double]$TotalSec = ((Get-Date) - $QueryStart).TotalSeconds
+    Write-Host ("  Total: {0} DC(s) queried in {1:N1}s -- {2} matching event(s)" -f $DomainControllers.Count, $TotalSec, $AllEvents.Count) -ForegroundColor Gray
+
     return $AllEvents
 }
 

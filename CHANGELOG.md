@@ -2,6 +2,18 @@
 
 ## Unpushed Changes (since last `git push`)
 
+---
+
+### AD-PowerAdmin.ps1 -- Unattended debug logging hardened
+
+**Changed:**
+- `Start-Automation` -- Added `Initialize-Debug` call at the top of the function body (before job dispatch), mirroring the identical guard already present in `Enter-MainMenu`. Prevents silent log gaps when a module job calls `Stop-Transcript` internally -- on return from that job, `Initialize-Debug` detects the transcript is gone and restarts it before the next job runs.
+- `Start-Automation` -- Added timestamped run-boundary markers (`=== Unattended Run Start/End: <JobName> | <timestamp> ===`) written via `Write-Host` when `$global:Debug` is true. The markers are written at the start of the function and at every exit point (both the `Daily` branch and the named-job branch), ensuring the transcript captures a clear delimiter for each scheduled run.
+
+**Why it changed:** Previously `Start-Automation` had no transcript guard. Any module job that called `Stop-Transcript` (e.g. installer functions) would silently drop all subsequent output from that unattended run. Additionally, the append-only `AD-PowerAdmin_Debug.log` file had no per-run markers, making it impossible to isolate a specific scheduled run's output when reviewing the log after multiple automated executions.
+
+**Impact:** Unattended runs with `$global:Debug = $true` now produce complete, individually delimited output in `Reports/AD-PowerAdmin_Debug.log`. No behavior change when `$global:Debug = $false`.
+
 **2 commits ahead of `origin/main` as of 2026-04-04.**
 **Plus additional unstaged working-directory modifications across all modules.**
 
@@ -204,6 +216,21 @@ A 60-minute detection window is adequate for overnight monitoring but too coarse
 - Environments that do not change the setting retain the existing 60-minute behavior; no operational change.
 - Setting `$global:HoneypotMonitorIntervalMinutes = 15` and re-running the install wizard (which recreates the scheduled task) applies the new interval immediately.
 - The setting does not affect `Show-HoneypotReport`; that function always prompts for an explicit time range.
+
+---
+
+### Modules/AD-PowerAdmin_Honeypot.psm1 -- DC Event Log Query Timing Diagnostics
+
+**Changed:**
+- `Get-HoneypotEventsBatch` -- After retrieving raw Security log events from a DC, the function now writes a `[DC-DATA]` line reporting the DC hostname and the count of raw events returned by `Get-WinEvent` before username filtering is applied. The `[WARN]` message on query failure was also promoted to `[DC-WARN]` and reformatted consistently. This raw count makes it possible to distinguish between "DC returned 0 events in the window" and "DC returned many events but none matched the honeytoken account."
+- `Get-HoneypotEvents` -- Each domain controller query is now wrapped with per-DC timing output: a `Start` line (with timestamp and DC name) is written before the query and a `Finish` line (with timestamp, DC name, matching event count, and elapsed seconds) is written after. A summary line at the end reports total DC count, total elapsed time, and total matching events across all DCs. The opening line now shows the full query window (start time to end time) and the count of DCs being queried. The `$DomainControllers` array is explicitly cast to `@()` so `.Count` is reliable when only one DC exists.
+
+**Why it changed:**
+Security Event Log queries against remote domain controllers over WMI/RPC can be slow when the DC is distant, under load, or when the log is large. Before deciding whether to restrict log queries to the local DC (or a preferred DC list), the per-DC elapsed times are needed to identify where the latency is concentrated. Without timing output, a slow run produces no information about which DC is responsible for the delay or how long each query took. With this output captured by the AD-PowerAdmin transcript/debug system, a single run produces a clear breakdown of query time per DC and total throughput, sufficient to guide the next optimization step.
+
+**Impact:**
+- Every honeytoken monitor run (automated and interactive) now writes per-DC timing to the terminal, which is captured by the transcript when `$global:Debug = $true`.
+- No behavioral change to event collection, filtering, alerting, or CSV export.
 
 ---
 

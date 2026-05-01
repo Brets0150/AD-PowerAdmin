@@ -471,6 +471,15 @@ function Start-Automation {
         Exit 1
     }
 
+    # Ensure the debug transcript is running. A module job may have called Stop-Transcript
+    # internally; this guard mirrors the same pattern used in Enter-MainMenu.
+    Initialize-Debug
+
+    # Write a timestamped boundary marker so individual runs are identifiable in the log.
+    if ($global:Debug) {
+        Write-Host "=== Unattended Run Start: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
+    }
+
     # Foreach value in the $global:UnattendedJobs variable, build a new PowerShell object and add the value to the object.
     # The $global:UnattendedJobs variable is populated by the Initialize-Module function in each module.
     [array]$UnattendedJobObjects = @()
@@ -498,6 +507,10 @@ function Start-Automation {
                 Invoke-Expression $_.Command
             }
         }
+        if ($global:Debug) {
+            Initialize-Debug
+            Write-Host "=== Unattended Run End: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
+        }
         return
     }
 
@@ -513,6 +526,11 @@ function Start-Automation {
             # Run the function that is associated with the $MenuObjects.MenuIndex; $MenuObjects.FunctionName.
             Invoke-Expression $_.Command -ErrorAction:SilentlyContinue
         }
+    }
+
+    if ($global:Debug) {
+        Initialize-Debug
+        Write-Host "=== Unattended Run End: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
     }
 # End of Start-Automation function.
 }
