@@ -18,7 +18,7 @@
     )
     PrivateData = @{
         PSData = @{
-            Channel      = 'Beta'
+            Channel      = 'Production'
             ProjectUri   = 'https://github.com/Brets0150/AD-PowerAdmin'
             ReleaseNotes = 'Initial release of SYSVOL security audit module.'
         }

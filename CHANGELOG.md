@@ -4,6 +4,182 @@
 
 ---
 
+### Modules/AD-PowerAdmin_ExchangeAdSecurity.psm1 and AD-PowerAdmin_ExchangeAdSecurity.psd1 -- New Module
+
+**Added:**
+- `Search-ExchangeDomainRootAce` -- Reads the domain root ACL and filters for ACEs where an
+  Exchange security group (Exchange Windows Permissions, Exchange Trusted Subsystem,
+  Organization Management, Exchange Recipient Administrators) holds WriteDACL, GenericAll,
+  WriteOwner, GenericWrite, or AllExtendedRights. Each finding is tagged Critical or High.
+  Supports `-ReturnAcl` for pipeline use by the orchestrator and the remediation function.
+- `Search-ExchangeGroupMembership` -- Recursively enumerates membership of all Exchange
+  security groups in `$global:ExchangeGroupsToAudit` and flags members whose SamAccountName
+  does not match known Exchange service account patterns and whose ObjectClass is not
+  `computer`. Supports `-ReturnData` for pipeline use.
+- `Search-ExchangeGroupAclRisk` -- Reads the ACL on the Exchange Windows Permissions group
+  object and identifies principals holding GenericAll, WriteDACL, WriteOwner, GenericWrite, or
+  WriteProperty. Any such principal can add themselves or another account to the group and
+  thereby gain its domain-root WriteDACL right. Supports `-ReturnAcl`.
+- `Get-ExchangeAuditReport` -- Orchestrates all four checks (domain root ACE, group
+  membership, group ACL risk, and DCSync correlation via `Search-DcSyncRisk -ReturnAcl`),
+  computes an overall severity rating (Critical/High/Medium/Clean), exports a flat CSV via
+  `Export-AdPowerAdminData`, saves a categorized explanatory text report, and sends an email
+  alert when `$global:ExchangeADSecurityAudit = $true` and SMTP is configured.
+- `Remove-ExchangeDangerousAce` -- Interactive guided removal of dangerous Exchange ACEs from
+  the domain root. Exports a pre-change ACL backup, requires explicit `CONFIRM` input, removes
+  matching ACEs via `$Acl.RemoveAccessRule()` and `Set-Acl` on the raw .NET ACL object, and
+  exports a post-change verification report.
+- `New-ExchangeAuditTextReport` (private) -- Builds the categorized text report consumed by
+  `Get-ExchangeAuditReport`. Each finding section contains a grouped findings table, a WHAT
+  THIS MEANS explanation, an attack walkthrough, numbered remediation steps, wiki anchor links,
+  and a remediation validation checklist. Returns plain ASCII written to a timestamped `.txt`
+  in `$global:ReportsPath`.
+- `Initialize-Module` -- Registers the "Exchange AD Security" submenu (5 items), one main
+  menu entry, and the `ExchangeAuditReport` unattended job (Daily flag driven by
+  `$global:ExchangeADSecurityAudit`).
+
+**Why it was built:** Exchange historically grants the Exchange Windows Permissions group
+WriteDACL on the domain root, creating a well-known escalation path to DCSync that no
+existing AD-PowerAdmin module detected or remediated. The vulnerability is documented in
+`AD-PowerAdmin.wiki/Vulnerabilities/exchange_ad_permission_escalation.md`; this module
+implements the audit procedure and guided remediation described there.
+
+**Impact:** "Exchange AD Security" submenu added to the main menu. The module degrades
+gracefully in environments without Exchange (yellow `[WARN]` per missing group, no errors).
+Channel: Beta.
+
+---
+
+### AD-PowerAdmin_settings.ps1 -- Exchange Audit Settings
+
+**Added:**
+- `$global:ExchangeADSecurityAudit` -- Boolean (default `$false`) controlling whether the
+  Exchange audit runs as a daily unattended job and triggers the email alert after each run.
+- `$global:ExchangeGroupsToAudit` -- String array of Exchange security group names checked
+  for dangerous domain-root ACEs and audited for membership. Default covers the four standard
+  Exchange permission groups.
+
+**Impact:** No behavior change to existing modules. Settings have no effect until the Exchange
+module is loaded.
+
+---
+
+### Modules/AD-PowerAdmin_PasswordNotRequired.psm1 and AD-PowerAdmin_PasswordNotRequired.psd1 -- MERGED (not shipped as standalone)
+
+**Note:** This capability was merged into `AD-PowerAdmin_PasswordsCtl` v2.0 rather than
+shipping as a standalone module. See the `AD-PowerAdmin_PasswordsCtl v2.0` entry below for
+the full function list, design rationale, and impact.
+
+---
+
+### Modules/AD-PowerAdmin_PasswordsCtl.psm1 and AD-PowerAdmin_PasswordsCtl.psd1 -- v2.0: PasswordNotRequired Merge
+
+**Changed:**
+- `ModuleVersion` bumped from `1.0` to `2.0`.
+- `Initialize-Module` -- Added stale-entry removal for `PasswordNotRequiredMenu` (in both
+  `$global:Menu` and `$global:SubMenus`) and `Start-DailyPasswordNotRequiredAudit` (in
+  `$global:UnattendedJobs`), ensuring safe module reloads if the standalone module was
+  previously loaded. Added two new items to the `PasswordsCtlMenu` submenu:
+  `PasswordNotRequired Audit` and `PasswordNotRequired Remediation`. Updated the main menu
+  Label to reflect the expanded scope. Registered the `Start-DailyPasswordNotRequiredAudit`
+  daily unattended job.
+- Module description updated to document the PasswordNotRequired audit and remediation
+  capability.
+
+**Added:**
+- `Get-PasswordNotRequiredAccounts` -- Domain-wide discovery of all user and computer accounts
+  with the `PasswordNotRequired` (`PASSWD_NOTREQD`) flag set. Each finding is cross-referenced
+  against high-privilege group membership (Domain Admins, Enterprise Admins, Schema Admins,
+  Administrators, and ten additional privileged groups) and assigned a risk level: Critical,
+  High, Medium, Low, or Review. Returns a `PSCustomObject[]` with twelve fields including
+  `RiskLevel` and `RecommendedAction`. Used by all other functions in this area and by
+  `Test-ADSecurityBestPractices` in the Audits module.
+- `Get-PasswordNotRequiredAudit` -- Interactive audit function. Calls
+  `Get-PasswordNotRequiredAccounts`, displays a risk-grouped report to the console, and
+  calls `Export-AdPowerAdminData` to offer CSV export to `Reports/`.
+- `Show-PasswordNotRequiredFindings` -- Shared display helper used internally by
+  `Get-PasswordNotRequiredAudit` and `Start-PasswordNotRequiredRemediation` to render the
+  colour-coded risk-rated report without prompting for export.
+- `Start-PasswordNotRequiredRemediation` -- Interactive remediation workflow. Displays the
+  full audit report, then requires the operator to type `YES` exactly before clearing
+  `PasswordNotRequired` from all listed user accounts. Empty input, `Y`, `y`, or any other
+  string cancels with no changes made. Logs every operation (success and failure) and exports
+  the log to `Reports/`. Computer accounts are listed separately with manual remediation
+  guidance and are never modified automatically.
+- `Start-DailyPasswordNotRequiredAudit` -- Unattended daily job. Checks the domain for
+  `PasswordNotRequired` accounts, exports a dated CSV to `Reports/`, and emails the
+  administrator when any Critical or High risk accounts are found. Controlled by the
+  `$global:PasswordNotRequiredAudit` feature flag.
+- `Get-PrivilegedAccountNames` (private, not exported) -- Builds a case-insensitive HashSet
+  of all member DNs across the fourteen defined high-privilege groups. Used by
+  `Get-PasswordNotRequiredAccounts` to determine `PrivilegedGroupMember` and assign
+  Critical/Medium risk levels.
+
+**Removed:**
+- `Modules/AD-PowerAdmin_PasswordNotRequired.psm1` -- Standalone module file deleted; all
+  five functions and menu registrations merged into `AD-PowerAdmin_PasswordsCtl`.
+- `Modules/AD-PowerAdmin_PasswordNotRequired.psd1` -- Standalone manifest deleted.
+
+**Why this changed:** The PasswordNotRequired audit and remediation capability was initially
+developed as a standalone module. Because it is password security functionality -- directly
+complementary to the existing KRBTGT rotation, breached password audit, and password policy
+controls already in PasswordsCtl -- shipping it separately created artificial fragmentation.
+The merge consolidates all password security capabilities into one module with a unified
+sub-menu. The confirmation behavior was also tightened: the remediation prompt now requires
+the exact string `YES` rather than defaulting to proceed on empty input, which is the
+correct default for an operation that modifies account attributes domain-wide.
+
+**Impact:** The `PasswordNotRequired Audit` and `PasswordNotRequired Remediation` items now
+appear under the `Password Management` sub-menu alongside KRBTGT and password audit functions.
+The daily unattended job runs alongside other daily jobs when
+`$global:PasswordNotRequiredAudit = $true`. `Test-ADSecurityBestPractices` continues to call
+`Get-PasswordNotRequiredAccounts` with no change required -- the function is now exported from
+PasswordsCtl instead of the standalone module. No behavior change to any other module.
+
+---
+
+### AD-PowerAdmin_settings.ps1 -- PasswordNotRequiredAudit Feature Flag
+
+**Added:**
+- `$global:PasswordNotRequiredAudit` (`bool`, default `$true`) -- Enables or disables the
+  daily unattended `Start-DailyPasswordNotRequiredAudit` job. Set to `$false` to suppress
+  daily monitoring without removing the module or hiding the interactive menu options.
+
+---
+
+### Modules/AD-PowerAdmin_Audits.psm1 -- PasswordNotRequired Check in Security Best Practices
+
+**Changed:**
+- `Test-ADSecurityBestPractices` -- Added a new check section that calls
+  `Get-PasswordNotRequiredAccounts` (with a `Get-Command` guard so the section degrades
+  gracefully if the module is not installed) and reports a count summary broken down by
+  Critical, High, and Other risk levels. Points operators to the dedicated sub-menu for
+  full details and remediation. The check is positioned after the Machine Account Quota
+  audit and before the inactive users check.
+
+**Why it changed:** `Test-ADSecurityBestPractices` is the comprehensive domain security
+sweep. `PasswordNotRequired` is a misconfiguration with Critical-severity impact on
+privileged accounts and should be surfaced in the same run as DCSync risks, adminCount
+anomalies, and password policy weaknesses.
+
+**Impact:** The comprehensive security best practices report now surfaces `PasswordNotRequired`
+findings inline. No existing functionality changed. The guard prevents failures in
+environments that have not installed the new module.
+
+---
+
+### Modules/AD-PowerAdmin_GPOMgr.psd1 -- Promoted to Beta
+
+**Changed:**
+- Module channel promoted from `Alpha` to `Beta`. The GPO infrastructure layer has been exercised on production domain infrastructure through the Honeypot module integration (GPO creation, SYSVOL writing, AD object updates, link management, and removal) without known issues.
+- `ReleaseNotes` in the manifest updated to document the v1.1 Beta promotion milestone.
+
+**Why it changed:** The GPOMgr module was deployed as the runtime dependency for Honeypot GPO automation (`Install-ADPAGPOBaseline`, `Find-ADPAGPO`, `Remove-ADPAGPO`, `Test-ADPAGPO`, `Set-ADPAGPOPermission`, `Add-ADPAGPOLink`). That integration has been validated against a production domain including multi-DC replication and PDC emulator targeting. No functional changes were made; this is a maturity promotion only.
+
+**Impact:** The GPO Manager module is now Beta-channel. The overall channel reported by `Get-ADPAVersion` will increase for installations where GPOMgr was the only non-Beta/Production module in the load set.
+
+---
+
 ### AD-PowerAdmin.ps1 -- Unattended debug logging hardened
 
 **Changed:**
@@ -219,6 +395,20 @@ A 60-minute detection window is adequate for overnight monitoring but too coarse
 
 ---
 
+### Modules/AD-PowerAdmin_Honeypot.psm1 -- Report Time Range Menu Expanded
+
+**Changed:**
+- `Show-HoneypotReport` -- The time range selection menu has been restructured. Options are now: (1) 15 minutes [default], (2) 1 hour, (3) 24 hours, (4) 7 days, (5) Custom date/time range, (6) Custom minutes back from now. Pressing Enter without a selection now defaults to 15 minutes rather than 24 hours. The new option 6 prompts for a plain integer (number of minutes to look back from now), which is simpler than option 5's full date/time entry and useful for targeted investigation or performance-conscious queries. Invalid input on option 6 falls back to 15 minutes. A performance warning block is now displayed before the menu, explaining that Security Event Log retrieval from remote systems is slow by nature of the Windows log transfer mechanism, that longer time ranges significantly increase retrieval time, and that shorter ranges should be preferred on large or busy domains.
+
+**Why it changed:**
+Security Event Log queries against remote domain controllers can be slow. The previous default of 24 hours retrieves a large volume of raw events per DC, making interactive report runs noticeably slow in multi-DC environments. Setting the default to 15 minutes matches the configured monitor interval and keeps interactive queries fast by default. The custom-minutes option provides a convenient middle ground between the fixed presets and full date/time entry for cases where the administrator knows how far back to look without needing to specify exact timestamps.
+
+**Impact:**
+- Pressing Enter at the time range prompt now queries the last 15 minutes instead of the last 24 hours.
+- The performance warning ensures administrators understand the source of any slowness before initiating a long-range query.
+
+---
+
 ### Modules/AD-PowerAdmin_Honeypot.psm1 -- DC Event Log Query Timing Diagnostics
 
 **Changed:**
@@ -248,6 +438,17 @@ Security Event Log queries against remote domain controllers over WMI/RPC can be
 **Impact:**
 - GPO AD object updates no longer fail due to DC replication lag in multi-DC environments.
 - If the GPO still cannot be located on the PDC emulator, the diagnostic output lists all GPOs visible to that DC, enabling immediate root-cause identification without manual AD browsing.
+
+---
+
+### Modules/AD-PowerAdmin_SysvolAudit.psd1 -- Promoted to Production
+
+**Changed:**
+- Module channel promoted from `Beta` to `Production`. The SYSVOL audit module has been exercised against production domain infrastructure across all six audit functions (script inventory, credential and risk pattern scan, GPP cpassword scan, permission scan, GPO delegation audit, and external script path review) with no known issues. Post-testing refinements resolved false positives in the delegation and external-path audits.
+
+**Why it changed:** The module completed iterative testing and refinement across multiple test runs. All identified issues (email removal, GpoCustom false-positive filtering, GPO GUID/name display split, drive-map exclusion, external path traceability fields) have been resolved. The module is stable and suitable for production deployments.
+
+**Impact:** The SYSVOL Security Audit submenu is now Production-channel. The overall channel reported by `Get-ADPAVersion` will increase if this was the only non-Production module in the load set.
 
 ---
 
@@ -495,6 +696,11 @@ The `.gitignore` now includes `Modules/AD-PowerAdmin_Azure.*`, indicating an Azu
 | `Test-PwUserFollowup` | Complete |
 | `Start-MonthlyPasswordAudit` | Complete |
 | `New-RandomPassword` | Complete |
+| `Get-PasswordNotRequiredAccounts` | Complete |
+| `Get-PasswordNotRequiredAudit` | Complete |
+| `Show-PasswordNotRequiredFindings` | Complete |
+| `Start-PasswordNotRequiredRemediation` | Complete |
+| `Start-DailyPasswordNotRequiredAudit` | Complete |
 
 ### AD-PowerAdmin_LogMgr
 | Function | Status |

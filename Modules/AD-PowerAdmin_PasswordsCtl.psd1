@@ -12,7 +12,7 @@
     RootModule = 'AD-PowerAdmin_PasswordsCtl.psm1'
 
     # Version number of this module.
-    ModuleVersion = '1.0'
+    ModuleVersion = '2.0'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -30,12 +30,13 @@
 
     # Description of the functionality provided by this module
     Description = @'
-    AD-PowerAdmin_Examle is a PowerShell module that provides simple module that can be loaded into AD-PowerAdmin.
-    This module is an passwordsctl of how to create a module for AD-PowerAdmin.
+    AD-PowerAdmin_PasswordsCtl manages password security for Active Directory.
 
-    The module includes Two function:
-    - Get-PasswordsCtl1
-    - Get-PasswordsCtl2
+    Capabilities:
+    - KRBTGT password rotation with scheduled follow-up (Golden Ticket defense)
+    - Breached and weak password audit using DSInternals and the HIBP NTLM hash database
+    - User notification and enforcement workflow for compromised passwords
+    - PasswordNotRequired (PASSWD_NOTREQD) flag audit and remediation
 '@
 
     # Minimum version of the Windows PowerShell engine required by this module
@@ -75,7 +76,20 @@
     # NestedModules = @()
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-    FunctionsToExport = @('Update-KRBTGTPassword', 'Get-PasswordAudit', 'Get-PasswordAuditAdminReport', 'Test-PwUserFollowup', 'Start-MonthlyPasswordAudit', 'New-RandomPassword', 'Test-NtlmHashesInDirectory')
+    FunctionsToExport = @(
+        'Update-KRBTGTPassword',
+        'Get-PasswordAudit',
+        'Get-PasswordAuditAdminReport',
+        'Test-PwUserFollowup',
+        'Start-MonthlyPasswordAudit',
+        'New-RandomPassword',
+        'Test-NtlmHashesInDirectory',
+        'Get-PasswordNotRequiredAccounts',
+        'Get-PasswordNotRequiredAudit',
+        'Show-PasswordNotRequiredFindings',
+        'Start-PasswordNotRequiredRemediation',
+        'Start-DailyPasswordNotRequiredAudit'
+    )
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
     CmdletsToExport = @()
@@ -122,6 +136,15 @@
             ReleaseNotes = @'
             v1.0:
             - Migrate from old methods to new methods.
+            v2.0:
+            - Added PasswordNotRequired (PASSWD_NOTREQD) audit and remediation.
+              New functions: Get-PasswordNotRequiredAccounts, Get-PasswordNotRequiredAudit,
+              Show-PasswordNotRequiredFindings, Start-PasswordNotRequiredRemediation,
+              Start-DailyPasswordNotRequiredAudit.
+            - Two new sub-menu items added to Password Management: PasswordNotRequired Audit
+              and PasswordNotRequired Remediation.
+            - Daily unattended job Start-DailyPasswordNotRequiredAudit added; controlled by
+              $global:PasswordNotRequiredAudit feature flag.
 '@
 
         } # End of PSData hashtable

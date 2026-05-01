@@ -1192,17 +1192,30 @@ Function Show-HoneypotReport {
     Write-Host ''
     Write-Host "Honeytoken Activity Report  --  Account: $Username" -ForegroundColor White
     Write-Host ''
+    Write-Host 'NOTE: This report queries the Windows Security Event Log on every domain' -ForegroundColor Yellow
+    Write-Host 'controller in the domain over the network. Longer time ranges return more' -ForegroundColor Yellow
+    Write-Host 'raw events, which significantly increases retrieval time. This is a' -ForegroundColor Yellow
+    Write-Host 'limitation of how Windows transfers event logs between systems, not a' -ForegroundColor Yellow
+    Write-Host 'limitation of this script. For large or busy domains, prefer shorter ranges.' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '  (1) 15 minutes  [default]'
+    Write-Host '  (2) 1 hour'
+    Write-Host '  (3) 24 hours'
+    Write-Host '  (4) 7 days'
+    Write-Host '  (5) Custom date/time range'
+    Write-Host '  (6) Custom minutes back from now'
+    Write-Host ''
+    $Range = Read-Host 'Selection [default: 1]'
 
-    $Range = Read-Host 'Time range: (1) 1 hour  (2) 24 hours  (3) 7 days  (4) Custom  [default: 2]'
-
-    [datetime]$StartTime = (Get-Date).AddHours(-24)
+    [datetime]$StartTime = (Get-Date).AddMinutes(-15)
     [datetime]$EndTime   = Get-Date
 
     switch ($Range.Trim()) {
-        '1' { $StartTime = (Get-Date).AddHours(-1)  }
-        '2' { $StartTime = (Get-Date).AddHours(-24) }
-        '3' { $StartTime = (Get-Date).AddDays(-7)   }
-        '4' {
+        '1' { $StartTime = (Get-Date).AddMinutes(-15) }
+        '2' { $StartTime = (Get-Date).AddHours(-1)    }
+        '3' { $StartTime = (Get-Date).AddHours(-24)   }
+        '4' { $StartTime = (Get-Date).AddDays(-7)     }
+        '5' {
             Write-Host 'Enter start date/time (e.g. 2026-04-20 08:00:00):' -ForegroundColor White
             [string]$StartRaw = Read-Host
             Write-Host 'Enter end date/time (leave blank for now):' -ForegroundColor White
@@ -1213,11 +1226,22 @@ Function Show-HoneypotReport {
                     $EndTime = [datetime]::Parse($EndRaw)
                 }
             } catch {
-                Write-Host 'Invalid date format. Defaulting to past 24 hours.' -ForegroundColor Yellow
-                $StartTime = (Get-Date).AddHours(-24)
+                Write-Host 'Invalid date format. Defaulting to past 15 minutes.' -ForegroundColor Yellow
+                $StartTime = (Get-Date).AddMinutes(-15)
             }
         }
-        default { $StartTime = (Get-Date).AddHours(-24) }
+        '6' {
+            Write-Host 'Enter number of minutes to look back from now:' -ForegroundColor White
+            [string]$MinRaw = Read-Host
+            [int]$MinBack   = 0
+            if ([int]::TryParse($MinRaw.Trim(), [ref]$MinBack) -and $MinBack -gt 0) {
+                $StartTime = (Get-Date).AddMinutes(-$MinBack)
+            } else {
+                Write-Host 'Invalid value. Defaulting to past 15 minutes.' -ForegroundColor Yellow
+                $StartTime = (Get-Date).AddMinutes(-15)
+            }
+        }
+        default { $StartTime = (Get-Date).AddMinutes(-15) }
     }
 
     Write-Host ''

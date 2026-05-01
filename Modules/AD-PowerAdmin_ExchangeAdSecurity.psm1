@@ -320,6 +320,344 @@ Function Search-ExchangeGroupAclRisk {
     }
 }
 
+Function New-ExchangeAuditTextReport {
+    <#
+    .SYNOPSIS
+    Builds a categorized, explanatory text report of Exchange AD security findings.
+    #>
+    Param(
+        [Parameter(Mandatory=$false)] [object]$DomainRootAceResults,
+        [Parameter(Mandatory=$false)] [object]$GroupMembershipResults,
+        [Parameter(Mandatory=$false)] [object]$GroupAclRiskResults,
+        [Parameter(Mandatory=$false)] [object]$DcSyncExchangeResults,
+        [Parameter(Mandatory=$false)] [string]$OverallSeverity = 'Clean',
+        [Parameter(Mandatory=$false)] [object]$SuspectMembers
+    )
+
+    if ($null -eq $DomainRootAceResults)  { $DomainRootAceResults  = @() }
+    if ($null -eq $GroupMembershipResults) { $GroupMembershipResults = @() }
+    if ($null -eq $GroupAclRiskResults)   { $GroupAclRiskResults   = @() }
+    if ($null -eq $DcSyncExchangeResults) { $DcSyncExchangeResults  = @() }
+    if ($null -eq $SuspectMembers)        { $SuspectMembers         = @() }
+
+    $Sep      = '=' * 72
+    $SubSep   = '-' * 72
+    $WikiBase = 'https://github.com/Brets0150/AD-PowerAdmin/wiki/Exchange-AD-Security-Audit'
+
+    $Lines = New-Object System.Collections.Generic.List[string]
+
+    # ------------------------------------------------------------------ Header
+    $Lines.Add($Sep)
+    $Lines.Add('Exchange AD Security Audit Report')
+    $Lines.Add("Generated : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+    try {
+        $Domain = Get-ADDomain
+        $Lines.Add("Domain    : $($Domain.DNSRoot) / $($Domain.DistinguishedName)")
+    } catch {
+        $Lines.Add("Domain    : (could not retrieve)")
+    }
+    $Lines.Add("Severity  : $OverallSeverity")
+    $Lines.Add($Sep)
+    $Lines.Add('')
+
+    # ----------------------------------------------------------------- Summary
+    $Lines.Add('SUMMARY')
+    $Lines.Add($SubSep)
+    $Lines.Add("  Domain Root Dangerous ACEs : $($DomainRootAceResults.Count)")
+    $Lines.Add("  Suspect Group Members      : $($SuspectMembers.Count)")
+    $Lines.Add("  Exchange Group Control Risk: $($GroupAclRiskResults.Count)")
+    $Lines.Add("  Exchange-related DCSync    : $($DcSyncExchangeResults.Count)")
+    $Lines.Add('')
+    $Lines.Add('For in-depth guidance on this vulnerability and its remediations, see:')
+    $Lines.Add("  $WikiBase")
+    $Lines.Add('')
+
+    # ------------------------------------------------------- Finding 1: Domain Root ACE
+    if ($DomainRootAceResults -and $DomainRootAceResults.Count -gt 0) {
+        $MaxSeverity = 'High'
+        if ($DomainRootAceResults | Where-Object { $_.Severity -eq 'Critical' }) {
+            $MaxSeverity = 'Critical'
+        }
+        $Lines.Add($Sep)
+        $Lines.Add("FINDING [$MaxSeverity]: DANGEROUS EXCHANGE PERMISSIONS ON DOMAIN ROOT")
+        $Lines.Add($Sep)
+        $Lines.Add('')
+        $Lines.Add('The following Exchange security groups hold dangerous rights on the domain')
+        $Lines.Add('root. These rights allow the ACL to be rewritten, enabling an attacker')
+        $Lines.Add('to grant themselves DCSync replication rights and extract all password')
+        $Lines.Add('hashes from the domain.')
+        $Lines.Add('')
+
+        $Lines.Add(("  {0,-35} {1,-22} {2}" -f 'Group', 'Rights', 'Severity'))
+        $Lines.Add(("  {0,-35} {1,-22} {2}" -f ('-' * 35), ('-' * 22), ('-' * 8)))
+
+        $GroupedByPrincipal = $DomainRootAceResults | Group-Object -Property SecurityPrincipal
+        foreach ($PrincipalGroup in $GroupedByPrincipal) {
+            $AllRights       = ($PrincipalGroup.Group | Select-Object -ExpandProperty AdRights | Select-Object -Unique) -join ', '
+            $GroupSeverity   = if ($PrincipalGroup.Group | Where-Object { $_.Severity -eq 'Critical' }) { 'Critical' } else { 'High' }
+            $PrincipalDisplay = $PrincipalGroup.Name
+            $RightsDisplay    = $AllRights
+            if ($PrincipalDisplay.Length -gt 35) { $PrincipalDisplay = $PrincipalDisplay.Substring(0, 32) + '...' }
+            if ($RightsDisplay.Length    -gt 22) { $RightsDisplay    = $RightsDisplay.Substring(0, 19)    + '...' }
+            $Lines.Add(("  {0,-35} {1,-22} {2}" -f $PrincipalDisplay, $RightsDisplay, $GroupSeverity))
+        }
+        $Lines.Add('')
+
+        $Lines.Add('WHAT THIS MEANS')
+        $Lines.Add($SubSep)
+        $Lines.Add('  WriteDACL on the domain root lets any group member rewrite the domain')
+        $Lines.Add('  ACL. GenericAll provides full control over the domain object. Either')
+        $Lines.Add('  right creates a direct path from Exchange group membership to DCSync-')
+        $Lines.Add('  level access -- the ability to replicate all password hashes from every')
+        $Lines.Add('  domain controller, including privileged accounts and KRBTGT.')
+        $Lines.Add('')
+
+        $Lines.Add('HOW AN ATTACKER CAN EXPLOIT THIS')
+        $Lines.Add($SubSep)
+        $Lines.Add('  1. Gain control of any account in Exchange Windows Permissions (e.g.,')
+        $Lines.Add('     phishing, credential stuffing, privilege abuse, or NTLM relay).')
+        $Lines.Add('  2. Use WriteDACL to grant an attacker-controlled account the extended')
+        $Lines.Add('     rights DS-Replication-Get-Changes and DS-Replication-Get-Changes-All')
+        $Lines.Add('     on the domain root object.')
+        $Lines.Add('  3. Run DCSync to dump all AD password hashes, including KRBTGT.')
+        $Lines.Add('  4. Use the KRBTGT hash to forge Golden Tickets for persistent,')
+        $Lines.Add('     undetected access to any resource in the domain.')
+        $Lines.Add('')
+        $Lines.Add('  PrivExchange variant: a mailbox-enabled user can coerce Exchange server')
+        $Lines.Add('  authentication and relay NTLM to LDAP, bypassing step 1 entirely if')
+        $Lines.Add('  LDAP signing and channel binding are not enforced on domain controllers.')
+        $Lines.Add('')
+
+        $Lines.Add('REMEDIATION')
+        $Lines.Add($SubSep)
+        $Lines.Add('  1. Patch Exchange to the latest supported cumulative update.')
+        $Lines.Add('  2. Run AD preparation from the patched CU:')
+        $Lines.Add('       Setup.exe /PrepareAD /IAcceptExchangeServerLicenseTerms_DiagnosticDataOFF')
+        $Lines.Add('       Setup.exe /PrepareAllDomains /IAcceptExchangeServerLicenseTerms_DiagnosticDataOFF')
+        $Lines.Add('  3. Re-audit using this tool. If dangerous ACEs persist after PrepareAD,')
+        $Lines.Add('     use "Remove Dangerous ACE" from the Exchange AD Security submenu.')
+        $Lines.Add('  4. Enforce LDAP signing (GPO):')
+        $Lines.Add('       Domain controller: LDAP server signing requirements = Require signing')
+        $Lines.Add('  5. Enforce LDAP channel binding (GPO):')
+        $Lines.Add('       Domain controller: LDAP server channel binding token requirements = Always')
+        $Lines.Add('  6. Monitor Exchange Windows Permissions for membership changes')
+        $Lines.Add('     (Event IDs 4728, 4756, 4757).')
+        $Lines.Add('  7. Monitor domain root ACL changes (Event IDs 5136, 4662).')
+        $Lines.Add('')
+        $Lines.Add("  Detailed guidance: $WikiBase#finding-domain-root-ace")
+        $Lines.Add('')
+    }
+
+    # ------------------------------------------------ Finding 2: Suspect Group Members
+    if ($SuspectMembers -and $SuspectMembers.Count -gt 0) {
+        $Lines.Add($Sep)
+        $Lines.Add('FINDING [MEDIUM]: SUSPECT MEMBERS IN EXCHANGE SECURITY GROUPS')
+        $Lines.Add($Sep)
+        $Lines.Add('')
+        $Lines.Add('The following members in Exchange security groups do not match known')
+        $Lines.Add('Exchange service account patterns. Each flagged member inherits the')
+        $Lines.Add("group's domain-root permissions, including any dangerous rights.")
+        $Lines.Add('')
+
+        $Lines.Add(("  {0,-30} {1,-25} {2,-12} {3}" -f 'Group', 'SamAccountName', 'ObjectClass', 'IsSuspect'))
+        $Lines.Add(("  {0,-30} {1,-25} {2,-12} {3}" -f ('-' * 30), ('-' * 25), ('-' * 12), ('-' * 9)))
+
+        $GroupedByGroup = $SuspectMembers | Group-Object -Property GroupName
+        foreach ($GroupEntry in $GroupedByGroup) {
+            foreach ($Member in $GroupEntry.Group) {
+                $GrpDisplay   = $GroupEntry.Name
+                $SamDisplay   = $Member.SamAccountName
+                $ClassDisplay = $Member.ObjectClass
+                if ($GrpDisplay.Length   -gt 30) { $GrpDisplay   = $GrpDisplay.Substring(0, 27)   + '...' }
+                if ($SamDisplay.Length   -gt 25) { $SamDisplay   = $SamDisplay.Substring(0, 22)    + '...' }
+                if ($ClassDisplay.Length -gt 12) { $ClassDisplay = $ClassDisplay.Substring(0, 9)   + '...' }
+                $Lines.Add(("  {0,-30} {1,-25} {2,-12} {3}" -f $GrpDisplay, $SamDisplay, $ClassDisplay, 'YES'))
+            }
+        }
+        $Lines.Add('')
+
+        $Lines.Add('WHAT THIS MEANS')
+        $Lines.Add($SubSep)
+        $Lines.Add('  Non-Exchange accounts in Exchange security groups inherit that group''s')
+        $Lines.Add('  Active Directory rights. If the group holds WriteDACL or GenericAll on')
+        $Lines.Add('  the domain root, each unexpected member is a potential starting point')
+        $Lines.Add('  for the Exchange-to-DCSync escalation path.')
+        $Lines.Add('')
+
+        $Lines.Add('HOW AN ATTACKER CAN EXPLOIT THIS')
+        $Lines.Add($SubSep)
+        $Lines.Add('  An attacker who compromises any flagged account gains the group''s')
+        $Lines.Add('  domain-root rights directly, without needing to compromise an Exchange')
+        $Lines.Add('  server or Exchange-specific service account. The escalation steps are')
+        $Lines.Add('  identical to the domain root ACE finding once the account is under')
+        $Lines.Add('  attacker control.')
+        $Lines.Add('')
+
+        $Lines.Add('REMEDIATION')
+        $Lines.Add($SubSep)
+        $Lines.Add('  1. Review each flagged member. Confirm whether their presence is')
+        $Lines.Add('     authorized for legitimate Exchange operation.')
+        $Lines.Add('  2. Remove any unauthorized or unnecessary members from the group.')
+        $Lines.Add('  3. Restrict who can add members to Exchange Windows Permissions')
+        $Lines.Add('     (see Exchange Group ACL Risk check in this tool).')
+        $Lines.Add('  4. Enable monitoring for group membership changes (Event IDs 4728,')
+        $Lines.Add('     4729, 4756, 4757).')
+        $Lines.Add('')
+        $Lines.Add("  Detailed guidance: $WikiBase#finding-group-membership")
+        $Lines.Add('')
+    }
+
+    # ----------------------------------------------- Finding 3: Group ACL Risk
+    if ($GroupAclRiskResults -and $GroupAclRiskResults.Count -gt 0) {
+        $Lines.Add($Sep)
+        $Lines.Add('FINDING [CRITICAL]: DANGEROUS CONTROL OVER EXCHANGE WINDOWS PERMISSIONS')
+        $Lines.Add($Sep)
+        $Lines.Add('')
+        $Lines.Add('The following principals hold rights on the Exchange Windows Permissions')
+        $Lines.Add('group object that allow them to modify its membership or ACL. Anyone')
+        $Lines.Add('with such control inherits the full Exchange-to-DCSync escalation path.')
+        $Lines.Add('')
+
+        $Lines.Add(("  {0,-40} {1}" -f 'Principal', 'Rights'))
+        $Lines.Add(("  {0,-40} {1}" -f ('-' * 40), ('-' * 28)))
+        foreach ($Ace in $GroupAclRiskResults) {
+            $PrincipalDisplay = $Ace.SecurityPrincipal
+            $RightsDisplay    = $Ace.AdRights
+            if ($PrincipalDisplay.Length -gt 40) { $PrincipalDisplay = $PrincipalDisplay.Substring(0, 37) + '...' }
+            if ($RightsDisplay.Length    -gt 28) { $RightsDisplay    = $RightsDisplay.Substring(0, 25)    + '...' }
+            $Lines.Add(("  {0,-40} {1}" -f $PrincipalDisplay, $RightsDisplay))
+        }
+        $Lines.Add('')
+
+        $Lines.Add('WHAT THIS MEANS')
+        $Lines.Add($SubSep)
+        $Lines.Add('  Anyone with GenericAll, WriteDACL, WriteOwner, GenericWrite, or')
+        $Lines.Add('  WriteProperty over Exchange Windows Permissions can add themselves or')
+        $Lines.Add('  another account to the group or alter its ACL. This extends the')
+        $Lines.Add('  escalation path to principals that are not currently group members.')
+        $Lines.Add('')
+
+        $Lines.Add('HOW AN ATTACKER CAN EXPLOIT THIS')
+        $Lines.Add($SubSep)
+        $Lines.Add('  1. Compromise any account listed above.')
+        $Lines.Add('  2. Use its group-control right to add an attacker-controlled account')
+        $Lines.Add('     to Exchange Windows Permissions.')
+        $Lines.Add('  3. Use the group''s WriteDACL on the domain root to grant DCSync rights.')
+        $Lines.Add('  4. Run DCSync to extract all domain password hashes.')
+        $Lines.Add('')
+
+        $Lines.Add('REMEDIATION')
+        $Lines.Add($SubSep)
+        $Lines.Add('  1. Review each listed principal. Confirm whether their control over')
+        $Lines.Add('     the group is required for legitimate Exchange operation.')
+        $Lines.Add('  2. Remove any unnecessary GenericAll, WriteDACL, or WriteOwner rights')
+        $Lines.Add('     from non-Exchange administrative accounts on this group.')
+        $Lines.Add('  3. Restrict Exchange Windows Permissions management to the minimum')
+        $Lines.Add('     required Exchange service accounts.')
+        $Lines.Add('  4. Monitor for ACL changes on the group object (Event IDs 5136, 4662).')
+        $Lines.Add('')
+        $Lines.Add("  Detailed guidance: $WikiBase#finding-group-acl-risk")
+        $Lines.Add('')
+    }
+
+    # ------------------------------------------ Finding 4: Exchange DCSync Rights
+    if ($DcSyncExchangeResults -and $DcSyncExchangeResults.Count -gt 0) {
+        $Lines.Add($Sep)
+        $Lines.Add('FINDING [CRITICAL]: EXCHANGE-RELATED DCSYNC RIGHTS DETECTED')
+        $Lines.Add($Sep)
+        $Lines.Add('')
+        $Lines.Add('An Exchange-related group or account holds DCSync replication rights on')
+        $Lines.Add('the domain root. This may indicate the escalation path has already been')
+        $Lines.Add('used to stage a DCSync capability, or that Exchange itself was granted')
+        $Lines.Add('these rights during /PrepareAD.')
+        $Lines.Add('')
+
+        $Lines.Add(("  {0,-40} {1}" -f 'Principal', 'Replication Right'))
+        $Lines.Add(("  {0,-40} {1}" -f ('-' * 40), ('-' * 28)))
+        foreach ($Ace in $DcSyncExchangeResults) {
+            $PrincipalDisplay = $Ace.SecurityPrincipal
+            $RightsDisplay    = $Ace.RightObjectName
+            if ($PrincipalDisplay.Length -gt 40) { $PrincipalDisplay = $PrincipalDisplay.Substring(0, 37) + '...' }
+            if ($RightsDisplay.Length    -gt 28) { $RightsDisplay    = $RightsDisplay.Substring(0, 25)    + '...' }
+            $Lines.Add(("  {0,-40} {1}" -f $PrincipalDisplay, $RightsDisplay))
+        }
+        $Lines.Add('')
+
+        $Lines.Add('WHAT THIS MEANS')
+        $Lines.Add($SubSep)
+        $Lines.Add('  DS-Replication-Get-Changes and DS-Replication-Get-Changes-All are the')
+        $Lines.Add('  two extended rights required to perform a DCSync attack. Finding them')
+        $Lines.Add('  on an Exchange-related group means any member of that group can run')
+        $Lines.Add('  DCSync right now, without any additional ACL changes.')
+        $Lines.Add('')
+
+        $Lines.Add('HOW AN ATTACKER CAN EXPLOIT THIS')
+        $Lines.Add($SubSep)
+        $Lines.Add('  An attacker who joins or compromises a member of the listed group can')
+        $Lines.Add('  immediately run DCSync without needing to first abuse WriteDACL. If')
+        $Lines.Add('  these rights were granted by an attacker rather than Exchange /PrepareAD,')
+        $Lines.Add('  the domain may already be compromised and the KRBTGT hash extracted.')
+        $Lines.Add('')
+
+        $Lines.Add('REMEDIATION')
+        $Lines.Add($SubSep)
+        $Lines.Add('  1. Determine whether this right is a legitimate Exchange grant or an')
+        $Lines.Add('     attacker modification. Check the ACL change audit log (Event ID 5136)')
+        $Lines.Add('     and operation audit log (Event ID 4662) for who granted the right')
+        $Lines.Add('     and when.')
+        $Lines.Add('  2. If unauthorized: treat this as a potential compromise. Initiate')
+        $Lines.Add('     incident response. Reset KRBTGT twice (with DC replication interval')
+        $Lines.Add('     between resets). Rotate all privileged account passwords.')
+        $Lines.Add('  3. If authorized but unnecessary: remove the extended right via Active')
+        $Lines.Add('     Directory Users and Computers or AD Administrative Center.')
+        $Lines.Add('  4. Run Exchange /PrepareAD from the latest supported CU to normalize')
+        $Lines.Add('     Exchange-granted rights to their expected minimal values.')
+        $Lines.Add('')
+        $Lines.Add("  Detailed guidance: $WikiBase#finding-exchange-dcsync-rights")
+        $Lines.Add('')
+    }
+
+    # ---------------------------------------------------------------- Clean state
+    if ($OverallSeverity -eq 'Clean') {
+        $Lines.Add($Sep)
+        $Lines.Add('ALL CHECKS PASSED')
+        $Lines.Add($Sep)
+        $Lines.Add('')
+        $Lines.Add('  [OK] No dangerous Exchange-related ACEs found on the domain root.')
+        $Lines.Add('  [OK] No unexpected members found in Exchange security groups.')
+        $Lines.Add('  [OK] No dangerous control over Exchange Windows Permissions found.')
+        $Lines.Add('  [OK] No Exchange-related DCSync rights detected.')
+        $Lines.Add('')
+        $Lines.Add('  Continue to monitor for changes using scheduled runs of this tool.')
+        $Lines.Add('')
+    }
+
+    # ------------------------------------------------------------------- Footer
+    $Lines.Add($Sep)
+    $Lines.Add('REMEDIATION VALIDATION CHECKLIST')
+    $Lines.Add($SubSep)
+    $Lines.Add('  [ ] Exchange is on a supported cumulative update.')
+    $Lines.Add('  [ ] Exchange /PrepareAD has been rerun from the patched CU.')
+    $Lines.Add('  [ ] /PrepareDomain or /PrepareAllDomains has been run where required.')
+    $Lines.Add('  [ ] Exchange Windows Permissions has no WriteDACL on the domain root.')
+    $Lines.Add('  [ ] Exchange Trusted Subsystem has no unnecessary GenericAll or WriteDACL.')
+    $Lines.Add('  [ ] No unexpected members exist in Exchange Windows Permissions.')
+    $Lines.Add('  [ ] No unexpected principals hold DCSync rights.')
+    $Lines.Add('  [ ] LDAP signing is enforced on all domain controllers.')
+    $Lines.Add('  [ ] LDAP channel binding is enforced on all domain controllers.')
+    $Lines.Add('  [ ] Alerts exist for changes to Exchange privileged group membership.')
+    $Lines.Add('  [ ] Alerts exist for domain root ACL changes (Event IDs 5136, 4662).')
+    $Lines.Add('')
+    $Lines.Add('  Full vulnerability dossier:')
+    $Lines.Add('  https://github.com/Brets0150/AD-PowerAdmin/wiki/exchange_ad_permission_escalation')
+    $Lines.Add('')
+    $Lines.Add($Sep)
+    $Lines.Add('END OF REPORT')
+    $Lines.Add($Sep)
+
+    return ($Lines -join "`r`n")
+}
+
 Function Get-ExchangeAuditReport {
     <#
     .SYNOPSIS
@@ -328,8 +666,9 @@ Function Get-ExchangeAuditReport {
     .DESCRIPTION
     Orchestrates Search-ExchangeDomainRootAce, Search-ExchangeGroupMembership,
     Search-ExchangeGroupAclRisk, and Search-DcSyncRisk to produce a unified severity
-    rating and CSV report. Sends an email alert when ExchangeADSecurityAudit is enabled
-    and SMTP is configured.
+    rating, a flat CSV report, and a categorized text report with per-finding explanations,
+    attack scenarios, and remediation steps. Sends an email alert when ExchangeADSecurityAudit
+    is enabled and SMTP is configured.
 
     .EXAMPLE
     Get-ExchangeAuditReport
@@ -369,7 +708,8 @@ Function Get-ExchangeAuditReport {
 
     $SuspectMembers = @()
     if ($GroupMembershipResults -and $GroupMembershipResults.Count -gt 0) {
-        $SuspectMembers = $GroupMembershipResults | Where-Object { $_.IsSuspect -eq $true }
+        $SuspectMembersRaw = $GroupMembershipResults | Where-Object { $_.IsSuspect -eq $true }
+        if ($null -ne $SuspectMembersRaw) { $SuspectMembers = $SuspectMembersRaw }
     }
 
     $OverallSeverity = 'Clean'
@@ -500,6 +840,25 @@ Function Get-ExchangeAuditReport {
                    -FromEmail $global:ReportsEmailFrom `
                    -Subject "ADPowerAdmin: Exchange AD Security Audit - Severity: $OverallSeverity" `
                    -Body $EmailBody
+    }
+
+    Write-Host "  Generating text report..." -ForegroundColor Cyan
+    $TextReport = New-ExchangeAuditTextReport `
+        -DomainRootAceResults  $DomainRootAceResults `
+        -GroupMembershipResults $GroupMembershipResults `
+        -GroupAclRiskResults   $GroupAclRiskResults `
+        -DcSyncExchangeResults $DcSyncExchangeResults `
+        -OverallSeverity       $OverallSeverity `
+        -SuspectMembers        $SuspectMembers
+
+    $TextReportPath = "$global:ReportsPath\ExchangeAdSecurityReport_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+    try {
+        $TextReport | Out-File -FilePath $TextReportPath -Encoding ASCII -Force
+        if (Test-Path -Path $TextReportPath) {
+            Write-Host "[OK] Text report saved: $TextReportPath" -ForegroundColor Green
+        }
+    } catch {
+        Write-Host "[FAIL] Could not save text report: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 

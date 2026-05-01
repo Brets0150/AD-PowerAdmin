@@ -60,11 +60,12 @@
 ##############################################################################################
 # -------------------[Optional]------------------- #
 # Enable or disable the Daily tasks that will be run.
-[bool]$global:KerberosKRBTGTAudit      = $true
-[bool]$global:InactiveComputerAudit    = $true
-[bool]$global:InactiveUserAudit        = $true
-[bool]$global:WeakPasswordAudit        = $true
-[bool]$global:LockoutDailyReport       = $true
+[bool]$global:KerberosKRBTGTAudit           = $true
+[bool]$global:InactiveComputerAudit         = $true
+[bool]$global:InactiveUserAudit             = $true
+[bool]$global:WeakPasswordAudit             = $true
+[bool]$global:LockoutDailyReport            = $true
+[bool]$global:PasswordNotRequiredAudit      = $true
 
 ##############################################################################################
 # -------------------[Mandatory]------------------- #

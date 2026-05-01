@@ -1319,6 +1319,7 @@ Function Test-ADSecurityBestPractices {
         - Users and computers with non-default Primary Group IDs(A method of hiding backdoor accounts).
         - Disabled accounts with Group Membership other than 'Domain Users' group.
         - Computers in the default "Computers" folder. Unsorted computers will likely be missing GPOs.
+        - Accounts with PasswordNotRequired (PASSWD_NOTREQD) flag set (if module is loaded).
 
     .EXAMPLE
     Test-ADSecurityBestPractices
@@ -1379,6 +1380,25 @@ Function Test-ADSecurityBestPractices {
     # Test the Machine Account Quota and related computer account risks.
     Write-Host "Testing Machine Account Quota (ms-DS-MachineAccountQuota) and related computer account risks" -ForegroundColor Yellow
     Get-MachineAccountQuotaAudit
+    Write-Host "======================================================================================" -ForegroundColor White
+
+    # Test for accounts with the PasswordNotRequired (PASSWD_NOTREQD) flag set.
+    Write-Host "Testing for accounts with PasswordNotRequired (PASSWD_NOTREQD) flag set" -ForegroundColor Yellow
+    if (Get-Command -Name 'Get-PasswordNotRequiredAccounts' -ErrorAction SilentlyContinue) {
+        $PnrFindings = Get-PasswordNotRequiredAccounts
+        if ($null -eq $PnrFindings -or @($PnrFindings).Count -eq 0) {
+            Write-Host "  [OK] No accounts found with PasswordNotRequired set." -ForegroundColor Green
+        } else {
+            [int]$PnrCritical = @($PnrFindings | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+            [int]$PnrHigh     = @($PnrFindings | Where-Object { $_.RiskLevel -eq 'High' }).Count
+            [int]$PnrOther    = @($PnrFindings | Where-Object { $_.RiskLevel -ne 'Critical' -and $_.RiskLevel -ne 'High' }).Count
+            Write-Host "  [WARN] $(@($PnrFindings).Count) account(s) found with PasswordNotRequired set." -ForegroundColor Red
+            Write-Host "         Critical=$PnrCritical  High=$PnrHigh  Other=$PnrOther" -ForegroundColor Red
+            Write-Host "         Run 'PasswordNotRequired Audit' from the main menu for details and remediation." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  [SKIP] PasswordNotRequired module is not loaded." -ForegroundColor Yellow
+    }
     Write-Host "======================================================================================" -ForegroundColor White
 
     # Test for inactive users.

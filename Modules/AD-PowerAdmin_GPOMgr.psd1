@@ -1,6 +1,6 @@
 @{
     RootModule        = 'AD-PowerAdmin_GPOMgr.psm1'
-    ModuleVersion     = '1.0'
+    ModuleVersion     = '1.1'
     GUID              = '36938a72-1125-4682-a65c-87d2af298de9'
     Author            = 'CyberGladius'
     CompanyName       = 'CyberGladius.com'
@@ -32,9 +32,9 @@
     )
     PrivateData = @{
         PSData = @{
-            Channel      = 'Alpha'
+            Channel      = 'Beta'
             ProjectUri   = 'https://github.com/Brets0150/AD-PowerAdmin'
-            ReleaseNotes = 'v1.0: Initial release of the Group Policy Manager module. Provides Find-ADPAGPO, Test-ADPAGPO, New-ADPAGPO, Set/Remove-ADPAGPORegistrySetting, Add/Remove-ADPAGPOLink, Set-ADPAGPOPermission, Export-ADPAGPOReport, Remove-ADPAGPO, Install-ADPAGPOBaseline, Remove-ADPAGPOBaseline, and Search-ADPAGPOSetting.'
+            ReleaseNotes = 'v1.0: Initial release of the Group Policy Manager module. Provides Find-ADPAGPO, Test-ADPAGPO, New-ADPAGPO, Set/Remove-ADPAGPORegistrySetting, Add/Remove-ADPAGPOLink, Set-ADPAGPOPermission, Export-ADPAGPOReport, Remove-ADPAGPO, Install-ADPAGPOBaseline, Remove-ADPAGPOBaseline, and Search-ADPAGPOSetting. v1.1: Promoted to Beta after successful production domain validation via Honeypot module integration.'
         }
     }
 }

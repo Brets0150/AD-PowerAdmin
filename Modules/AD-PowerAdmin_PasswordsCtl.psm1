@@ -15,13 +15,16 @@ Function Initialize-Module {
     #>
     # Remove stale entries if module is reloaded.
     $global:Menu.Remove('PasswordsCtlMenu')
+    $global:Menu.Remove('PasswordNotRequiredMenu')
     $global:SubMenus.Remove('PasswordsCtlMenu')
+    $global:SubMenus.Remove('PasswordNotRequiredMenu')
 
     # Unload $global:UnattendedJobs keys, so they can be reloaded.
     $global:UnattendedJobs.Remove('krbtgt-RotateKey')
     $global:UnattendedJobs.Remove('Test-krbtgtPwdAge')
     $global:UnattendedJobs.Remove('PwUserFollowup')
     $global:UnattendedJobs.Remove('Start-MonthlyPasswordAudit')
+    $global:UnattendedJobs.Remove('Start-DailyPasswordNotRequiredAudit')
 
     # Register the sub-menu items.
     $global:SubMenus += @{
@@ -48,6 +51,16 @@ Function Initialize-Module {
                     Label   = 'Get a report of all users with breached or weak passwords and email the report to the administrator.'
                     Command = 'Get-PasswordAuditAdminReport -EmailReport'
                 }
+                'GetPasswordNotRequiredAudit' = @{
+                    Title   = 'PasswordNotRequired Audit'
+                    Label   = 'Find all user and computer accounts with PasswordNotRequired (PASSWD_NOTREQD) set and produce a risk-rated report.'
+                    Command = 'Get-PasswordNotRequiredAudit'
+                }
+                'StartPasswordNotRequiredRemediation' = @{
+                    Title   = 'PasswordNotRequired Remediation'
+                    Label   = 'Review PasswordNotRequired findings and interactively clear the flag from affected user accounts after explicit confirmation.'
+                    Command = 'Start-PasswordNotRequiredRemediation'
+                }
             }
         }
     }
@@ -56,7 +69,7 @@ Function Initialize-Module {
     $global:Menu += @{
         'PasswordsCtlMenu' = @{
             Title    = 'Password Management'
-            Label    = 'Manage KRBTGT password rotation and run breached or weak password audit reports.'
+            Label    = 'Manage KRBTGT password rotation, breached and weak password audits, and PasswordNotRequired (PASSWD_NOTREQD) account detection and remediation.'
             Module   = 'AD-PowerAdmin_PasswordsCtl'
             Function = 'Enter-SubMenu'
             Command  = "Enter-SubMenu 'PasswordsCtlMenu'"
@@ -98,6 +111,14 @@ Function Initialize-Module {
             Function = 'Start-MonthlyPasswordAudit'
             Daily    = $true
             Command  = 'Start-MonthlyPasswordAudit'
+        }
+        'Start-DailyPasswordNotRequiredAudit' = @{
+            Title    = 'Daily PasswordNotRequired Audit'
+            Label    = 'Daily check for accounts with PasswordNotRequired set. Emails admin if critical or high risk accounts are found.'
+            Module   = 'AD-PowerAdmin_PasswordsCtl'
+            Function = 'Start-DailyPasswordNotRequiredAudit'
+            Daily    = $true
+            Command  = 'Start-DailyPasswordNotRequiredAudit'
         }
     }
 }
@@ -946,4 +967,417 @@ function Start-MonthlyPasswordAudit {
         }
     }
 # End of the Start-MonthlyPasswordAudit function.
+}
+
+function Get-PrivilegedAccountNames {
+    # Returns a HashSet of DistinguishedNames for members of all high-privilege AD groups.
+    # Private helper used by Get-PasswordNotRequiredAccounts to assign risk levels.
+
+    [string[]]$PrivGroups = @(
+        "Domain Admins",
+        "Enterprise Admins",
+        "Schema Admins",
+        "Administrators",
+        "Backup Operators",
+        "Account Operators",
+        "Server Operators",
+        "Domain Controllers",
+        "Print Operators",
+        "Replicator",
+        "Enterprise Key Admins",
+        "Key Admins",
+        "DNSAdmins",
+        "Group Policy Creator Owners"
+    )
+
+    $Members = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($Group in $PrivGroups) {
+        try {
+            $GroupMembers = Get-ADGroupMember -Identity $Group -Recursive -ErrorAction SilentlyContinue
+            foreach ($Member in $GroupMembers) {
+                $Members.Add($Member.DistinguishedName) | Out-Null
+            }
+        } catch { }
+    }
+
+    return , $Members
+# End of Get-PrivilegedAccountNames function
+}
+
+Function Get-PasswordNotRequiredAccounts {
+    <#
+    .SYNOPSIS
+    Collect all AD accounts with PasswordNotRequired (PASSWD_NOTREQD) set.
+
+    .DESCRIPTION
+    Queries Active Directory for all user accounts and computer accounts with the
+    PasswordNotRequired flag enabled. Each finding is cross-referenced against
+    high-privilege group membership and assigned a risk level.
+
+    Risk levels:
+        Critical -- Enabled user account in a high-privilege group.
+        High     -- Enabled standard user account.
+        Medium   -- Disabled user that is privileged or logged in within the past 90 days.
+        Low      -- Disabled stale user with no known privilege.
+        Review   -- Computer account with PASSWD_NOTREQD set.
+
+    PasswordNotRequired=True does not confirm the account has a blank password. It means
+    the account is permitted to bypass normal password requirements and should be treated
+    as a misconfiguration requiring remediation regardless.
+
+    .OUTPUTS
+    [PSCustomObject[]] Array with fields: ObjectType, SamAccountName, UserPrincipalName,
+    Enabled, PasswordNotRequired, PasswordLastSet, LastLogonDate, DistinguishedName,
+    PrivilegedGroupMember, MemberOf, RiskLevel, RecommendedAction.
+
+    .EXAMPLE
+    $Findings = Get-PasswordNotRequiredAccounts
+
+    .NOTES
+    Requires only the ActiveDirectory PowerShell module. Does not require DSInternals.
+    #>
+
+    $PrivilegedDNs     = Get-PrivilegedAccountNames
+    $RecentLoginCutoff = (Get-Date).AddDays(-90)
+    $Results           = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # --- User accounts ---
+    $Users = Get-ADUser -Filter { PasswordNotRequired -eq $true } `
+        -Properties PasswordNotRequired, Enabled, SamAccountName, UserPrincipalName, `
+                    DistinguishedName, MemberOf, PasswordLastSet, LastLogonDate `
+        -ErrorAction SilentlyContinue
+
+    foreach ($User in @($Users)) {
+        [bool]$IsPrivileged      = $PrivilegedDNs.Contains($User.DistinguishedName)
+        [bool]$WasRecentlyActive = ($null -ne $User.LastLogonDate -and $User.LastLogonDate -gt $RecentLoginCutoff)
+
+        if ($User.Enabled -and $IsPrivileged) {
+            $RiskLevel         = 'Critical'
+            $RecommendedAction = 'Clear PasswordNotRequired immediately. Verify no blank password. Review privileged group membership.'
+        } elseif ($User.Enabled) {
+            $RiskLevel         = 'High'
+            $RecommendedAction = 'Clear PasswordNotRequired. Verify the account is in use and its password meets policy.'
+        } elseif (-not $User.Enabled -and ($IsPrivileged -or $WasRecentlyActive)) {
+            $RiskLevel         = 'Medium'
+            $RecommendedAction = 'Clear PasswordNotRequired. Review account necessity and any privileged group membership.'
+        } else {
+            $RiskLevel         = 'Low'
+            $RecommendedAction = 'Clear PasswordNotRequired. Consider removing this stale disabled account entirely.'
+        }
+
+        [string]$MemberOfNames = ($User.MemberOf | ForEach-Object { ($_ -split ',')[0] -replace 'CN=', '' }) -join '; '
+
+        $Results.Add([PSCustomObject]@{
+            ObjectType            = 'User'
+            SamAccountName        = $User.SamAccountName
+            UserPrincipalName     = $User.UserPrincipalName
+            Enabled               = $User.Enabled
+            PasswordNotRequired   = $true
+            PasswordLastSet       = $User.PasswordLastSet
+            LastLogonDate         = $User.LastLogonDate
+            DistinguishedName     = $User.DistinguishedName
+            PrivilegedGroupMember = $IsPrivileged
+            MemberOf              = $MemberOfNames
+            RiskLevel             = $RiskLevel
+            RecommendedAction     = $RecommendedAction
+        })
+    }
+
+    # --- Computer accounts ---
+    $Computers = Get-ADComputer `
+        -LDAPFilter "(&(objectClass=computer)(userAccountControl:1.2.840.113556.1.4.803:=32))" `
+        -Properties Enabled, PasswordLastSet, LastLogonDate `
+        -ErrorAction SilentlyContinue
+
+    foreach ($Computer in @($Computers)) {
+        $Results.Add([PSCustomObject]@{
+            ObjectType            = 'Computer'
+            SamAccountName        = $Computer.Name
+            UserPrincipalName     = ''
+            Enabled               = $Computer.Enabled
+            PasswordNotRequired   = $true
+            PasswordLastSet       = $Computer.PasswordLastSet
+            LastLogonDate         = $Computer.LastLogonDate
+            DistinguishedName     = $Computer.DistinguishedName
+            PrivilegedGroupMember = $false
+            MemberOf              = ''
+            RiskLevel             = 'Review'
+            RecommendedAction     = 'Investigate whether PASSWD_NOTREQD is intentional. Clear if not required.'
+        })
+    }
+
+    return , $Results.ToArray()
+# End of Get-PasswordNotRequiredAccounts function
+}
+
+function Show-PasswordNotRequiredFindings {
+    <#
+    .SYNOPSIS
+    Display risk-rated PasswordNotRequired findings to the console.
+
+    .DESCRIPTION
+    Shared display helper used by Get-PasswordNotRequiredAudit and
+    Start-PasswordNotRequiredRemediation. Writes output to the console without
+    prompting for export.
+
+    .PARAMETER Findings
+    Array of PSCustomObjects returned by Get-PasswordNotRequiredAccounts.
+
+    .EXAMPLE
+    Show-PasswordNotRequiredFindings -Findings $Findings
+
+    .NOTES
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject[]]$Findings
+    )
+
+    if ($null -eq $Findings -or $Findings.Count -eq 0) {
+        Write-Host "  [OK] No accounts found with PasswordNotRequired set." -ForegroundColor Green
+        return
+    }
+
+    [int]$CriticalCount = @($Findings | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    [int]$HighCount     = @($Findings | Where-Object { $_.RiskLevel -eq 'High' }).Count
+    [int]$MediumCount   = @($Findings | Where-Object { $_.RiskLevel -eq 'Medium' }).Count
+    [int]$LowCount      = @($Findings | Where-Object { $_.RiskLevel -eq 'Low' }).Count
+    [int]$ReviewCount   = @($Findings | Where-Object { $_.RiskLevel -eq 'Review' }).Count
+
+    Write-Host ""
+    Write-Host "  PasswordNotRequired / PASSWD_NOTREQD Audit" -ForegroundColor White
+    Write-Host "  ===========================================" -ForegroundColor White
+    Write-Host "  Summary: Critical=$CriticalCount  High=$HighCount  Medium=$MediumCount  Low=$LowCount  Review=$ReviewCount" -ForegroundColor Yellow
+    Write-Host ""
+
+    foreach ($Level in @('Critical', 'High', 'Medium', 'Low', 'Review')) {
+        [array]$Group = @($Findings | Where-Object { $_.RiskLevel -eq $Level })
+        if ($Group.Count -eq 0) { continue }
+
+        [string]$Color = switch ($Level) {
+            'Critical' { 'Red' }
+            'High'     { 'Red' }
+            'Medium'   { 'Yellow' }
+            'Low'      { 'Yellow' }
+            'Review'   { 'Cyan' }
+            default    { 'White' }
+        }
+
+        Write-Host "  --- [$Level] ($($Group.Count) account(s)) ---" -ForegroundColor $Color
+        foreach ($Finding in $Group) {
+            Write-Host "    Type      : $($Finding.ObjectType)"            -ForegroundColor $Color
+            Write-Host "    Account   : $($Finding.SamAccountName)"        -ForegroundColor $Color
+            Write-Host "    Enabled   : $($Finding.Enabled)"               -ForegroundColor $Color
+            Write-Host "    Privileged: $($Finding.PrivilegedGroupMember)" -ForegroundColor $Color
+            Write-Host "    PwLastSet : $($Finding.PasswordLastSet)"       -ForegroundColor $Color
+            Write-Host "    LastLogon : $($Finding.LastLogonDate)"         -ForegroundColor $Color
+            Write-Host "    DN        : $($Finding.DistinguishedName)"     -ForegroundColor $Color
+            Write-Host "    Action    : $($Finding.RecommendedAction)"     -ForegroundColor $Color
+            Write-Host ""
+        }
+    }
+
+    Write-Host "  NOTE: PasswordNotRequired=True does not confirm a blank password." -ForegroundColor Yellow
+    Write-Host "        To verify actual blank passwords, run Password Audit in this menu." -ForegroundColor Yellow
+    Write-Host ""
+# End of Show-PasswordNotRequiredFindings function
+}
+
+Function Get-PasswordNotRequiredAudit {
+    <#
+    .SYNOPSIS
+    Audit Active Directory for accounts with PasswordNotRequired set.
+
+    .DESCRIPTION
+    Searches all user and computer accounts in the domain for the PasswordNotRequired
+    (PASSWD_NOTREQD) flag. Assigns a risk level to each finding based on account state and
+    privilege level, displays the results, and offers CSV export to Reports/.
+
+    .EXAMPLE
+    Get-PasswordNotRequiredAudit
+
+    .NOTES
+    Run from the Password Management sub-menu for interactive use.
+    For automated daily monitoring use Start-DailyPasswordNotRequiredAudit.
+    #>
+
+    [PSCustomObject[]]$Findings = Get-PasswordNotRequiredAccounts
+
+    if ($null -eq $Findings -or $Findings.Count -eq 0) {
+        Write-Host "  [OK] No accounts found with PasswordNotRequired set. Domain is clean." -ForegroundColor Green
+        return
+    }
+
+    Show-PasswordNotRequiredFindings -Findings $Findings
+
+    Export-AdPowerAdminData -Data $Findings -ReportName "AD-PasswordNotRequired-Findings"
+# End of Get-PasswordNotRequiredAudit function
+}
+
+Function Start-PasswordNotRequiredRemediation {
+    <#
+    .SYNOPSIS
+    Interactively remove the PasswordNotRequired flag from affected AD user accounts.
+
+    .DESCRIPTION
+    Retrieves all accounts with PasswordNotRequired set, displays the full risk-rated
+    report, then requires explicit confirmation before clearing the flag from user accounts.
+    Computer accounts are listed separately with manual remediation guidance.
+
+    Safe by design:
+    - Displays the full audit report before any modification.
+    - Requires typing YES (exact) to proceed. Any other input cancels with no changes.
+    - Logs every operation (success and failure) and exports the log to Reports/.
+    - Does not automatically modify computer accounts.
+    - Does not reset passwords; clearing the flag alone is sufficient to enforce policy.
+
+    .EXAMPLE
+    Start-PasswordNotRequiredRemediation
+
+    .NOTES
+    After remediation, verify affected accounts have passwords that meet policy.
+    For accounts that had a blank password, use Set-ADAccountPassword to assign a
+    strong password and enable ChangePasswordAtLogon.
+    #>
+
+    [PSCustomObject[]]$Findings = Get-PasswordNotRequiredAccounts
+
+    if ($null -eq $Findings -or $Findings.Count -eq 0) {
+        Write-Host "  [OK] No accounts found with PasswordNotRequired set. No remediation needed." -ForegroundColor Green
+        return
+    }
+
+    Show-PasswordNotRequiredFindings -Findings $Findings
+
+    [array]$UserFindings     = @($Findings | Where-Object { $_.ObjectType -eq 'User' })
+    [array]$ComputerFindings = @($Findings | Where-Object { $_.ObjectType -eq 'Computer' })
+
+    # --- User account remediation ---
+    if ($UserFindings.Count -gt 0) {
+        Write-Host "  REMEDIATION: $($UserFindings.Count) user account(s) eligible to have PasswordNotRequired cleared." -ForegroundColor Yellow
+        Write-Host "  This clears the flag only. Passwords are not changed by this operation." -ForegroundColor Yellow
+        [string]$Confirm = Read-Host "  Type YES to proceed. Any other input cancels (default: No)"
+
+        if ($Confirm -eq 'YES') {
+            $RemediationLog = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+            foreach ($Finding in $UserFindings) {
+                try {
+                    Set-ADUser -Identity $Finding.DistinguishedName -PasswordNotRequired $false -ErrorAction Stop
+                    Write-Host "  [OK] Cleared PasswordNotRequired: $($Finding.SamAccountName)" -ForegroundColor Green
+                    $RemediationLog.Add([PSCustomObject]@{
+                        Timestamp      = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+                        SamAccountName = $Finding.SamAccountName
+                        RiskLevel      = $Finding.RiskLevel
+                        Enabled        = $Finding.Enabled
+                        Action         = 'PasswordNotRequired cleared'
+                        Result         = 'Success'
+                    })
+                } catch {
+                    Write-Host "  [FAIL] Could not clear PasswordNotRequired: $($Finding.SamAccountName) -- $_" -ForegroundColor Red
+                    $RemediationLog.Add([PSCustomObject]@{
+                        Timestamp      = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+                        SamAccountName = $Finding.SamAccountName
+                        RiskLevel      = $Finding.RiskLevel
+                        Enabled        = $Finding.Enabled
+                        Action         = 'PasswordNotRequired clear attempted'
+                        Result         = "Failed: $_"
+                    })
+                }
+            }
+
+            Export-AdPowerAdminData -Data $RemediationLog -ReportName "AD-PasswordNotRequired-RemediationLog"
+        } else {
+            Write-Host "  Remediation cancelled. No changes were made." -ForegroundColor Yellow
+        }
+    }
+
+    # --- Computer account guidance ---
+    if ($ComputerFindings.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  COMPUTER ACCOUNTS: Manual review required before remediation." -ForegroundColor Yellow
+        Write-Host "  $($ComputerFindings.Count) computer account(s) found with PASSWD_NOTREQD set." -ForegroundColor Yellow
+        Write-Host "  Verify each account before clearing the flag." -ForegroundColor Yellow
+        Write-Host "  To clear the flag from a specific computer account:" -ForegroundColor Cyan
+        Write-Host "    Set-ADAccountControl -Identity <computername> -PasswordNotRequired `$false" -ForegroundColor Cyan
+        Write-Host ""
+    }
+# End of Start-PasswordNotRequiredRemediation function
+}
+
+Function Start-DailyPasswordNotRequiredAudit {
+    <#
+    .SYNOPSIS
+    Daily unattended audit for accounts with PasswordNotRequired set.
+
+    .DESCRIPTION
+    Runs as part of the daily unattended job schedule. Checks the domain for accounts with
+    PasswordNotRequired set. Exports a dated CSV to Reports/ and emails the administrator
+    if any Critical or High risk accounts are found.
+
+    Controlled by the $global:PasswordNotRequiredAudit feature flag in
+    AD-PowerAdmin_settings.ps1. Set to $false to disable without removing functionality.
+
+    .EXAMPLE
+    Start-DailyPasswordNotRequiredAudit
+
+    .NOTES
+    Invoked automatically by the AD-PowerAdmin scheduler when Daily = $true jobs run.
+    #>
+
+    if ($global:PasswordNotRequiredAudit -ne $true) { return }
+
+    [PSCustomObject[]]$Findings = Get-PasswordNotRequiredAccounts
+
+    # Export a dated CSV on every run regardless of findings count.
+    [string]$DateStamp  = (Get-Date).ToString('yyyy-MM-dd')
+    [string]$ReportFile = "$global:ReportsPath\AD-PasswordNotRequired-Daily-$DateStamp.csv"
+
+    if ($null -ne $Findings -and $Findings.Count -gt 0) {
+        try {
+            $Findings | Export-Csv -Path $ReportFile -NoTypeInformation -Force
+        } catch {
+            if ($global:Debug) { Write-Host "Debug: Failed to write PasswordNotRequired daily CSV: $_" -ForegroundColor Red }
+        }
+    }
+
+    # Only send an alert email for Critical and High findings.
+    [array]$AlertFindings = @($Findings | Where-Object { $_.RiskLevel -eq 'Critical' -or $_.RiskLevel -eq 'High' })
+
+    if ($AlertFindings.Count -eq 0) { return }
+
+    [int]$CriticalCount = @($AlertFindings | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    [int]$HighCount     = @($AlertFindings | Where-Object { $_.RiskLevel -eq 'High' }).Count
+
+    [string]$Body  = "AD-PowerAdmin Daily PasswordNotRequired Audit`r`n"
+    [string]$Body += "Date: $(Get-Date)`r`n"
+    [string]$Body += "----------------------------------------------`r`n`r`n"
+    [string]$Body += "ALERT: $($AlertFindings.Count) account(s) with PasswordNotRequired flag detected.`r`n"
+    [string]$Body += "  Critical: $CriticalCount`r`n"
+    [string]$Body += "  High    : $HighCount`r`n`r`n"
+    [string]$Body += "These accounts bypass password policy and may authenticate without a password.`r`n"
+    [string]$Body += "Use 'PasswordNotRequired Audit' in the Password Management menu to remediate.`r`n`r`n"
+    [string]$Body += "Affected Accounts:`r`n"
+
+    foreach ($Finding in ($AlertFindings | Sort-Object RiskLevel, SamAccountName)) {
+        [string]$Body += "  [$($Finding.RiskLevel)] $($Finding.SamAccountName)"
+        [string]$Body += " (Enabled: $($Finding.Enabled), Privileged: $($Finding.PrivilegedGroupMember))`r`n"
+    }
+
+    [string]$Body += "`r`nFull report: $ReportFile`r`n"
+
+    if ($null -eq $global:ReportAdminEmailTo -or $global:ReportAdminEmailTo -eq '') { return }
+
+    try {
+        Send-Email -ToEmail "$global:ReportAdminEmailTo" `
+            -FromEmail "$global:ReportsEmailFrom" `
+            -Subject "AD-PowerAdmin: PasswordNotRequired Accounts Detected - ACTION REQUIRED" `
+            -Body $Body
+    } catch {
+        if ($global:Debug) {
+            Write-Host "Debug: Failed to send PasswordNotRequired alert email: $_" -ForegroundColor Red
+        }
+    }
+# End of Start-DailyPasswordNotRequiredAudit function
 }
