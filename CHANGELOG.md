@@ -4,6 +4,19 @@
 
 ---
 
+### Modules/AD-PowerAdmin_LogMgr.psd1 -- Promoted to Production
+
+**Changed:**
+- Module channel promoted from `Beta` to `Production`. All functions have been stable across interactive and scheduled use with no known issues.
+- `ModuleVersion` bumped from `1.0` to `1.1` to mark the Production promotion milestone.
+- `ReleaseNotes` updated to document the v1.1 Production promotion.
+
+**Why it changed:** The Event Log Manager module has been in Beta since its initial release. The interactive functions (`Show-ADUserLockouts`, `Get-CurrentLockedoutUsers`, `Show-AdUserFailedLoginEvents`, `Get-FailedLoginEvents`) and the daily unattended job (`Start-DailyLockoutSummaryReport`) have all been exercised in production environments without reported issues. No functional changes were required; this is a maturity promotion only.
+
+**Impact:** The Event Log Manager module is now Production-channel. The overall channel reported by `Get-ADPAVersion` will increase if this was the only non-Production module in the active load set.
+
+---
+
 ### Modules/AD-PowerAdmin_ExchangeAdSecurity.psm1 and AD-PowerAdmin_ExchangeAdSecurity.psd1 -- New Module
 
 **Added:**

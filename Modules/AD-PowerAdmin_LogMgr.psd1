@@ -12,7 +12,7 @@
     RootModule = 'AD-PowerAdmin_LogMgr.psm1'
 
     # Version number of this module.
-    ModuleVersion = '1.0'
+    ModuleVersion = '1.1'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -115,13 +115,16 @@
             # IconUri = ''
 
             # Channel: Alpha, Beta, Production
-            Channel = 'Beta'
+            Channel = 'Production'
 
             # ReleaseNotes of this module
             ReleaseNotes = @'
+            v1.1:
+            - Promoted to Production channel. All functions stable with no known issues.
+
             v1.0:
             - Main release of the module. Base functionality is complete for future expansion. This module will contain any Windows Log searching functions.
-              The core functions are only for reasearching locked out user accounts.
+              The core functions are only for researching locked out user accounts.
 '@
 
         } # End of PSData hashtable
