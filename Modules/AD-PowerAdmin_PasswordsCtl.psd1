@@ -12,7 +12,7 @@
     RootModule = 'AD-PowerAdmin_PasswordsCtl.psm1'
 
     # Version number of this module.
-    ModuleVersion = '2.0'
+    ModuleVersion = '3.0'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -37,6 +37,7 @@
     - Breached and weak password audit using DSInternals and the HIBP NTLM hash database
     - User notification and enforcement workflow for compromised passwords
     - PasswordNotRequired (PASSWD_NOTREQD) flag audit and remediation
+    - AS-REP Roasting (DoesNotRequirePreAuth) audit, risk rating, and remediation
 '@
 
     # Minimum version of the Windows PowerShell engine required by this module
@@ -88,7 +89,12 @@
         'Get-PasswordNotRequiredAudit',
         'Show-PasswordNotRequiredFindings',
         'Start-PasswordNotRequiredRemediation',
-        'Start-DailyPasswordNotRequiredAudit'
+        'Start-DailyPasswordNotRequiredAudit',
+        'Get-AsRepRoastableAccounts',
+        'Show-AsRepRoastingFindings',
+        'Get-AsRepRoastingAudit',
+        'Start-AsRepRoastingRemediation',
+        'Start-DailyAsRepRoastingAudit'
     )
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
@@ -145,6 +151,17 @@
               and PasswordNotRequired Remediation.
             - Daily unattended job Start-DailyPasswordNotRequiredAudit added; controlled by
               $global:PasswordNotRequiredAudit feature flag.
+            v3.0:
+            - Added AS-REP Roasting (DoesNotRequirePreAuth) audit and remediation.
+              New functions: Get-AsRepRoastableAccounts, Show-AsRepRoastingFindings,
+              Get-AsRepRoastingAudit, Start-AsRepRoastingRemediation,
+              Start-DailyAsRepRoastingAudit.
+            - Two new sub-menu items added to Password Management: AS-REP Roasting Audit
+              and AS-REP Roasting Remediation.
+            - Daily unattended job Start-DailyAsRepRoastingAudit added; controlled by
+              $global:AsRepRoastingAudit feature flag.
+            - Remediation design: re-enabling preauthentication does not invalidate captured
+              hashes; manual password resets are required for all remediated accounts.
 '@
 
         } # End of PSData hashtable

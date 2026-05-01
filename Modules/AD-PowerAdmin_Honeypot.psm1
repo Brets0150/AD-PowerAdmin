@@ -46,6 +46,16 @@ Function Initialize-Module {
                     Label   = "Safely decommission the honeytoken account and remove the associated scheduled monitoring task."
                     Command = "Remove-HoneypotAccount"
                 }
+                'HoneypotDecentralizedInstall' = @{
+                    Title   = "Deploy Decentralized Monitor"
+                    Label   = "Install a lightweight local-only monitor on individual domain controllers. Each DC queries its own Security log and alerts independently -- eliminates RPC overhead for resource-constrained DCs. Requires the honeytoken account to be installed first."
+                    Command = "Install-HoneypotDecentralized"
+                }
+                'HoneypotDecentralizedRemove' = @{
+                    Title   = "Remove Decentralized Monitor"
+                    Label   = "Remove the decentralized monitor deployment from selected domain controllers. Removes the scheduled task and optionally the deployment directory."
+                    Command = "Remove-HoneypotDecentralized"
+                }
             }
         }
     }
@@ -136,18 +146,28 @@ Function Get-HoneypotEventsBatch {
         "] and EventData[Data[@Name='TargetUserName']='{2}']]" -f $UtcStart, $UtcEnd, $Username
     )
 
+    # Detect local machine to bypass RPC/DCOM entirely (direct log file access).
+    [bool]$IsLocal = ($ComputerName -eq $env:COMPUTERNAME) -or
+                     ($ComputerName -eq 'localhost')        -or
+                     ($ComputerName -eq '127.0.0.1')
+
     [datetime]$QueryStart = Get-Date
     try {
-        $RawEvents = Get-WinEvent -ComputerName $ComputerName -LogName 'Security' `
-            -FilterXPath $XPath -ErrorAction SilentlyContinue
+        if ($IsLocal) {
+            $RawEvents = Get-WinEvent -LogName 'Security' -FilterXPath $XPath -ErrorAction SilentlyContinue
+        } else {
+            $RawEvents = Get-WinEvent -ComputerName $ComputerName -LogName 'Security' `
+                -FilterXPath $XPath -ErrorAction SilentlyContinue
+        }
     } catch {
         Write-Host ("    [DC-WARN] {0}: Security log query failed -- {1}" -f $ComputerName, $_) -ForegroundColor Yellow
         return @()
     }
     [double]$QuerySec = ((Get-Date) - $QueryStart).TotalSeconds
 
+    [string]$QueryMode = if ($IsLocal) { 'local' } else { 'remote' }
     [int]$RawCount = if ($RawEvents) { $RawEvents.Count } else { 0 }
-    Write-Host ("    [DC-DATA] {0}: {1} event(s) for '{2}' returned in {3:N1}s (server-side XPath filter)" -f $ComputerName, $RawCount, $Username, $QuerySec) -ForegroundColor DarkGray
+    Write-Host ("    [DC-DATA] {0}: {1} event(s) for '{2}' returned in {3:N1}s ({4} XPath filter)" -f $ComputerName, $RawCount, $Username, $QuerySec, $QueryMode) -ForegroundColor DarkGray
 
     if (-not $RawEvents) { return @() }
 
@@ -190,14 +210,18 @@ Function Get-HoneypotEvents {
         return @()
     }
 
-    try {
-        $DomainControllers = @(Get-ADDomainController -Filter * | Select-Object -ExpandProperty HostName)
-    } catch {
-        Write-Host "  [FAIL] Could not enumerate domain controllers: $_" -ForegroundColor Red
-        return @()
+    if ($global:HoneypotMonitorMode -eq 'Decentralized') {
+        $DomainControllers = @($env:COMPUTERNAME)
+        Write-Host ("  [Decentralized] Querying local Security log only on: {0}" -f $env:COMPUTERNAME) -ForegroundColor Gray
+    } else {
+        try {
+            $DomainControllers = @(Get-ADDomainController -Filter * | Select-Object -ExpandProperty HostName)
+        } catch {
+            Write-Host "  [FAIL] Could not enumerate domain controllers: $_" -ForegroundColor Red
+            return @()
+        }
+        Write-Host ("  [Centralized] Querying {0} domain controller(s) -- window: {1} to {2}" -f $DomainControllers.Count, $StartTime.ToString('HH:mm:ss'), $EndTime.ToString('HH:mm:ss')) -ForegroundColor Gray
     }
-
-    Write-Host ("  Querying {0} domain controller(s) -- window: {1} to {2}" -f $DomainControllers.Count, $StartTime.ToString('HH:mm:ss'), $EndTime.ToString('HH:mm:ss')) -ForegroundColor Gray
 
     [datetime]$QueryStart = Get-Date
     $AllEvents = @()
@@ -1467,5 +1491,459 @@ Function Remove-HoneypotAccount {
     Write-Host ('=' * 70) -ForegroundColor Green
     Write-Host '  Honeytoken account removal complete.' -ForegroundColor Green
     Write-Host ('=' * 70) -ForegroundColor Green
+    Write-Host ''
+}
+
+Function New-HoneypotLiteSettingsContent {
+    # Generates the text of a minimal AD-PowerAdmin_settings.ps1 for a decentralized DC
+    # deployment. Contains only the variables required for the monitor and email alert.
+    # $DeployPath is the root directory on the target DC (e.g. C:\ADPowerAdmin-Monitor).
+    param(
+        [Parameter(Mandatory=$true)][string]$DeployPath
+    )
+
+    [string]$ReportsPath   = "$DeployPath\Reports"
+    [string]$AuditBool     = if ($global:HoneypotAudit) { '$true' } else { '$false' }
+    [string]$SmtpSslBool   = if ($global:SmtpEnableSSL) { '$true' } else { '$false' }
+    [string]$DebugBool      = '$false'
+    [int]$Interval          = if ($global:HoneypotMonitorIntervalMinutes) { $global:HoneypotMonitorIntervalMinutes } else { 15 }
+
+    # Build the content with only the variables the monitor and email functions require.
+    # HoneypotMonitorMode is hardcoded to Decentralized so the local copy queries only
+    # the local Security log without any AD or network dependency.
+    [string]$Content = @"
+# AD-PowerAdmin lite settings -- auto-generated for decentralized honeytoken monitor.
+# This file is managed by Install-HoneypotDecentralized. Do not edit manually.
+
+[bool]`$global:HoneypotAudit                       = $AuditBool
+[int]`$global:HoneypotMonitorIntervalMinutes        = $Interval
+[string]`$global:HoneypotUsername                  = '$($global:HoneypotUsername)'
+[string]`$global:HoneypotDenyGroup                 = '$($global:HoneypotDenyGroup)'
+[string]`$global:HoneypotOU                        = '$($global:HoneypotOU)'
+[string]`$global:HoneypotMonitorMode               = 'Decentralized'
+
+[string]`$global:ADAdminEmail                      = '$($global:ADAdminEmail)'
+[string]`$global:FromEmail                         = '$($global:FromEmail)'
+[string]`$global:ReportsEmailFrom                  = '$($global:ReportsEmailFrom)'
+
+[string]`$global:SMTPServer                        = '$($global:SMTPServer)'
+[int]`$global:SMTPPort                             = $($global:SMTPPort)
+[string]`$global:SMTPUsername                      = '$($global:SMTPUsername)'
+[string]`$global:SMTPPassword                      = '$($global:SMTPPassword)'
+[bool]`$global:SmtpEnableSSL                       = $SmtpSslBool
+
+[string]`$global:ReportsPath                       = '$ReportsPath'
+[bool]`$global:Debug                               = $DebugBool
+[string]`$global:MsaAccountName                    = ''
+"@
+
+    return $Content
+}
+
+Function Invoke-HoneypotDCDeploy {
+    # Copies the minimal file set to one domain controller and registers the scheduled task.
+    # Returns $true on full success, $false if any step fails.
+    param(
+        [Parameter(Mandatory=$true)][string]$DCHostname,
+        [Parameter(Mandatory=$true)][string]$DeployPath,
+        [Parameter(Mandatory=$false)][string]$RunAsUser     = '',
+        [Parameter(Mandatory=$false)][string]$RunAsPassword = '',
+        [Parameter(Mandatory=$true)][System.Management.Automation.PSCredential]$AdminCred
+    )
+
+    # Build the UNC root path (e.g. C:\ADPowerAdmin-Monitor -> \\DC\C$\ADPowerAdmin-Monitor).
+    [string]$UncRoot    = '\\' + $DCHostname + '\' + ($DeployPath -replace '^([A-Za-z]):\\', '$1$\')
+    [string]$UncModules = "$UncRoot\Modules"
+    [string]$UncReports = "$UncRoot\Reports"
+
+    Write-Host ("  [DC] {0} -- Deploy path: {1}" -f $DCHostname, $DeployPath) -ForegroundColor Cyan
+
+    # Step 1: Create directory structure via UNC admin share.
+    try {
+        foreach ($Dir in @($UncRoot, $UncModules, $UncReports)) {
+            if (-not (Test-Path $Dir)) {
+                New-Item -Path $Dir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+            }
+        }
+        Write-Host ("    [OK] Directory structure created: {0}" -f $UncRoot) -ForegroundColor Green
+    } catch {
+        Write-Host ("    [FAIL] Could not create directory structure: {0}" -f $_) -ForegroundColor Red
+        return $false
+    }
+
+    # Step 2: Copy main entry point.
+    try {
+        Copy-Item -Path "$global:ThisScriptDir\AD-PowerAdmin.ps1" -Destination "$UncRoot\AD-PowerAdmin.ps1" -Force -ErrorAction Stop
+        Write-Host ("    [OK] Copied AD-PowerAdmin.ps1") -ForegroundColor Green
+    } catch {
+        Write-Host ("    [FAIL] Could not copy AD-PowerAdmin.ps1: {0}" -f $_) -ForegroundColor Red
+        return $false
+    }
+
+    # Step 3: Copy required module files.
+    [string[]]$ModuleFiles = @(
+        'AD-PowerAdmin_Honeypot.psm1',
+        'AD-PowerAdmin_Honeypot.psd1',
+        'AD-PowerAdmin_Utils.psm1',
+        'AD-PowerAdmin_Utils.psd1'
+    )
+    foreach ($ModFile in $ModuleFiles) {
+        [string]$Src = "$global:ModulesPath\$ModFile"
+        [string]$Dst = "$UncModules\$ModFile"
+        try {
+            if (-not (Test-Path $Src)) {
+                Write-Host ("    [FAIL] Module file not found: {0}" -f $Src) -ForegroundColor Red
+                return $false
+            }
+            Copy-Item -Path $Src -Destination $Dst -Force -ErrorAction Stop
+            Write-Host ("    [OK] Copied Modules\{0}" -f $ModFile) -ForegroundColor Green
+        } catch {
+            Write-Host ("    [FAIL] Could not copy {0}: {1}" -f $ModFile, $_) -ForegroundColor Red
+            return $false
+        }
+    }
+
+    # Step 4: Write the generated lite settings file.
+    try {
+        [string]$LiteSettings = New-HoneypotLiteSettingsContent -DeployPath $DeployPath
+        [string]$SettingsDst  = "$UncRoot\AD-PowerAdmin_settings.ps1"
+        [System.IO.File]::WriteAllText($SettingsDst, $LiteSettings, [System.Text.Encoding]::UTF8)
+        Write-Host ("    [OK] Wrote lite settings file") -ForegroundColor Green
+    } catch {
+        Write-Host ("    [FAIL] Could not write settings file: {0}" -f $_) -ForegroundColor Red
+        return $false
+    }
+
+    # Step 5: Create the scheduled task on the remote DC via PSRemoting.
+    try {
+        [int]$Interval = if ($global:HoneypotMonitorIntervalMinutes) { $global:HoneypotMonitorIntervalMinutes } else { 15 }
+
+        Invoke-Command -ComputerName $DCHostname -Credential $AdminCred -ErrorAction Stop -ScriptBlock {
+            param($DeployPath, $IntervalMinutes, $RunAsUser, $RunAsPassword)
+
+            [string]$TaskName  = 'AD-PowerAdmin_HoneypotMonitor'
+            [string]$ScriptArg = ("-NonInteractive -NoProfile -File `"{0}\AD-PowerAdmin.ps1`" -Unattended -JobName 'HoneypotHourlyMonitor'" -f $DeployPath)
+
+            $Existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+            if ($Existing) {
+                Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+            }
+
+            $FirstRun = (Get-Date).AddMinutes($IntervalMinutes)
+            $Trigger  = New-ScheduledTaskTrigger -Once -At $FirstRun `
+                -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
+            $Action   = New-ScheduledTaskAction -Execute 'PowerShell.exe' `
+                -Argument $ScriptArg -WorkingDirectory $DeployPath
+            $Settings = New-ScheduledTaskSettingsSet -RunOnlyIfNetworkAvailable
+
+            if ([string]::IsNullOrWhiteSpace($RunAsUser)) {
+                $Principal = New-ScheduledTaskPrincipal `
+                    -UserID 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+                Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger `
+                    -Settings $Settings -Principal $Principal | Out-Null
+            } else {
+                Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger `
+                    -Settings $Settings -RunLevel Highest `
+                    -User $RunAsUser -Password $RunAsPassword | Out-Null
+            }
+        } -ArgumentList $DeployPath, $Interval, $RunAsUser, $RunAsPassword
+
+        [string]$PrincipalDesc = if ([string]::IsNullOrWhiteSpace($RunAsUser)) { 'NT AUTHORITY\SYSTEM' } else { $RunAsUser }
+        Write-Host ("    [OK] Scheduled task registered on {0} as {1}" -f $DCHostname, $PrincipalDesc) -ForegroundColor Green
+    } catch {
+        Write-Host ("    [FAIL] Could not register scheduled task on {0}: {1}" -f $DCHostname, $_) -ForegroundColor Red
+        return $false
+    }
+
+    return $true
+}
+
+Function Install-HoneypotDecentralized {
+    <#
+    .SYNOPSIS
+        Deploys a lightweight honeytoken monitor to individual domain controllers.
+
+    .DESCRIPTION
+        Copies the minimum required files (AD-PowerAdmin.ps1, the Honeypot and Utils modules,
+        and a generated lite settings file) to each selected domain controller via the admin
+        share (\\DC\C$). Creates the AD-PowerAdmin_HoneypotMonitor scheduled task on each DC
+        via PSRemoting. Each DC then queries only its own local Security log -- eliminating the
+        RPC overhead of the centralized mode -- and sends its own email alert if honeytoken
+        activity is detected.
+
+        Prerequisites:
+          - The honeytoken account must already be provisioned (run Install Honeypot Account first).
+          - PSRemoting must be enabled on each target DC.
+          - The executing account must have admin rights on each target DC.
+
+        Use this mode when the centralized monitor is too slow due to resource-constrained DCs
+        that take excessive time to respond to remote Security Event Log queries.
+    #>
+
+    if ([string]::IsNullOrWhiteSpace($global:HoneypotUsername)) {
+        Write-Host ''
+        Write-Host '  [FAIL] No honeytoken account is configured.' -ForegroundColor Red
+        Write-Host '  Run "Install Honeypot Account" from the Honeytoken menu first.' -ForegroundColor Red
+        Write-Host ''
+        return
+    }
+
+    Write-Host ''
+    Write-Host ('=' * 70) -ForegroundColor Cyan
+    Write-Host '  Deploy Decentralized Honeytoken Monitor' -ForegroundColor Cyan
+    Write-Host ('=' * 70) -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host ('  Honeytoken account : {0}' -f $global:HoneypotUsername) -ForegroundColor White
+    Write-Host ('  Monitor interval   : {0} minutes' -f $global:HoneypotMonitorIntervalMinutes) -ForegroundColor White
+    Write-Host ''
+
+    # Enumerate DCs and present a numbered list.
+    try {
+        $AllDCs = @(Get-ADDomainController -Filter * | Select-Object -ExpandProperty HostName | Sort-Object)
+    } catch {
+        Write-Host ("  [FAIL] Could not enumerate domain controllers: {0}" -f $_) -ForegroundColor Red
+        return
+    }
+
+    Write-Host '  Domain Controllers:' -ForegroundColor White
+    for ([int]$i = 0; $i -lt $AllDCs.Count; $i++) {
+        Write-Host ("    [{0}] {1}" -f ($i + 1), $AllDCs[$i]) -ForegroundColor Gray
+    }
+    Write-Host ''
+
+    [string]$DCSelection = Read-Host '  Enter DC numbers (comma-separated) or A for all'
+    if ([string]::IsNullOrWhiteSpace($DCSelection)) {
+        Write-Host '  No selection made. Exiting.' -ForegroundColor Yellow
+        return
+    }
+
+    [string[]]$SelectedDCs = @()
+    if ($DCSelection.Trim().ToUpper() -eq 'A') {
+        $SelectedDCs = $AllDCs
+    } else {
+        foreach ($Token in ($DCSelection -split ',')) {
+            [string]$Trimmed = $Token.Trim()
+            [int]$Idx = 0
+            if ([int]::TryParse($Trimmed, [ref]$Idx) -and $Idx -ge 1 -and $Idx -le $AllDCs.Count) {
+                $SelectedDCs += $AllDCs[$Idx - 1]
+            } else {
+                Write-Host ("  [WARN] Invalid selection '{0}' -- skipped." -f $Trimmed) -ForegroundColor Yellow
+            }
+        }
+    }
+
+    if ($SelectedDCs.Count -eq 0) {
+        Write-Host '  No valid DCs selected. Exiting.' -ForegroundColor Yellow
+        return
+    }
+
+    # Deployment path on each DC.
+    [string]$DefaultPath = 'C:\ADPowerAdmin-Monitor'
+    [string]$PathInput   = Read-Host ("  Deployment path on each DC [default: {0}]" -f $DefaultPath)
+    [string]$DeployPath  = if ([string]::IsNullOrWhiteSpace($PathInput)) { $DefaultPath } else { $PathInput.Trim() }
+
+    # Run-as account selection.
+    Write-Host ''
+    Write-Host '  Scheduled task identity:' -ForegroundColor White
+    Write-Host '    [1] NT AUTHORITY\SYSTEM  (default -- no password required)' -ForegroundColor Gray
+    Write-Host '    [2] Domain user account  (requires stored password)' -ForegroundColor Gray
+    [string]$RunAsChoice = Read-Host '  Selection [default: 1]'
+
+    [string]$RunAsUser     = ''
+    [string]$RunAsPassword = ''
+    if ($RunAsChoice.Trim() -eq '2') {
+        $RunAsUser = Read-Host '  Domain user (DOMAIN\username or UPN)'
+        if ([string]::IsNullOrWhiteSpace($RunAsUser)) {
+            Write-Host '  No user entered. Defaulting to SYSTEM.' -ForegroundColor Yellow
+            $RunAsUser = ''
+        } else {
+            [System.Security.SecureString]$SecPw = Read-Host ('  Password for {0}' -f $RunAsUser) -AsSecureString
+            $RunAsPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecPw)
+            )
+        }
+    }
+
+    # Admin credentials for PSRemoting and UNC access.
+    Write-Host ''
+    Write-Host '  Administrative credentials are required for PSRemoting and file copy.' -ForegroundColor White
+    $AdminCred = Get-Credential -Message 'Enter admin credentials for target DC(s)'
+    if ($null -eq $AdminCred) {
+        Write-Host '  No credentials provided. Exiting.' -ForegroundColor Yellow
+        return
+    }
+
+    # Summary and confirmation.
+    Write-Host ''
+    Write-Host ('=' * 70) -ForegroundColor White
+    Write-Host '  Deployment Summary' -ForegroundColor White
+    Write-Host ('=' * 70) -ForegroundColor White
+    Write-Host ('  Target DC(s)      : {0}' -f ($SelectedDCs -join ', ')) -ForegroundColor White
+    Write-Host ('  Deploy path       : {0}' -f $DeployPath) -ForegroundColor White
+    [string]$PrincipalSummary = if ([string]::IsNullOrWhiteSpace($RunAsUser)) { 'NT AUTHORITY\SYSTEM' } else { $RunAsUser }
+    Write-Host ('  Scheduled task as : {0}' -f $PrincipalSummary) -ForegroundColor White
+    Write-Host ('  Monitor interval  : {0} minutes' -f $global:HoneypotMonitorIntervalMinutes) -ForegroundColor White
+    Write-Host ''
+    [string]$Confirm = Read-Host '  Proceed? (y/N)'
+    if ($Confirm.Trim().ToUpper() -ne 'Y') {
+        Write-Host '  Cancelled.' -ForegroundColor Yellow
+        return
+    }
+
+    # Deploy to each selected DC.
+    Write-Host ''
+    [int]$Succeeded = 0
+    [int]$Failed    = 0
+    foreach ($DC in $SelectedDCs) {
+        [bool]$Result = Invoke-HoneypotDCDeploy `
+            -DCHostname    $DC          `
+            -DeployPath    $DeployPath  `
+            -RunAsUser     $RunAsUser   `
+            -RunAsPassword $RunAsPassword `
+            -AdminCred     $AdminCred
+        if ($Result) { $Succeeded++ } else { $Failed++ }
+        Write-Host ''
+    }
+
+    Write-Host ('=' * 70) -ForegroundColor Cyan
+    Write-Host ('  Deployment complete: {0} succeeded, {1} failed.' -f $Succeeded, $Failed) -ForegroundColor Cyan
+    Write-Host '  Each deployed DC now monitors its own Security log independently.' -ForegroundColor Cyan
+    if ($Succeeded -gt 0) {
+        Write-Host '  NOTE: The central AD-PowerAdmin settings file still has HoneypotMonitorMode' -ForegroundColor Yellow
+        Write-Host '        set to Centralized. To disable centralized querying and rely solely' -ForegroundColor Yellow
+        Write-Host '        on the decentralized tasks, set HoneypotMonitorMode = Decentralized' -ForegroundColor Yellow
+        Write-Host '        in AD-PowerAdmin_settings.ps1 on the central server.' -ForegroundColor Yellow
+    }
+    Write-Host ('=' * 70) -ForegroundColor Cyan
+    Write-Host ''
+}
+
+Function Remove-HoneypotDecentralized {
+    <#
+    .SYNOPSIS
+        Removes the decentralized honeytoken monitor deployment from domain controllers.
+
+    .DESCRIPTION
+        Removes the AD-PowerAdmin_HoneypotMonitor scheduled task from selected domain controllers
+        via PSRemoting, and optionally deletes the deployment directory. Does not affect the
+        central AD-PowerAdmin installation or the honeytoken account itself.
+    #>
+
+    Write-Host ''
+    Write-Host ('=' * 70) -ForegroundColor Cyan
+    Write-Host '  Remove Decentralized Honeytoken Monitor' -ForegroundColor Cyan
+    Write-Host ('=' * 70) -ForegroundColor Cyan
+    Write-Host ''
+
+    # Enumerate DCs and present numbered list.
+    try {
+        $AllDCs = @(Get-ADDomainController -Filter * | Select-Object -ExpandProperty HostName | Sort-Object)
+    } catch {
+        Write-Host ("  [FAIL] Could not enumerate domain controllers: {0}" -f $_) -ForegroundColor Red
+        return
+    }
+
+    Write-Host '  Domain Controllers:' -ForegroundColor White
+    for ([int]$i = 0; $i -lt $AllDCs.Count; $i++) {
+        Write-Host ("    [{0}] {1}" -f ($i + 1), $AllDCs[$i]) -ForegroundColor Gray
+    }
+    Write-Host ''
+
+    [string]$DCSelection = Read-Host '  Enter DC numbers to clean up (comma-separated) or A for all'
+    if ([string]::IsNullOrWhiteSpace($DCSelection)) {
+        Write-Host '  No selection made. Exiting.' -ForegroundColor Yellow
+        return
+    }
+
+    [string[]]$SelectedDCs = @()
+    if ($DCSelection.Trim().ToUpper() -eq 'A') {
+        $SelectedDCs = $AllDCs
+    } else {
+        foreach ($Token in ($DCSelection -split ',')) {
+            [string]$Trimmed = $Token.Trim()
+            [int]$Idx = 0
+            if ([int]::TryParse($Trimmed, [ref]$Idx) -and $Idx -ge 1 -and $Idx -le $AllDCs.Count) {
+                $SelectedDCs += $AllDCs[$Idx - 1]
+            } else {
+                Write-Host ("  [WARN] Invalid selection '{0}' -- skipped." -f $Trimmed) -ForegroundColor Yellow
+            }
+        }
+    }
+
+    if ($SelectedDCs.Count -eq 0) {
+        Write-Host '  No valid DCs selected. Exiting.' -ForegroundColor Yellow
+        return
+    }
+
+    # Deployment path to remove (must match what was used during install).
+    [string]$DefaultPath = 'C:\ADPowerAdmin-Monitor'
+    [string]$PathInput   = Read-Host ("  Deployment path to remove [default: {0}]" -f $DefaultPath)
+    [string]$DeployPath  = if ([string]::IsNullOrWhiteSpace($PathInput)) { $DefaultPath } else { $PathInput.Trim() }
+
+    # Whether to delete the deploy directory after removing the task.
+    [string]$RemoveDirInput = Read-Host ('  Also delete deployment directory ({0}) from each DC? (y/N)' -f $DeployPath)
+    [bool]$RemoveDir        = ($RemoveDirInput.Trim().ToUpper() -eq 'Y')
+
+    # Admin credentials.
+    Write-Host ''
+    Write-Host '  Administrative credentials are required for PSRemoting.' -ForegroundColor White
+    $AdminCred = Get-Credential -Message 'Enter admin credentials for target DC(s)'
+    if ($null -eq $AdminCred) {
+        Write-Host '  No credentials provided. Exiting.' -ForegroundColor Yellow
+        return
+    }
+
+    # Confirm.
+    Write-Host ''
+    Write-Host ('  Target DC(s) : {0}' -f ($SelectedDCs -join ', ')) -ForegroundColor White
+    Write-Host ('  Remove task  : AD-PowerAdmin_HoneypotMonitor') -ForegroundColor White
+    Write-Host ('  Remove dir   : {0}' -f $(if ($RemoveDir) { $DeployPath } else { 'No' })) -ForegroundColor White
+    Write-Host ''
+    [string]$Confirm = Read-Host '  Proceed? (y/N)'
+    if ($Confirm.Trim().ToUpper() -ne 'Y') {
+        Write-Host '  Cancelled.' -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host ''
+    [int]$Succeeded = 0
+    [int]$Failed    = 0
+
+    foreach ($DC in $SelectedDCs) {
+        Write-Host ("  [DC] {0}" -f $DC) -ForegroundColor Cyan
+        try {
+            Invoke-Command -ComputerName $DC -Credential $AdminCred -ErrorAction Stop -ScriptBlock {
+                param($DeployPath, $RemoveDir)
+
+                [string]$TaskName = 'AD-PowerAdmin_HoneypotMonitor'
+                $Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+                if ($Task) {
+                    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+                    Write-Output "    [OK] Scheduled task removed."
+                } else {
+                    Write-Output "    [INFO] Scheduled task not found (already removed or not installed)."
+                }
+
+                if ($RemoveDir) {
+                    if (Test-Path $DeployPath) {
+                        Remove-Item -Path $DeployPath -Recurse -Force
+                        Write-Output ("    [OK] Deployment directory removed: {0}" -f $DeployPath)
+                    } else {
+                        Write-Output ("    [INFO] Deployment directory not found: {0}" -f $DeployPath)
+                    }
+                }
+            } -ArgumentList $DeployPath, $RemoveDir | ForEach-Object { Write-Host $_ -ForegroundColor Green }
+
+            $Succeeded++
+        } catch {
+            Write-Host ("    [FAIL] {0}: {1}" -f $DC, $_) -ForegroundColor Red
+            $Failed++
+        }
+        Write-Host ''
+    }
+
+    Write-Host ('=' * 70) -ForegroundColor Cyan
+    Write-Host ('  Removal complete: {0} succeeded, {1} failed.' -f $Succeeded, $Failed) -ForegroundColor Cyan
+    Write-Host ('=' * 70) -ForegroundColor Cyan
     Write-Host ''
 }

@@ -66,6 +66,7 @@
 [bool]$global:WeakPasswordAudit             = $true
 [bool]$global:LockoutDailyReport            = $true
 [bool]$global:PasswordNotRequiredAudit      = $true
+[bool]$global:AsRepRoastingAudit            = $true
 
 ##############################################################################################
 # -------------------[Mandatory]------------------- #
@@ -90,18 +91,12 @@
 # You are able to add as many OU's as you want. Just add a new hashtable to the array. Inversly, you can remove second hashtable if you only want to search one OU.
 [array]$global:InactiveComputersLocations = @(
     @{
-        # Set the basic search path in AD. You can limit the search to a specific OU.
-        SearchOUbase = 'OU=Desktops,DC=EXAMPLE,DC=COM'
-
-        # The disabled Computers OU location in AD. This is where the computers will be moved to.
+        SearchOUbase    = 'OU=Desktops,DC=EXAMPLE,DC=COM'
         DisabledOULocal = 'OU=Disabled.Desktop,OU=Desktops,DC=EXAMPLE,DC=COM'
     }
 
     @{
-        # Set the basic search path in AD. You can limit the search to a specific OU.
-        SearchOUbase = 'OU=Servers,DC=EXAMPLE,DC=COM'
-
-        # The disabled Computers OU location in AD. This is where the computers will be moved to.
+        SearchOUbase    = 'OU=Servers,DC=EXAMPLE,DC=COM'
         DisabledOULocal = 'OU=Disabled.Servers,OU=Servers,DC=EXAMPLE,DC=COM'
     }
 
@@ -160,7 +155,7 @@
 #
 # Example:
 #   [string]$global:NtlmHashDataFile = 'pwned-passwords-ntlm-ordered-by-hash-v8.txt'
-#   [string]$global:NtlmHashDataDir  = ''
+#   [string]$global:NtlmHashDataDir  = 'hibp-ntlm-hashes'
 #
 # -----------------------------------------------------------------------------------------
 # OPTION B: DIRECTORY MODE  (recommended for ongoing use)
@@ -222,14 +217,14 @@
 [string]$global:WeakPassDictFile = 'weak-passwords.txt'
 
 # Set the SearchOUbase to the OU path where you want to search for user accounts. If you want to search all user accounts in AD, leave this blank.
-# Example: [string]$global:PasswordQualityTestSearchOUbase = 'OU=Users,DC=EXAMPLE,DC=COM'
+# Example: [string]$global:PasswordQualityTestSearchOUbase = ''
 [string]$global:PasswordQualityTestSearchOUbase = ''
 
 # The email address that the email will be sent to.
 # The default is to is to use the main admin email address at the top of the script, but if you want to send the reports to a different email address, you can set it here.
-# EXAMPLE: [string]$global:ReportAdminEmailTo = 'Joe.doe@example.com'
-# EXAMPLE: [string]$global:ReportAdminEmailTo = 'SecurityTeamDistroGroup@example.com
-[string]$global:ReportAdminEmailTo = $global:ADAdminEmail
+# EXAMPLE: [string]$global:ReportAdminEmailTo = ''
+# EXAMPLE: [string]$global:ReportAdminEmailTo = ''
+[string]$global:ReportAdminEmailTo = ''
 
 # Enable CC the AD Admins on the password audit alert email. When a user is found with a breached or weak password, the user will receive an email with the message above. The AD Admins will also receive a copy of the email.
 # EXAMPLE: [bool]$global:PwAuditAlertEmailCCAdmins = $true
@@ -263,8 +258,8 @@
 
 # -------------------[Mandatory]------------------- #
 # The SMTP server address.
-# EXAMPLE: [string]$global:SMTPServer = 'smtp.example.com'
-# EXAMPLE: [string]$global:SMTPServer = '10.110.15.35'
+# EXAMPLE: [string]$global:SMTPServer = ''
+# EXAMPLE: [string]$global:SMTPServer = ''
 [string]$global:SMTPServer = ''
 
 # ------------
@@ -276,7 +271,7 @@
 
 # The email address that the email will be sent from.
 # EXAMPLE: [string]$global:ReportEmailFrom = 'AdPowerAdmin@example.com'
-[string]$global:ReportsEmailFrom = $global:FromEmail
+[string]$global:ReportsEmailFrom = ''
 
 # Use SSL to connect to the SMTP server.
 # EXAMPLE: [bool]$global:SmtpEnableSSL = $true
@@ -350,5 +345,35 @@
 # The DistinguishedName of the OU where the honeytoken user account was created.
 # Set automatically by the honeypot install wizard. Do not edit manually.
 [string]$global:HoneypotOU = ''
+
+# Monitor mode for the honeytoken scheduled task.
+# 'Centralized'   - One central AD-PowerAdmin remotely queries every DC's Security log over RPC.
+#                   This is the default and requires no additional deployment.
+# 'Decentralized' - A lightweight AD-PowerAdmin copy runs locally on each DC and queries only
+#                   the local Security log (no RPC overhead). Use when remote log queries are
+#                   too slow (e.g., resource-constrained DCs). Requires Install-HoneypotDecentralized.
+[string]$global:HoneypotMonitorMode = 'Centralized'
+
+##############################################################################################
+# SMB Admin Share Audit Settings
+# -------------------[Optional]------------------- #
+# Enable the daily unattended SMB administrative share audit.
+# When set to $true and AD-PowerAdmin is installed as a scheduled task, the full audit runs
+# daily and exports findings to the Reports directory.
+# Default is $false. Review the first manual audit run before enabling daily automation.
+[bool]$global:SmbAdminShareAudit = $false
+
+# -------------------[Optional]------------------- #
+# Host names or IP addresses approved to access SMB admin shares.
+# Used by Test-ADSMBFirewallExposure and Search-ADAdminShareAccessEvents to suppress expected
+# administrative traffic from management stations, backup servers, and monitoring systems.
+# Example: [string[]]$global:ApprovedSmbAdminHosts = @('MGMT01', 'BACKUP-SRV', '10.0.0.5')
+[string[]]$global:ApprovedSmbAdminHosts = @()
+
+# -------------------[Optional]------------------- #
+# Number of days after which a LAPS expiration timestamp is considered stale.
+# Computers whose LAPS expiration is this many days in the past will be flagged Medium severity.
+# Default is 30 days.
+[int]$global:SmbLapsExpiredDays = 30
 
 ##############################################################################################

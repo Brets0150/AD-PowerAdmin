@@ -47,6 +47,16 @@ Function Initialize-Module {
                     Label   = "Download and apply the latest module files from GitHub. Channel (Release or Development) is set by UpdateChannel in settings."
                     Command = "Update-ADPowerAdminModules"
                 }
+                'SettingsWizard' = @{
+                    Title   = "Configure Settings Wizard"
+                    Label   = "Interactive wizard to configure all AD-PowerAdmin settings in AD-PowerAdmin_settings.ps1, section by section. Prompts for each value with the current default shown, supports AD OU search, and creates a .bak backup before writing."
+                    Command = "Start-SettingsWizard"
+                }
+                'UpdateSettings' = @{
+                    Title   = "Upgrade Settings File"
+                    Label   = "Download the latest default settings file from GitHub and append any new variables missing from the current AD-PowerAdmin_settings.ps1, preserving all existing configured values."
+                    Command = "Update-ADPowerAdminSettingsFile"
+                }
             }
         }
     }
@@ -1172,4 +1182,983 @@ function Update-ADPowerAdminModules {
         Write-Host "NOTE: Restart PowerShell for updated modules to take effect in this session." -ForegroundColor Yellow
     }
 # End of the Update-ADPowerAdminModules function.
+}
+
+##############################################################################################
+# Settings File Upgrade -- private helpers and public entry point.
+##############################################################################################
+
+function Get-GlobalVarNames {
+    <#
+    .SYNOPSIS
+    Extract every $global:* variable name declared in a settings file content string.
+
+    .DESCRIPTION
+    Applies a regex anchored to line start so inline comment examples are not matched.
+    Handles both = and += assignment forms so multi-line += chains count as one variable.
+    Returns a case-insensitive HashSet of bare variable names (without '$global:').
+
+    .PARAMETER Content
+    The full raw text of a settings file.
+    #>
+    [OutputType([System.Collections.Generic.HashSet[string]])]
+    param(
+        [Parameter(Mandatory=$true)][string]$Content
+    )
+
+    $Names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $Matches = [regex]::Matches($Content, '(?m)^\[(?:bool|string|int|Int|array)\]\$global:(\w+)\s*[+]?=')
+    foreach ($M in $Matches) {
+        $null = $Names.Add($M.Groups[1].Value)
+    }
+    return $Names
+}
+
+function Get-SettingsMigrationContent {
+    <#
+    .SYNOPSIS
+    Build the text block to append to a settings file when migrating new variables.
+
+    .DESCRIPTION
+    Scans the lines of a reference settings file and, for each variable name in NewVarNames,
+    extracts its preceding comment block and full declaration (including array bodies and +=
+    chains). Returns a formatted string ready to append to the current settings file.
+
+    .PARAMETER Lines
+    The reference (downloaded) settings file split into an array of lines.
+
+    .PARAMETER NewVarNames
+    HashSet of variable names that are missing from the current file and must be migrated.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory=$true)][string[]]$Lines,
+        [Parameter(Mandatory=$true)][System.Collections.Generic.HashSet[string]]$NewVarNames
+    )
+
+    $AllBlocks = [System.Collections.Generic.List[string[]]]::new()
+    [int]$i = 0
+
+    while ($i -lt $Lines.Count) {
+        $Line  = $Lines[$i]
+
+        # Match only initial assignment lines (= not +=); += lines are intentionally skipped.
+        $Match = [regex]::Match($Line, '^\[(?:bool|string|int|Int|array)\]\$global:(\w+)\s*=')
+
+        if ($Match.Success -and $NewVarNames.Contains($Match.Groups[1].Value)) {
+            [string]$VarName = $Match.Groups[1].Value
+            $Block = [System.Collections.Generic.List[string]]::new()
+
+            # Collect the comment block above this declaration (scan backward).
+            $CommentBuf = [System.Collections.Generic.List[string]]::new()
+            for ([int]$j = $i - 1; $j -ge 0; $j--) {
+                [string]$Prev = $Lines[$j]
+                if ([string]::IsNullOrWhiteSpace($Prev)) { break }
+                if ($Prev -match '^\[') { break }   # another typed declaration
+                $CommentBuf.Insert(0, $Prev)
+            }
+            foreach ($CL in $CommentBuf) { $Block.Add($CL) }
+
+            # Add the declaration line.
+            $Block.Add($Line)
+
+            # If this is an array, collect forward until the closing ) on its own line.
+            if ($Line -match '=\s*@\(') {
+                $i++
+                while ($i -lt $Lines.Count) {
+                    $Block.Add($Lines[$i])
+                    if ($Lines[$i] -match '^\s*\)\s*$') { break }
+                    $i++
+                }
+            }
+
+            # Collect += continuation lines (e.g. PwAuditAlertEmailMessage).
+            while (($i + 1) -lt $Lines.Count -and
+                   $Lines[$i + 1] -match "\`$global:$([regex]::Escape($VarName))\s*\+=") {
+                $i++
+                $Block.Add($Lines[$i])
+            }
+
+            $AllBlocks.Add($Block.ToArray())
+        }
+
+        $i++
+    }
+
+    if ($AllBlocks.Count -eq 0) { return '' }
+
+    # Build the migration section string.
+    [string]$Sep  = '#' * $global:OptionsMaxTextLength
+    [string]$Date = (Get-Date -Format 'yyyy-MM-dd')
+    $Out = [System.Text.StringBuilder]::new()
+    $null = $Out.AppendLine('')
+    $null = $Out.AppendLine($Sep)
+    $null = $Out.AppendLine("# --- Migrated settings: added by Update-ADPowerAdminSettingsFile on $Date ---")
+    $null = $Out.AppendLine('# These variables were in the latest default file but missing from this one.')
+    $null = $Out.AppendLine('# They have been appended with their default values. Review and adjust as needed.')
+    $null = $Out.AppendLine($Sep)
+
+    foreach ($Block in $AllBlocks) {
+        $null = $Out.AppendLine('')
+        foreach ($BL in $Block) {
+            $null = $Out.AppendLine($BL)
+        }
+    }
+
+    return $Out.ToString()
+}
+
+function Update-ADPowerAdminSettingsFile {
+    <#
+    .SYNOPSIS
+    Download the latest default settings file from GitHub and append any missing variables.
+
+    .DESCRIPTION
+    Compares $global:* variable names in the current AD-PowerAdmin_settings.ps1 against the
+    canonical version on GitHub (Release or Development channel). Variables present in the
+    remote file but absent locally are appended with their default values and original
+    comments. All existing configured values are preserved. A .bak backup is created before
+    any write occurs.
+
+    .EXAMPLE
+    Update-ADPowerAdminSettingsFile
+
+    .NOTES
+    Menu path: AD-PowerAdmin Management -> Upgrade Settings File
+    Requires internet access to raw.githubusercontent.com.
+    #>
+
+    [string]$SettingsFile = Join-Path $global:ThisScriptDir 'AD-PowerAdmin_settings.ps1'
+    if (-not (Test-Path $SettingsFile)) {
+        Write-Host "ERROR: Settings file not found at: $SettingsFile" -ForegroundColor Red
+        return
+    }
+
+    # Determine update channel and git ref.
+    [string]$Channel = if ($global:UpdateChannel) { $global:UpdateChannel } else { 'Release' }
+    [string]$GitRef  = ''
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    if ($Channel -eq 'Development') {
+        $GitRef = 'main'
+        Write-Host "Update channel: Development (main branch)" -ForegroundColor Cyan
+    } else {
+        Write-Host "Update channel: Release -- querying GitHub for latest tag..." -ForegroundColor Cyan
+        $GitRef = Get-ADPowerAdminLatestReleaseTag
+        if (-not $GitRef) {
+            Write-Host "ERROR: Could not determine the latest release tag. Aborting." -ForegroundColor Red
+            return
+        }
+        Write-Host "Latest release tag: $GitRef" -ForegroundColor Cyan
+    }
+
+    [string]$Url      = "https://raw.githubusercontent.com/Brets0150/AD-PowerAdmin/$GitRef/AD-PowerAdmin_settings.ps1"
+    [string]$TempFile = Join-Path $env:TEMP 'AD-PowerAdmin_settings.ps1.update'
+
+    Write-Host "Downloading settings file from $GitRef ..." -ForegroundColor Cyan
+
+    try {
+        Invoke-WebRequest -Uri $Url -UseBasicParsing -OutFile $TempFile -ErrorAction Stop
+    } catch {
+        Write-Host "ERROR: Failed to download settings file: $_" -ForegroundColor Red
+        if (Test-Path $TempFile) { Remove-Item $TempFile -Force -ErrorAction SilentlyContinue }
+        return
+    }
+
+    try {
+        [string]$CurrentContent = Get-Content $SettingsFile -Raw
+        [string]$NewContent     = Get-Content $TempFile -Raw
+        [string[]]$NewLines     = $NewContent -split '\r?\n'
+
+        # Find variable names in each file.
+        $CurrentVars = Get-GlobalVarNames -Content $CurrentContent
+        $NewVars     = Get-GlobalVarNames -Content $NewContent
+
+        # Determine which variables are missing from the current file.
+        $MissingVars = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($Name in $NewVars) {
+            if (-not $CurrentVars.Contains($Name)) {
+                $null = $MissingVars.Add($Name)
+            }
+        }
+
+        if ($MissingVars.Count -eq 0) {
+            Write-Host ""
+            Write-Host "Settings file is up to date. No new variables found." -ForegroundColor Green
+            return
+        }
+
+        # Display summary of new variables.
+        Write-Host ""
+        Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
+        Write-Host "  $($MissingVars.Count) new setting(s) found in $Channel channel ($GitRef):" -ForegroundColor Cyan
+        Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
+        Write-Host ""
+        foreach ($Name in ($MissingVars | Sort-Object)) {
+            Write-Host "  + $Name" -ForegroundColor White
+        }
+        Write-Host ""
+        Write-Host "  These will be appended with their default values." -ForegroundColor DarkGray
+        Write-Host "  Run the Settings Wizard afterward to configure any required values." -ForegroundColor DarkGray
+        Write-Host ""
+
+        [string]$Confirm = Read-Host "Apply migration? (y/N)"
+        if ($Confirm -ne 'y' -and $Confirm -ne 'Y') {
+            Write-Host "Migration cancelled. No files modified." -ForegroundColor Gray
+            return
+        }
+
+        # Back up the current settings file.
+        [string]$BackupPath = $SettingsFile + '.bak'
+        try {
+            Copy-Item -Path $SettingsFile -Destination $BackupPath -Force -ErrorAction Stop
+        } catch {
+            Write-Host "WARNING: Could not create backup at '$BackupPath': $_" -ForegroundColor Red
+            [string]$ContinueAnyway = Read-Host "Continue without backup? (y/N)"
+            if ($ContinueAnyway -ne 'y' -and $ContinueAnyway -ne 'Y') {
+                Write-Host "Aborted. No files modified." -ForegroundColor Gray
+                return
+            }
+            $BackupPath = ''
+        }
+
+        # Build and append the migration block.
+        [string]$MigrationContent = Get-SettingsMigrationContent -Lines $NewLines -NewVarNames $MissingVars
+        [string]$UpdatedContent   = $CurrentContent.TrimEnd() + "`r`n" + $MigrationContent
+        [System.IO.File]::WriteAllText($SettingsFile, $UpdatedContent, [System.Text.Encoding]::UTF8)
+
+        Write-Host ""
+        Write-Host "Migration complete. $($MissingVars.Count) setting(s) added." -ForegroundColor Green
+        Write-Host "  File  : $SettingsFile" -ForegroundColor Green
+        if ($BackupPath) {
+            Write-Host "  Backup: $BackupPath" -ForegroundColor Green
+        }
+        Write-Host ""
+        Write-Host "NOTE: Restart AD-PowerAdmin for the new settings to take effect." -ForegroundColor Yellow
+        Write-Host "      Use the Settings Wizard to review and configure the new values." -ForegroundColor Yellow
+
+    } finally {
+        if (Test-Path $TempFile) { Remove-Item $TempFile -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+##############################################################################################
+# Settings Configuration Wizard -- private helpers and public entry point.
+# NOTE: These functions write directly to AD-PowerAdmin_settings.ps1. They are the deliberate
+# exception to the module read-only convention for $global:* settings.
+##############################################################################################
+
+function Set-SettingsFileValue {
+    <#
+    .SYNOPSIS
+    Apply a targeted regex replacement for one variable in the settings file content string.
+
+    .DESCRIPTION
+    Takes the full raw content of AD-PowerAdmin_settings.ps1 and replaces the value of the
+    named variable. Supports six VarType modes covering every declaration style used in the
+    settings file. Returns the modified content string; the caller writes the file.
+
+    .PARAMETER Content
+    The full raw text of the settings file.
+
+    .PARAMETER VarName
+    The bare variable name without '$global:' (e.g. 'ADAdminEmail').
+
+    .PARAMETER NewValue
+    The replacement value. For bool types pass 'true' or 'false' (no dollar sign).
+    For array-ou-locations pass the pre-built inner block string.
+
+    .PARAMETER VarType
+    One of: bool | int | string-single | string-double | string-varref | array-ou-locations
+    #>
+    param(
+        [Parameter(Mandatory=$true)][string]$Content,
+        [Parameter(Mandatory=$true)][string]$VarName,
+        [Parameter(Mandatory=$true)][AllowEmptyString()][string]$NewValue,
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('bool','int','string-single','string-double','string-varref','array-ou-locations')]
+        [string]$VarType
+    )
+
+    switch ($VarType) {
+        'bool' {
+            # \s* handles column-aligned declarations like KerberosKRBTGTAudit
+            $Content = $Content -replace "(\[bool\]\`$global:$VarName\s*=\s*\`\$)(true|false)", ('${1}' + $NewValue)
+        }
+        'int' {
+            # (?i)int handles both [int] and [Int]
+            $Content = $Content -replace "(\[(?i)int\]\`$global:$VarName\s*=\s*)\d+", ('${1}' + $NewValue)
+        }
+        'string-single' {
+            $Content = $Content -replace "(\[string\]\`$global:$VarName\s*=\s*')[^']*('|`$)", ('${1}' + $NewValue + '${2}')
+        }
+        'string-double' {
+            $Content = $Content -replace "(\[string\]\`$global:$VarName\s*=\s*`")[^`"]*(`"|\r?`n)", ('${1}' + $NewValue + '${2}')
+        }
+        'string-varref' {
+            # Replaces the entire value (which may be $global:OtherVar) with a literal string
+            $Content = $Content -replace "(\[string\]\`$global:$VarName\s*=\s*)[^\r\n]+", ('${1}' + "'" + $NewValue + "'")
+        }
+        'array-ou-locations' {
+            # (?sm) = dotall + multiline so . matches newlines and ^ anchors to line start
+            $EscapedName = [regex]::Escape($VarName)
+            $Content = $Content -replace "(?sm)(\[array\]\`$global:$EscapedName\s*=\s*@\().*?(^\))", ('${1}' + "`n" + $NewValue + "`n" + '${2}')
+        }
+    }
+    return $Content
+}
+
+function Read-SettingBool {
+    <#
+    .SYNOPSIS
+    Prompt for a yes/no setting value with the current default displayed.
+
+    .DESCRIPTION
+    Displays the current bool value and prompts the user to change it. Pressing Enter
+    keeps the current default. Returns [bool].
+
+    .PARAMETER Prompt
+    The prompt label shown to the user.
+
+    .PARAMETER Default
+    The current value to use if the user presses Enter.
+    #>
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory=$true)][string]$Prompt,
+        [Parameter(Mandatory=$true)][bool]$Default
+    )
+
+    if ($Default) {
+        $HintText = "(Y/n)"
+        $DefaultLabel = "True"
+    } else {
+        $HintText = "(y/N)"
+        $DefaultLabel = "False"
+    }
+
+    Write-Host "  Current value: $DefaultLabel" -ForegroundColor Gray
+
+    while ($true) {
+        [string]$UserInput = Read-Host "  $Prompt $HintText"
+        if ([string]::IsNullOrEmpty($UserInput)) {
+            return $Default
+        }
+        if ($UserInput -eq 'y' -or $UserInput -eq 'Y') { return $true }
+        if ($UserInput -eq 'n' -or $UserInput -eq 'N') { return $false }
+        Write-Host "  Please enter 'y' or 'n'." -ForegroundColor Yellow
+    }
+}
+
+function Read-SettingString {
+    <#
+    .SYNOPSIS
+    Prompt for a string setting value with the current default displayed.
+
+    .DESCRIPTION
+    Displays the current value and prompts the user. Pressing Enter keeps the current
+    default. Enforces MaxLength when supplied (loops until within bounds). Returns [string].
+
+    .PARAMETER Prompt
+    The prompt label shown to the user.
+
+    .PARAMETER Default
+    The current value to use if the user presses Enter.
+
+    .PARAMETER MaxLength
+    When greater than 0, rejects input that exceeds this character count.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory=$true)][string]$Prompt,
+        [Parameter(Mandatory=$false)][AllowEmptyString()][string]$Default = '',
+        [Parameter(Mandatory=$false)][int]$MaxLength = 0
+    )
+
+    if ([string]::IsNullOrEmpty($Default)) {
+        Write-Host "  Current value: (empty)" -ForegroundColor Gray
+    } else {
+        Write-Host "  Current value: $Default" -ForegroundColor Gray
+    }
+
+    while ($true) {
+        [string]$UserInput = Read-Host "  $Prompt (Enter = keep current)"
+        if ([string]::IsNullOrEmpty($UserInput)) {
+            return $Default
+        }
+        if ($MaxLength -gt 0 -and $UserInput.Length -gt $MaxLength) {
+            Write-Host "  Value must be $MaxLength characters or fewer (entered: $($UserInput.Length))." -ForegroundColor Yellow
+            continue
+        }
+        return $UserInput
+    }
+}
+
+function Read-SettingInt {
+    <#
+    .SYNOPSIS
+    Prompt for an integer setting value with the current default displayed.
+
+    .DESCRIPTION
+    Displays the current integer value and prompts the user. Pressing Enter keeps the
+    current default. Validates that input is numeric and meets MinValue. Returns [int].
+
+    .PARAMETER Prompt
+    The prompt label shown to the user.
+
+    .PARAMETER Default
+    The current value to use if the user presses Enter.
+
+    .PARAMETER MinValue
+    Minimum accepted integer value (default 1).
+    #>
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory=$true)][string]$Prompt,
+        [Parameter(Mandatory=$true)][int]$Default,
+        [Parameter(Mandatory=$false)][int]$MinValue = 1
+    )
+
+    Write-Host "  Current value: $Default" -ForegroundColor Gray
+
+    while ($true) {
+        [string]$UserInput = Read-Host "  $Prompt (Enter = keep current)"
+        if ([string]::IsNullOrEmpty($UserInput)) {
+            return $Default
+        }
+        [int]$Parsed = 0
+        if (-not [Int32]::TryParse($UserInput, [ref]$Parsed)) {
+            Write-Host "  Please enter a whole number." -ForegroundColor Yellow
+            continue
+        }
+        if ($Parsed -lt $MinValue) {
+            Write-Host "  Value must be $MinValue or greater." -ForegroundColor Yellow
+            continue
+        }
+        return $Parsed
+    }
+}
+
+function Read-SettingOuPath {
+    <#
+    .SYNOPSIS
+    Prompt for an OU DistinguishedName with optional AD browser and live validation.
+
+    .DESCRIPTION
+    Displays the current value and prompts the user. The user can press Enter to keep
+    the current value, type '?' to browse AD OUs interactively, or type a DN directly.
+    Direct input is validated against AD; invalid DNs trigger a warning and a confirm
+    prompt before being accepted. Returns [string].
+
+    .PARAMETER Prompt
+    The prompt label shown to the user.
+
+    .PARAMETER Default
+    The current value to use if the user presses Enter.
+
+    .PARAMETER AllowEmpty
+    When $true, pressing Enter with no current value returns an empty string.
+    When $false (default), an empty value is not accepted.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory=$true)][string]$Prompt,
+        [Parameter(Mandatory=$false)][AllowEmptyString()][string]$Default = '',
+        [Parameter(Mandatory=$false)][bool]$AllowEmpty = $false
+    )
+
+    if ([string]::IsNullOrEmpty($Default)) {
+        Write-Host "  Current value: (empty)" -ForegroundColor Gray
+    } else {
+        Write-Host "  Current value: $Default" -ForegroundColor Gray
+    }
+    Write-Host "  Tip: Press ENTER to keep current, type '?' to browse AD OUs, or enter a DN directly." -ForegroundColor DarkGray
+
+    while ($true) {
+        [string]$UserInput = Read-Host "  $Prompt"
+
+        if ([string]::IsNullOrEmpty($UserInput)) {
+            if ($AllowEmpty -or -not [string]::IsNullOrEmpty($Default)) {
+                return $Default
+            }
+            Write-Host "  A value is required. Type '?' to browse AD OUs." -ForegroundColor Yellow
+            continue
+        }
+
+        if ($UserInput -eq '?') {
+            [string]$Selected = Get-AdOuSearch
+            if (-not [string]::IsNullOrEmpty($Selected)) {
+                return $Selected
+            }
+            Write-Host "  No OU selected. Try again or type a DN directly." -ForegroundColor Yellow
+            continue
+        }
+
+        # Validate the typed DN against AD
+        try {
+            $null = Get-ADOrganizationalUnit -Identity $UserInput -ErrorAction Stop
+            return $UserInput
+        } catch {
+            Write-Host "  WARNING: '$UserInput' was not found as an OU in Active Directory." -ForegroundColor Yellow
+            [string]$UseAnyway = Read-Host "  Use this value anyway? (y/N)"
+            if ($UseAnyway -eq 'y' -or $UseAnyway -eq 'Y') {
+                return $UserInput
+            }
+        }
+    }
+}
+
+function Edit-OuLocationList {
+    <#
+    .SYNOPSIS
+    Interactive manager for an array of SearchOUbase/DisabledOULocal location pairs.
+
+    .DESCRIPTION
+    Displays the current entries in a numbered list and offers Add, Remove, Clear all, and Done
+    options in a loop. Returns the modified List[hashtable] when changes are made, or $null when
+    the user exits without changes.
+
+    .PARAMETER ObjectType
+    Human-readable noun used in prompts (e.g. 'computer' or 'user').
+
+    .PARAMETER CurrentEntries
+    The current array of hashtables, each with SearchOUbase and DisabledOULocal keys.
+
+    .PARAMETER AllowEmptySearch
+    When $true, SearchOUbase may be left blank (meaning search the entire domain).
+    #>
+    param(
+        [Parameter(Mandatory=$true)][string]$ObjectType,
+        [Parameter(Mandatory=$true)][object[]]$CurrentEntries,
+        [Parameter(Mandatory=$true)][bool]$AllowEmptySearch
+    )
+
+    $WorkingList = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($Entry in $CurrentEntries) {
+        $WorkingList.Add(@{ SearchOUbase = $Entry.SearchOUbase; DisabledOULocal = $Entry.DisabledOULocal })
+    }
+    [bool]$Modified = $false
+
+    while ($true) {
+        Write-Host ""
+        if ($WorkingList.Count -eq 0) {
+            Write-Host "  (no entries configured)" -ForegroundColor Yellow
+        } else {
+            for ($i = 0; $i -lt $WorkingList.Count; $i++) {
+                Write-Host ("  {0,2}. Search : {1}" -f ($i + 1), $WorkingList[$i].SearchOUbase) -ForegroundColor Gray
+                Write-Host ("      Disable: {0}" -f $WorkingList[$i].DisabledOULocal) -ForegroundColor Gray
+                Write-Host ""
+            }
+        }
+        Write-Host "  Options: A=Add  R=Remove  C=Clear all  D=Done" -ForegroundColor Cyan
+
+        [string]$Choice = Read-Host "  Select option"
+
+        switch ($Choice.ToUpper()) {
+            'A' {
+                Write-Host ""
+                Write-Host "  -- New Entry --" -ForegroundColor Cyan
+                if ($AllowEmptySearch) {
+                    [string]$SearchOU = Read-SettingOuPath -Prompt "SearchOUbase (blank = search all ${ObjectType}s)" -Default '' -AllowEmpty $true
+                } else {
+                    [string]$SearchOU = Read-SettingOuPath -Prompt "SearchOUbase (OU to search for inactive ${ObjectType}s)" -Default '' -AllowEmpty $false
+                }
+                [string]$DisabledOU = Read-SettingOuPath -Prompt "DisabledOULocal (OU to move disabled ${ObjectType}s to)" -Default '' -AllowEmpty $false
+                $WorkingList.Add(@{ SearchOUbase = $SearchOU; DisabledOULocal = $DisabledOU })
+                $Modified = $true
+                Write-Host "  Entry added." -ForegroundColor Green
+            }
+            'R' {
+                if ($WorkingList.Count -eq 0) {
+                    Write-Host "  No entries to remove." -ForegroundColor Yellow
+                    break
+                }
+                Write-Host ""
+                Write-Host "  Select entry to remove:" -ForegroundColor Cyan
+                for ($i = 0; $i -lt $WorkingList.Count; $i++) {
+                    Write-Host ("  {0,2}. Search : {1}" -f ($i + 1), $WorkingList[$i].SearchOUbase)
+                    Write-Host ("      Disable: {0}" -f $WorkingList[$i].DisabledOULocal)
+                    Write-Host ""
+                }
+                while ($true) {
+                    [string]$RemoveRaw = Read-Host "  Enter number to remove (or 'q' to cancel)"
+                    if ($RemoveRaw -eq 'q' -or $RemoveRaw -eq 'Q') { break }
+                    [int]$RemoveIdx = 0
+                    if ([Int32]::TryParse($RemoveRaw, [ref]$RemoveIdx) -and $RemoveIdx -ge 1 -and $RemoveIdx -le $WorkingList.Count) {
+                        $WorkingList.RemoveAt($RemoveIdx - 1)
+                        $Modified = $true
+                        Write-Host ("  Entry {0} removed." -f $RemoveIdx) -ForegroundColor Green
+                        break
+                    }
+                    Write-Host ("  Invalid selection. Enter 1-{0} or 'q'." -f $WorkingList.Count) -ForegroundColor Yellow
+                }
+            }
+            'C' {
+                if ($WorkingList.Count -eq 0) {
+                    Write-Host "  No entries to clear." -ForegroundColor Yellow
+                    break
+                }
+                [string]$ConfirmClear = Read-Host ("  Clear all {0} entr{1}? (y/N)" -f $WorkingList.Count, $(if ($WorkingList.Count -eq 1) { 'y' } else { 'ies' }))
+                if ($ConfirmClear -eq 'y' -or $ConfirmClear -eq 'Y') {
+                    $WorkingList.Clear()
+                    $Modified = $true
+                    Write-Host "  All entries cleared." -ForegroundColor Green
+                }
+            }
+            'D' {
+                if ($Modified) { return ,$WorkingList }
+                return $null
+            }
+            default {
+                Write-Host "  Invalid option. Enter A, R, C, or D." -ForegroundColor Yellow
+            }
+        }
+    }
+}
+
+function Start-SettingsWizard {
+    <#
+    .SYNOPSIS
+    Interactive wizard that guides an administrator through configuring AD-PowerAdmin_settings.ps1.
+
+    .DESCRIPTION
+    Reads the current settings file, prompts for each configurable variable section by section
+    (displaying the current value as the default), then writes the updated file after confirmation.
+    A .bak backup is created before any write occurs.
+
+    NOTE: This function writes directly to AD-PowerAdmin_settings.ps1. It is the deliberate
+    exception to the module read-only convention for $global:* settings.
+
+    .EXAMPLE
+    Start-SettingsWizard
+
+    .NOTES
+    Menu path: AD-PowerAdmin Management -> Configure Settings Wizard
+    #>
+
+    [string]$SettingsFile = Join-Path $global:ThisScriptDir 'AD-PowerAdmin_settings.ps1'
+    if (-not (Test-Path $SettingsFile)) {
+        Write-Host "ERROR: Settings file not found at: $SettingsFile" -ForegroundColor Red
+        return
+    }
+
+    [string]$Content = Get-Content $SettingsFile -Raw
+    $Changes = [ordered]@{}
+
+    function Show-SectionHeader([string]$Title) {
+        Write-Host ""
+        Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
+        Write-Host "  $Title" -ForegroundColor Cyan
+        Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
+        Write-Host ""
+    }
+
+    Write-Host ""
+    Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
+    Write-Host "  AD-PowerAdmin Settings Configuration Wizard" -ForegroundColor Cyan
+    Write-Host "  Press ENTER at any prompt to keep the current value." -ForegroundColor Cyan
+    Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
+
+    ##############################################################################################
+    Show-SectionHeader "Debugging"
+    Write-Host "  Controls whether a transcript debug log is written to the Reports folder." -ForegroundColor DarkGray
+    Write-Host "  Recommended: False for production use." -ForegroundColor DarkGray
+    [bool]$NewDebug = Read-SettingBool -Prompt "Enable debug logging" -Default $global:Debug
+    $Changes['Debug'] = @{ Value = $NewDebug.ToString().ToLower(); VarType = 'bool' }
+
+    ##############################################################################################
+    Show-SectionHeader "Mandatory Configuration"
+
+    Write-Host "  ADAdminEmail: The AD administrator or security team email address." -ForegroundColor DarkGray
+    Write-Host "  Used as the default recipient for all audit reports and alerts." -ForegroundColor DarkGray
+    [string]$NewAdminEmail = Read-SettingString -Prompt "AD Admin Email address" -Default $global:ADAdminEmail
+    $Changes['ADAdminEmail'] = @{ Value = $NewAdminEmail; VarType = 'string-double' }
+
+    Write-Host ""
+    Write-Host "  FromEmail: The address AD-PowerAdmin sends email from." -ForegroundColor DarkGray
+    Write-Host "  This account must be permitted to relay through your SMTP server." -ForegroundColor DarkGray
+    [string]$NewFromEmail = Read-SettingString -Prompt "From Email address" -Default $global:FromEmail
+    $Changes['FromEmail'] = @{ Value = $NewFromEmail; VarType = 'string-double' }
+
+    Write-Host ""
+    Write-Host "  MsaAccountName: The standalone Managed Service Account name for the scheduled task." -ForegroundColor DarkGray
+    Write-Host "  Maximum 14 characters. The default is recommended; only change if required." -ForegroundColor DarkGray
+    [string]$NewMsaName = Read-SettingString -Prompt "sMSA Account Name (max 14 chars)" -Default $global:MsaAccountName -MaxLength 14
+    $Changes['MsaAccountName'] = @{ Value = $NewMsaName; VarType = 'string-double' }
+
+    Write-Host ""
+    Write-Host "  InstallDirectory: Where AD-PowerAdmin files are copied when installed as a service." -ForegroundColor DarkGray
+    [string]$NewInstallDir = Read-SettingString -Prompt "Install Directory" -Default $global:InstallDirectory
+    $Changes['InstallDirectory'] = @{ Value = $NewInstallDir; VarType = 'string-double' }
+
+    ##############################################################################################
+    Show-SectionHeader "Optional Module Settings"
+
+    Write-Host "  UpdateChannel: Controls which source is used when 'Update Modules' is run." -ForegroundColor DarkGray
+    Write-Host "  'Release' = latest official GitHub release. 'Development' = main branch." -ForegroundColor DarkGray
+    [string]$NewChannel = ''
+    while ($true) {
+        $NewChannel = Read-SettingString -Prompt "Update channel (Release/Development)" -Default $global:UpdateChannel
+        if ($NewChannel -eq 'Release' -or $NewChannel -eq 'Development') { break }
+        Write-Host "  Value must be 'Release' or 'Development'." -ForegroundColor Yellow
+    }
+    $Changes['UpdateChannel'] = @{ Value = $NewChannel; VarType = 'string-single' }
+
+    ##############################################################################################
+    Show-SectionHeader "Optional Daily Tasks"
+    Write-Host "  Enable or disable each automated daily audit. All default to enabled." -ForegroundColor DarkGray
+    Write-Host ""
+
+    [bool]$NewKRBTGT = Read-SettingBool -Prompt "Enable daily Kerberos KRBTGT age check" -Default $global:KerberosKRBTGTAudit
+    $Changes['KerberosKRBTGTAudit'] = @{ Value = $NewKRBTGT.ToString().ToLower(); VarType = 'bool' }
+
+    Write-Host ""
+    [bool]$NewInactComp = Read-SettingBool -Prompt "Enable daily inactive computer audit" -Default $global:InactiveComputerAudit
+    $Changes['InactiveComputerAudit'] = @{ Value = $NewInactComp.ToString().ToLower(); VarType = 'bool' }
+
+    Write-Host ""
+    [bool]$NewInactUser = Read-SettingBool -Prompt "Enable daily inactive user audit" -Default $global:InactiveUserAudit
+    $Changes['InactiveUserAudit'] = @{ Value = $NewInactUser.ToString().ToLower(); VarType = 'bool' }
+
+    Write-Host ""
+    [bool]$NewWeakPw = Read-SettingBool -Prompt "Enable daily weak/breached password audit" -Default $global:WeakPasswordAudit
+    $Changes['WeakPasswordAudit'] = @{ Value = $NewWeakPw.ToString().ToLower(); VarType = 'bool' }
+
+    Write-Host ""
+    [bool]$NewLockout = Read-SettingBool -Prompt "Enable daily account lockout report" -Default $global:LockoutDailyReport
+    $Changes['LockoutDailyReport'] = @{ Value = $NewLockout.ToString().ToLower(); VarType = 'bool' }
+
+    Write-Host ""
+    [bool]$NewPwNotReq = Read-SettingBool -Prompt "Enable daily password-not-required audit" -Default $global:PasswordNotRequiredAudit
+    $Changes['PasswordNotRequiredAudit'] = @{ Value = $NewPwNotReq.ToString().ToLower(); VarType = 'bool' }
+
+    ##############################################################################################
+    Show-SectionHeader "Kerberos KRBTGT Settings"
+    Write-Host "  Number of days between automatic KRBTGT password rotations." -ForegroundColor DarkGray
+    Write-Host "  Microsoft recommends rotating every 90-180 days. Default is 90." -ForegroundColor DarkGray
+    [int]$NewKrbtgtInterval = Read-SettingInt -Prompt "KRBTGT password rotation interval (days)" -Default $global:krbtgtPwUpdateInterval
+    $Changes['krbtgtPwUpdateInterval'] = @{ Value = $NewKrbtgtInterval.ToString(); VarType = 'int' }
+
+    ##############################################################################################
+    Show-SectionHeader "Inactive Computer Cleanup"
+    Write-Host "  InactiveDays: Computers with no logon activity beyond this threshold are disabled." -ForegroundColor DarkGray
+    [int]$NewInactiveDays = Read-SettingInt -Prompt "Inactivity threshold (days)" -Default $global:InactiveDays
+    $Changes['InactiveDays'] = @{ Value = $NewInactiveDays.ToString(); VarType = 'int' }
+
+    Write-Host ""
+    Write-Host "  InactiveComputersLocations: OU pairs that define where to search for inactive" -ForegroundColor DarkGray
+    Write-Host "  computers and where to move them after disabling." -ForegroundColor DarkGray
+
+    $CompResult = Edit-OuLocationList -ObjectType 'computer' -CurrentEntries $global:InactiveComputersLocations -AllowEmptySearch $false
+    if ($null -ne $CompResult) {
+        $CompBlocks = [System.Collections.Generic.List[string]]::new()
+        foreach ($Entry in $CompResult) {
+            $CompBlocks.Add("    @{`n        SearchOUbase    = '$($Entry.SearchOUbase)'`n        DisabledOULocal = '$($Entry.DisabledOULocal)'`n    }")
+        }
+        $Changes['InactiveComputersLocations'] = @{ Value = ($CompBlocks -join "`n`n"); VarType = 'array-ou-locations' }
+    }
+
+    ##############################################################################################
+    Show-SectionHeader "Inactive Users Cleanup"
+    Write-Host "  InactiveUsersLocations: OU pairs that define where to search for inactive" -ForegroundColor DarkGray
+    Write-Host "  users and where to move them after disabling." -ForegroundColor DarkGray
+
+    $UserResult = Edit-OuLocationList -ObjectType 'user' -CurrentEntries $global:InactiveUsersLocations -AllowEmptySearch $true
+    if ($null -ne $UserResult) {
+        $UserBlocks = [System.Collections.Generic.List[string]]::new()
+        foreach ($Entry in $UserResult) {
+            $UserBlocks.Add("    @{`n        SearchOUbase    = '$($Entry.SearchOUbase)'`n        DisabledOULocal = '$($Entry.DisabledOULocal)'`n    }")
+        }
+        $Changes['InactiveUsersLocations'] = @{ Value = ($UserBlocks -join "`n`n"); VarType = 'array-ou-locations' }
+    }
+
+    ##############################################################################################
+    Show-SectionHeader "Password Quality Test Settings"
+
+    Write-Host "  HIBP hash data can be stored as a single sorted file or as a directory of range files." -ForegroundColor DarkGray
+    Write-Host "  Directory mode is recommended: it enables fast incremental weekly updates (~70 GB initial" -ForegroundColor DarkGray
+    Write-Host "  download; only changed range files downloaded on subsequent runs)." -ForegroundColor DarkGray
+    Write-Host "  Single-file mode downloads the entire ~70 GB file on every update." -ForegroundColor DarkGray
+    Write-Host "  To use single-file mode: set NtlmHashDataDir to empty. To use directory mode: set it." -ForegroundColor DarkGray
+    Write-Host ""
+
+    Write-Host "  NtlmHashDataFile: filename for single-file mode (always present even in directory mode)." -ForegroundColor DarkGray
+    [string]$NewNtlmFile = Read-SettingString -Prompt "HIBP single-file name" -Default $global:NtlmHashDataFile
+    $Changes['NtlmHashDataFile'] = @{ Value = $NewNtlmFile; VarType = 'string-single' }
+
+    Write-Host ""
+    Write-Host "  NtlmHashDataDir: directory name for directory mode. Leave empty to use single-file mode." -ForegroundColor DarkGray
+    [string]$NewNtlmDir = Read-SettingString -Prompt "HIBP directory name (empty = single-file mode)" -Default $global:NtlmHashDataDir
+    $Changes['NtlmHashDataDir'] = @{ Value = $NewNtlmDir; VarType = 'string-single' }
+
+    Write-Host ""
+    Write-Host "  WeakPassDictFile: plain-text file of known weak passwords, one per line." -ForegroundColor DarkGray
+    [string]$NewWeakDict = Read-SettingString -Prompt "Weak password dictionary filename" -Default $global:WeakPassDictFile
+    $Changes['WeakPassDictFile'] = @{ Value = $NewWeakDict; VarType = 'string-single' }
+
+    Write-Host ""
+    Write-Host "  PasswordQualityTestSearchOUbase: OU to limit the password audit to." -ForegroundColor DarkGray
+    Write-Host "  Leave empty to audit all user accounts in AD." -ForegroundColor DarkGray
+    [string]$NewPwOU = Read-SettingOuPath -Prompt "Password audit OU (empty = all users)" -Default $global:PasswordQualityTestSearchOUbase -AllowEmpty $true
+    $Changes['PasswordQualityTestSearchOUbase'] = @{ Value = $NewPwOU; VarType = 'string-single' }
+
+    Write-Host ""
+    Write-Host "  ReportAdminEmailTo: email address that receives the password audit admin report." -ForegroundColor DarkGray
+    Write-Host "  Defaults to ADAdminEmail if not overridden." -ForegroundColor DarkGray
+    [string]$NewReportTo = Read-SettingString -Prompt "Report recipient email" -Default $global:ReportAdminEmailTo
+    $Changes['ReportAdminEmailTo'] = @{ Value = $NewReportTo; VarType = 'string-varref' }
+
+    Write-Host ""
+    Write-Host "  PwAuditAlertEmailCCAdmins: when enabled, the admin also receives a copy of every" -ForegroundColor DarkGray
+    Write-Host "  breach alert sent to end users." -ForegroundColor DarkGray
+    [bool]$NewCcAdmins = Read-SettingBool -Prompt "CC admins on user breach alert emails" -Default $global:PwAuditAlertEmailCCAdmins
+    $Changes['PwAuditAlertEmailCCAdmins'] = @{ Value = $NewCcAdmins.ToString().ToLower(); VarType = 'bool' }
+
+    Write-Host ""
+    Write-Host "  PwAuditPwChangeGracePeriod: days a user has to change a breached/weak password" -ForegroundColor DarkGray
+    Write-Host "  before the account is force-expired at next login." -ForegroundColor DarkGray
+    [int]$NewGrace = Read-SettingInt -Prompt "Password change grace period (days)" -Default $global:PwAuditPwChangeGracePeriod
+    $Changes['PwAuditPwChangeGracePeriod'] = @{ Value = $NewGrace.ToString(); VarType = 'int' }
+
+    Write-Host ""
+    Write-Host "  PwAuditAlertEmailSubject: subject line for breach alert emails sent to users." -ForegroundColor DarkGray
+    [string]$NewAlertSubject = Read-SettingString -Prompt "Alert email subject" -Default $global:PwAuditAlertEmailSubject
+    $Changes['PwAuditAlertEmailSubject'] = @{ Value = $NewAlertSubject; VarType = 'string-double' }
+
+    Write-Host ""
+    Write-Host "  NOTE: PwAuditAlertEmailMessage spans multiple concatenated lines with variable" -ForegroundColor Yellow
+    Write-Host "        interpolation. Edit this value manually in AD-PowerAdmin_settings.ps1." -ForegroundColor Yellow
+    Write-Host "        Skipping automated configuration of this variable." -ForegroundColor Yellow
+
+    ##############################################################################################
+    Show-SectionHeader "Email / SMTP Settings"
+
+    Write-Host "  SMTPServer: hostname or IP address of your SMTP relay." -ForegroundColor DarkGray
+    [string]$NewSMTP = Read-SettingString -Prompt "SMTP Server" -Default $global:SMTPServer
+    $Changes['SMTPServer'] = @{ Value = $NewSMTP; VarType = 'string-single' }
+
+    Write-Host ""
+    Write-Host "  ReportsEmailFrom: the From address on outbound emails. Defaults to FromEmail." -ForegroundColor DarkGray
+    [string]$NewRptFrom = Read-SettingString -Prompt "Reports From email address" -Default $global:ReportsEmailFrom
+    $Changes['ReportsEmailFrom'] = @{ Value = $NewRptFrom; VarType = 'string-varref' }
+
+    Write-Host ""
+    Write-Host "  SmtpEnableSSL: whether to require SSL/TLS when connecting to the SMTP server." -ForegroundColor DarkGray
+    [bool]$NewSSL = Read-SettingBool -Prompt "Enable SMTP SSL/TLS" -Default $global:SmtpEnableSSL
+    $Changes['SmtpEnableSSL'] = @{ Value = $NewSSL.ToString().ToLower(); VarType = 'bool' }
+
+    Write-Host ""
+    Write-Host "  SMTPPort: SMTP server port. Typical values: 587 (STARTTLS), 465 (SSL), 25 (plain)." -ForegroundColor DarkGray
+    [string]$NewSMTPPort = Read-SettingString -Prompt "SMTP Port" -Default $global:SMTPPort
+    $Changes['SMTPPort'] = @{ Value = $NewSMTPPort; VarType = 'string-single' }
+
+    Write-Host ""
+    Write-Host "  SMTPUsername: SMTP authentication username (leave empty if your relay does not require auth)." -ForegroundColor DarkGray
+    [string]$NewSMTPUser = Read-SettingString -Prompt "SMTP Username" -Default $global:SMTPUsername
+    $Changes['SMTPUsername'] = @{ Value = $NewSMTPUser; VarType = 'string-single' }
+
+    Write-Host ""
+    Write-Host "  SMTPPassword: SMTP authentication password stored in plaintext." -ForegroundColor DarkGray
+    Write-Host "  WARNING: Restrict access to AD-PowerAdmin_settings.ps1 to Domain Admins only." -ForegroundColor Yellow
+    Write-Host "  Press ENTER to keep the current value without displaying it." -ForegroundColor DarkGray
+    [string]$NewSMTPPass = Read-Host "  SMTP Password (Enter = keep current)"
+    if (-not [string]::IsNullOrEmpty($NewSMTPPass)) {
+        $Changes['SMTPPassword'] = @{ Value = $NewSMTPPass; VarType = 'string-single' }
+    }
+
+    ##############################################################################################
+    Show-SectionHeader "SYSVOL Security Audit"
+    Write-Host "  When enabled, AD-PowerAdmin scans SYSVOL Group Policy Preference XML files daily" -ForegroundColor DarkGray
+    Write-Host "  for cpassword values and emails the administrator immediately if any are found." -ForegroundColor DarkGray
+    [bool]$NewSysvol = Read-SettingBool -Prompt "Enable daily GPP cpassword scan" -Default $global:SysvolGppCpasswordAudit
+    $Changes['SysvolGppCpasswordAudit'] = @{ Value = $NewSysvol.ToString().ToLower(); VarType = 'bool' }
+
+    ##############################################################################################
+    Show-SectionHeader "Exchange AD Security Audit"
+    Write-Host "  Enable only in environments where Exchange is installed. This audit checks" -ForegroundColor DarkGray
+    Write-Host "  Exchange security group ACEs for dangerous domain-root permissions." -ForegroundColor DarkGray
+    Write-Host "  ExchangeGroupsToAudit is pre-configured and not modified by this wizard." -ForegroundColor DarkGray
+    [bool]$NewExchange = Read-SettingBool -Prompt "Enable daily Exchange AD security audit" -Default $global:ExchangeADSecurityAudit
+    $Changes['ExchangeADSecurityAudit'] = @{ Value = $NewExchange.ToString().ToLower(); VarType = 'bool' }
+
+    ##############################################################################################
+    Show-SectionHeader "Honeytoken Account Settings"
+    Write-Host "  HoneypotAudit: enables the honeytoken authentication event monitor." -ForegroundColor DarkGray
+    Write-Host "  Set to True automatically when the Honeypot install wizard completes." -ForegroundColor DarkGray
+    [bool]$NewHoneypot = Read-SettingBool -Prompt "Enable honeytoken authentication monitor" -Default $global:HoneypotAudit
+    $Changes['HoneypotAudit'] = @{ Value = $NewHoneypot.ToString().ToLower(); VarType = 'bool' }
+
+    Write-Host ""
+    Write-Host "  HoneypotMonitorIntervalMinutes: how often the monitor scheduled task runs." -ForegroundColor DarkGray
+    Write-Host "  Also controls the Security log lookback window (interval + 1 minute)." -ForegroundColor DarkGray
+    [int]$NewHoneypotInterval = Read-SettingInt -Prompt "Honeytoken monitor interval (minutes)" -Default $global:HoneypotMonitorIntervalMinutes
+    $Changes['HoneypotMonitorIntervalMinutes'] = @{ Value = $NewHoneypotInterval.ToString(); VarType = 'int' }
+
+    Write-Host ""
+    Write-Host "  NOTE: HoneypotUsername, HoneypotDenyGroup, and HoneypotOU are managed" -ForegroundColor Yellow
+    Write-Host "        automatically by the Honeypot install wizard. Do not edit them here." -ForegroundColor Yellow
+
+    ##############################################################################################
+    # Summary and confirmation
+    ##############################################################################################
+    Write-Host ""
+    Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
+    Write-Host "  Summary of Changes" -ForegroundColor Cyan
+    Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
+
+    if ($Changes.Count -eq 0) {
+        Write-Host "  No settings were changed." -ForegroundColor Gray
+        Write-Host ""
+        return
+    }
+
+    Write-Host ""
+    foreach ($Key in $Changes.Keys) {
+        $Val = $Changes[$Key].Value
+        if ($Changes[$Key].VarType -eq 'array-ou-locations') {
+            Write-Host ("  {0,-40} = [updated OU location entries]" -f $Key) -ForegroundColor White
+        } elseif ($Key -eq 'SMTPPassword') {
+            Write-Host ("  {0,-40} = [updated - not displayed]" -f $Key) -ForegroundColor White
+        } else {
+            Write-Host ("  {0,-40} = {1}" -f $Key, $Val) -ForegroundColor White
+        }
+    }
+    Write-Host ""
+
+    [string]$Confirm = Read-Host "Write these changes to AD-PowerAdmin_settings.ps1? (y/N)"
+    if ($Confirm -ne 'y' -and $Confirm -ne 'Y') {
+        Write-Host "Changes discarded. No files modified." -ForegroundColor Gray
+        return
+    }
+
+    # Back up the settings file before writing.
+    [string]$BackupPath = $SettingsFile + '.bak'
+    try {
+        Copy-Item -Path $SettingsFile -Destination $BackupPath -Force -ErrorAction Stop
+    } catch {
+        Write-Host "WARNING: Could not create backup at '$BackupPath': $_" -ForegroundColor Red
+        [string]$ContinueAnyway = Read-Host "Continue without backup? (y/N)"
+        if ($ContinueAnyway -ne 'y' -and $ContinueAnyway -ne 'Y') {
+            Write-Host "Aborted. No files modified." -ForegroundColor Gray
+            return
+        }
+    }
+
+    # Apply all replacements to the content string.
+    foreach ($Key in $Changes.Keys) {
+        $Content = Set-SettingsFileValue -Content $Content -VarName $Key -NewValue $Changes[$Key].Value -VarType $Changes[$Key].VarType
+    }
+
+    # Write the updated content back to the settings file using UTF-8 without BOM.
+    [System.IO.File]::WriteAllText($SettingsFile, $Content, [System.Text.Encoding]::UTF8)
+
+    Write-Host ""
+    Write-Host "Settings written to: $SettingsFile" -ForegroundColor Green
+    if (Test-Path $BackupPath) {
+        Write-Host "Backup saved to   : $BackupPath" -ForegroundColor Green
+    }
+    Write-Host ""
+    Write-Host "NOTE: Restart AD-PowerAdmin for the new settings to take effect." -ForegroundColor Yellow
+    Write-Host ""
 }

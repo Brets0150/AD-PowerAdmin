@@ -25,6 +25,7 @@ Function Initialize-Module {
     $global:UnattendedJobs.Remove('PwUserFollowup')
     $global:UnattendedJobs.Remove('Start-MonthlyPasswordAudit')
     $global:UnattendedJobs.Remove('Start-DailyPasswordNotRequiredAudit')
+    $global:UnattendedJobs.Remove('Start-DailyAsRepRoastingAudit')
 
     # Register the sub-menu items.
     $global:SubMenus += @{
@@ -60,6 +61,16 @@ Function Initialize-Module {
                     Title   = 'PasswordNotRequired Remediation'
                     Label   = 'Review PasswordNotRequired findings and interactively clear the flag from affected user accounts after explicit confirmation.'
                     Command = 'Start-PasswordNotRequiredRemediation'
+                }
+                'GetAsRepRoastingAudit' = @{
+                    Title   = 'AS-REP Roasting Audit'
+                    Label   = 'Find all user accounts with Kerberos preauthentication disabled (DoesNotRequirePreAuth) and produce a risk-rated report.'
+                    Command = 'Get-AsRepRoastingAudit'
+                }
+                'StartAsRepRoastingRemediation' = @{
+                    Title   = 'AS-REP Roasting Remediation'
+                    Label   = 'Review AS-REP Roastable findings and interactively re-enable preauthentication on affected user accounts after explicit confirmation.'
+                    Command = 'Start-AsRepRoastingRemediation'
                 }
             }
         }
@@ -119,6 +130,14 @@ Function Initialize-Module {
             Function = 'Start-DailyPasswordNotRequiredAudit'
             Daily    = $true
             Command  = 'Start-DailyPasswordNotRequiredAudit'
+        }
+        'Start-DailyAsRepRoastingAudit' = @{
+            Title    = 'Daily AS-REP Roasting Audit'
+            Label    = 'Daily check for user accounts with Kerberos preauthentication disabled. Emails admin if critical or high risk accounts are found.'
+            Module   = 'AD-PowerAdmin_PasswordsCtl'
+            Function = 'Start-DailyAsRepRoastingAudit'
+            Daily    = $true
+            Command  = 'Start-DailyAsRepRoastingAudit'
         }
     }
 }
@@ -1380,4 +1399,351 @@ Function Start-DailyPasswordNotRequiredAudit {
         }
     }
 # End of Start-DailyPasswordNotRequiredAudit function
+}
+
+function Get-AsRepRoastableAccounts {
+    <#
+    .SYNOPSIS
+    Collect all AD user accounts with Kerberos preauthentication disabled.
+
+    .DESCRIPTION
+    Queries Active Directory for all user accounts where DoesNotRequirePreAuth is
+    set to true. Each finding is cross-referenced against high-privilege group
+    membership and assigned a risk level.
+
+    Risk levels:
+        Critical -- Enabled account that is a member of a privileged group.
+        High     -- Enabled account with a ServicePrincipalName set or AdminCount=1.
+        Medium   -- Enabled account with no special indicators.
+        Low      -- Disabled account.
+
+    An account with preauthentication disabled does not require a valid password
+    to request a Kerberos AS-REP ticket. An attacker can request that ticket
+    offline and attempt to crack the account key it is encrypted with.
+
+    .OUTPUTS
+    [PSCustomObject[]] Array with fields: SamAccountName, UserPrincipalName,
+    Enabled, DoesNotRequirePreAuth, PasswordLastSet, LastLogonDate, AdminCount,
+    ServicePrincipalName, DistinguishedName, PrivilegedGroupMember, MemberOf,
+    RiskLevel, RecommendedAction.
+
+    .EXAMPLE
+    $Findings = Get-AsRepRoastableAccounts
+
+    .NOTES
+    Requires only the ActiveDirectory PowerShell module.
+    Called by all AS-REP Roasting audit and remediation functions.
+    #>
+
+    $PrivilegedDNs = Get-PrivilegedAccountNames
+    $Results       = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    $Users = Get-ADUser -Filter { DoesNotRequirePreAuth -eq $true } `
+        -Properties DoesNotRequirePreAuth, Enabled, SamAccountName, UserPrincipalName, `
+                    DistinguishedName, MemberOf, PasswordLastSet, LastLogonDate, `
+                    AdminCount, ServicePrincipalName `
+        -ErrorAction SilentlyContinue
+
+    foreach ($User in @($Users)) {
+        [bool]$IsPrivileged = $PrivilegedDNs.Contains($User.DistinguishedName)
+        [bool]$HasSPN       = ($null -ne $User.ServicePrincipalName -and $User.ServicePrincipalName.Count -gt 0)
+        [bool]$IsAdminCount = ($User.AdminCount -eq 1)
+
+        if ($User.Enabled -and $IsPrivileged) {
+            $RiskLevel         = 'Critical'
+            $RecommendedAction = 'Re-enable preauthentication immediately. Reset account password. Review privileged group membership.'
+        } elseif ($User.Enabled -and ($HasSPN -or $IsAdminCount)) {
+            $RiskLevel         = 'High'
+            $RecommendedAction = 'Re-enable preauthentication. Reset account password. Review SPN configuration and AdminCount flag.'
+        } elseif ($User.Enabled) {
+            $RiskLevel         = 'Medium'
+            $RecommendedAction = 'Re-enable preauthentication. Reset account password to invalidate any captured AS-REP hashes.'
+        } else {
+            $RiskLevel         = 'Low'
+            $RecommendedAction = 'Re-enable preauthentication. Consider disabling or removing this stale account.'
+        }
+
+        [string]$MemberOfNames = ($User.MemberOf | ForEach-Object { ($_ -split ',')[0] -replace 'CN=', '' }) -join '; '
+        [string]$SPNList       = if ($HasSPN) { $User.ServicePrincipalName -join '; ' } else { '' }
+
+        $Results.Add([PSCustomObject]@{
+            SamAccountName        = $User.SamAccountName
+            UserPrincipalName     = $User.UserPrincipalName
+            Enabled               = $User.Enabled
+            DoesNotRequirePreAuth = $true
+            PasswordLastSet       = $User.PasswordLastSet
+            LastLogonDate         = $User.LastLogonDate
+            AdminCount            = $User.AdminCount
+            ServicePrincipalName  = $SPNList
+            DistinguishedName     = $User.DistinguishedName
+            PrivilegedGroupMember = $IsPrivileged
+            MemberOf              = $MemberOfNames
+            RiskLevel             = $RiskLevel
+            RecommendedAction     = $RecommendedAction
+        })
+    }
+
+    return , $Results.ToArray()
+# End of Get-AsRepRoastableAccounts function
+}
+
+function Show-AsRepRoastingFindings {
+    <#
+    .SYNOPSIS
+    Display risk-rated AS-REP Roastable findings to the console.
+
+    .DESCRIPTION
+    Shared display helper used by Get-AsRepRoastingAudit and
+    Start-AsRepRoastingRemediation. Writes output to the console without
+    prompting for export.
+
+    .PARAMETER Findings
+    Array of PSCustomObjects returned by Get-AsRepRoastableAccounts.
+
+    .EXAMPLE
+    Show-AsRepRoastingFindings -Findings $Findings
+
+    .NOTES
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject[]]$Findings
+    )
+
+    if ($null -eq $Findings -or $Findings.Count -eq 0) {
+        Write-Host "  [OK] No accounts found with Kerberos preauthentication disabled." -ForegroundColor Green
+        return
+    }
+
+    [int]$CriticalCount = @($Findings | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    [int]$HighCount     = @($Findings | Where-Object { $_.RiskLevel -eq 'High' }).Count
+    [int]$MediumCount   = @($Findings | Where-Object { $_.RiskLevel -eq 'Medium' }).Count
+    [int]$LowCount      = @($Findings | Where-Object { $_.RiskLevel -eq 'Low' }).Count
+
+    Write-Host ""
+    Write-Host "  AS-REP Roasting Audit (DoesNotRequirePreAuth)" -ForegroundColor White
+    Write-Host "  ==============================================" -ForegroundColor White
+    Write-Host "  Summary: Critical=$CriticalCount  High=$HighCount  Medium=$MediumCount  Low=$LowCount" -ForegroundColor Yellow
+    Write-Host ""
+
+    foreach ($Level in @('Critical', 'High', 'Medium', 'Low')) {
+        [array]$Group = @($Findings | Where-Object { $_.RiskLevel -eq $Level })
+        if ($Group.Count -eq 0) { continue }
+
+        [string]$Color = switch ($Level) {
+            'Critical' { 'Red' }
+            'High'     { 'Red' }
+            'Medium'   { 'Yellow' }
+            'Low'      { 'Yellow' }
+            default    { 'White' }
+        }
+
+        Write-Host "  --- [$Level] ($($Group.Count) account(s)) ---" -ForegroundColor $Color
+        foreach ($Finding in $Group) {
+            Write-Host "    Account   : $($Finding.SamAccountName)"        -ForegroundColor $Color
+            Write-Host "    Enabled   : $($Finding.Enabled)"               -ForegroundColor $Color
+            Write-Host "    Privileged: $($Finding.PrivilegedGroupMember)" -ForegroundColor $Color
+            Write-Host "    HasSPN    : $(if ($Finding.ServicePrincipalName -ne '') { 'True' } else { 'False' })" -ForegroundColor $Color
+            Write-Host "    PwLastSet : $($Finding.PasswordLastSet)"       -ForegroundColor $Color
+            Write-Host "    LastLogon : $($Finding.LastLogonDate)"         -ForegroundColor $Color
+            Write-Host "    DN        : $($Finding.DistinguishedName)"     -ForegroundColor $Color
+            Write-Host "    Action    : $($Finding.RecommendedAction)"     -ForegroundColor $Color
+            Write-Host ""
+        }
+    }
+
+    Write-Host "  IMPORTANT: Re-enabling preauthentication does not invalidate previously" -ForegroundColor Yellow
+    Write-Host "             captured AS-REP hashes. Reset passwords for all affected accounts." -ForegroundColor Yellow
+    Write-Host ""
+# End of Show-AsRepRoastingFindings function
+}
+
+Function Get-AsRepRoastingAudit {
+    <#
+    .SYNOPSIS
+    Audit Active Directory for accounts with Kerberos preauthentication disabled.
+
+    .DESCRIPTION
+    Searches all user accounts in the domain for DoesNotRequirePreAuth set to true.
+    Assigns a risk level to each finding based on account state and privilege level,
+    displays the results, and offers CSV export to Reports/.
+
+    .EXAMPLE
+    Get-AsRepRoastingAudit
+
+    .NOTES
+    Run from the Password Management sub-menu for interactive use.
+    For automated daily monitoring use Start-DailyAsRepRoastingAudit.
+    #>
+
+    [PSCustomObject[]]$Findings = Get-AsRepRoastableAccounts
+
+    if ($null -eq $Findings -or $Findings.Count -eq 0) {
+        Write-Host "  [OK] No accounts found with Kerberos preauthentication disabled. Domain is clean." -ForegroundColor Green
+        return
+    }
+
+    Show-AsRepRoastingFindings -Findings $Findings
+
+    Export-AdPowerAdminData -Data $Findings -ReportName "AD-AsRepRoasting-Findings"
+# End of Get-AsRepRoastingAudit function
+}
+
+Function Start-AsRepRoastingRemediation {
+    <#
+    .SYNOPSIS
+    Interactively re-enable Kerberos preauthentication on affected AD user accounts.
+
+    .DESCRIPTION
+    Retrieves all accounts with DoesNotRequirePreAuth set, displays the full risk-rated
+    report, then requires explicit confirmation before re-enabling preauthentication.
+
+    Safe by design:
+    - Displays the full audit report before any modification.
+    - Requires typing YES (exact) to proceed. Any other input cancels with no changes.
+    - Logs every operation (success and failure) and exports the log to Reports/.
+    - Does not automatically reset passwords. Passwords MUST be manually reset after
+      remediation to invalidate any AS-REP hashes already captured by an attacker.
+    - Only clears DoesNotRequirePreAuth; no other account attributes are modified.
+
+    .EXAMPLE
+    Start-AsRepRoastingRemediation
+
+    .NOTES
+    After remediation, manually reset the password for every remediated account.
+    Re-enabling preauthentication does not invalidate hashes captured before the change.
+    #>
+
+    [PSCustomObject[]]$Findings = Get-AsRepRoastableAccounts
+
+    if ($null -eq $Findings -or $Findings.Count -eq 0) {
+        Write-Host "  [OK] No accounts found with Kerberos preauthentication disabled. No remediation needed." -ForegroundColor Green
+        return
+    }
+
+    Show-AsRepRoastingFindings -Findings $Findings
+
+    Write-Host "  REMEDIATION: $($Findings.Count) account(s) eligible to have preauthentication re-enabled." -ForegroundColor Yellow
+    Write-Host "  This sets DoesNotRequirePreAuth to false only. Passwords are NOT changed by this operation." -ForegroundColor Yellow
+    Write-Host "  You MUST manually reset passwords for all remediated accounts after this step." -ForegroundColor Yellow
+    [string]$Confirm = Read-Host "  Type YES to proceed. Any other input cancels (default: No)"
+
+    if ($Confirm -eq 'YES') {
+        $RemediationLog = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+        foreach ($Finding in $Findings) {
+            try {
+                Set-ADAccountControl -Identity $Finding.DistinguishedName -DoesNotRequirePreAuth $false -ErrorAction Stop
+                Write-Host "  [OK] Re-enabled preauthentication: $($Finding.SamAccountName)" -ForegroundColor Green
+                $RemediationLog.Add([PSCustomObject]@{
+                    Timestamp      = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+                    SamAccountName = $Finding.SamAccountName
+                    RiskLevel      = $Finding.RiskLevel
+                    Enabled        = $Finding.Enabled
+                    Action         = 'DoesNotRequirePreAuth cleared'
+                    Result         = 'Success'
+                })
+            } catch {
+                Write-Host "  [FAIL] Could not re-enable preauthentication: $($Finding.SamAccountName) -- $_" -ForegroundColor Red
+                $RemediationLog.Add([PSCustomObject]@{
+                    Timestamp      = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+                    SamAccountName = $Finding.SamAccountName
+                    RiskLevel      = $Finding.RiskLevel
+                    Enabled        = $Finding.Enabled
+                    Action         = 'DoesNotRequirePreAuth clear attempted'
+                    Result         = "Failed: $_"
+                })
+            }
+        }
+
+        Export-AdPowerAdminData -Data $RemediationLog -ReportName "AD-AsRepRoasting-RemediationLog"
+
+        Write-Host ""
+        Write-Host "  ACTION REQUIRED: Reset passwords for all remediated accounts." -ForegroundColor Red
+        Write-Host "  Re-enabling preauthentication does not invalidate captured AS-REP hashes." -ForegroundColor Red
+        Write-Host "  Use Set-ADAccountPassword to assign a new strong password for each account." -ForegroundColor Red
+        Write-Host ""
+    } else {
+        Write-Host "  Remediation cancelled. No changes were made." -ForegroundColor Yellow
+    }
+# End of Start-AsRepRoastingRemediation function
+}
+
+Function Start-DailyAsRepRoastingAudit {
+    <#
+    .SYNOPSIS
+    Daily unattended audit for accounts with Kerberos preauthentication disabled.
+
+    .DESCRIPTION
+    Runs as part of the daily unattended job schedule. Checks the domain for user
+    accounts with DoesNotRequirePreAuth set. Exports a dated CSV to Reports/ and
+    emails the administrator if any Critical or High risk accounts are found.
+
+    Controlled by the $global:AsRepRoastingAudit feature flag in
+    AD-PowerAdmin_settings.ps1. Set to $false to disable without removing functionality.
+
+    .EXAMPLE
+    Start-DailyAsRepRoastingAudit
+
+    .NOTES
+    Invoked automatically by the AD-PowerAdmin scheduler when Daily = $true jobs run.
+    #>
+
+    if ($global:AsRepRoastingAudit -ne $true) { return }
+
+    [PSCustomObject[]]$Findings = Get-AsRepRoastableAccounts
+
+    # Export a dated CSV on every run regardless of findings count.
+    [string]$DateStamp  = (Get-Date).ToString('yyyy-MM-dd')
+    [string]$ReportFile = "$global:ReportsPath\AD-AsRepRoasting-Daily-$DateStamp.csv"
+
+    if ($null -ne $Findings -and $Findings.Count -gt 0) {
+        try {
+            $Findings | Export-Csv -Path $ReportFile -NoTypeInformation -Force
+        } catch {
+            if ($global:Debug) { Write-Host "Debug: Failed to write AS-REP Roasting daily CSV: $_" -ForegroundColor Red }
+        }
+    }
+
+    # Only send an alert email for Critical and High findings.
+    [array]$AlertFindings = @($Findings | Where-Object { $_.RiskLevel -eq 'Critical' -or $_.RiskLevel -eq 'High' })
+
+    if ($AlertFindings.Count -eq 0) { return }
+
+    [int]$CriticalCount = @($AlertFindings | Where-Object { $_.RiskLevel -eq 'Critical' }).Count
+    [int]$HighCount     = @($AlertFindings | Where-Object { $_.RiskLevel -eq 'High' }).Count
+
+    [string]$Body  = "AD-PowerAdmin Daily AS-REP Roasting Audit`r`n"
+    [string]$Body += "Date: $(Get-Date)`r`n"
+    [string]$Body += "----------------------------------------------`r`n`r`n"
+    [string]$Body += "ALERT: $($AlertFindings.Count) account(s) with Kerberos preauthentication disabled.`r`n"
+    [string]$Body += "  Critical: $CriticalCount`r`n"
+    [string]$Body += "  High    : $HighCount`r`n`r`n"
+    [string]$Body += "Accounts with preauthentication disabled are vulnerable to AS-REP Roasting.`r`n"
+    [string]$Body += "An attacker can request AS-REP tickets offline and crack the encrypted response`r`n"
+    [string]$Body += "without providing a password or interacting with the target account.`r`n`r`n"
+    [string]$Body += "Use 'AS-REP Roasting Audit' in the Password Management menu to remediate.`r`n"
+    [string]$Body += "After remediation, reset passwords for all affected accounts.`r`n`r`n"
+    [string]$Body += "Affected Accounts:`r`n"
+
+    foreach ($Finding in ($AlertFindings | Sort-Object RiskLevel, SamAccountName)) {
+        [string]$Body += "  [$($Finding.RiskLevel)] $($Finding.SamAccountName)"
+        [string]$Body += " (Enabled: $($Finding.Enabled), Privileged: $($Finding.PrivilegedGroupMember))`r`n"
+    }
+
+    [string]$Body += "`r`nFull report: $ReportFile`r`n"
+
+    if ($null -eq $global:ReportAdminEmailTo -or $global:ReportAdminEmailTo -eq '') { return }
+
+    try {
+        Send-Email -ToEmail "$global:ReportAdminEmailTo" `
+            -FromEmail "$global:ReportsEmailFrom" `
+            -Subject "AD-PowerAdmin: AS-REP Roastable Accounts Detected - ACTION REQUIRED" `
+            -Body $Body
+    } catch {
+        if ($global:Debug) {
+            Write-Host "Debug: Failed to send AS-REP Roasting alert email: $_" -ForegroundColor Red
+        }
+    }
+# End of Start-DailyAsRepRoastingAudit function
 }

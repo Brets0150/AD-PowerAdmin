@@ -55,7 +55,9 @@
         'Test-HoneytokenUserSafety',
         'Start-HoneypotMonitor',
         'Show-HoneypotReport',
-        'Remove-HoneypotAccount'
+        'Remove-HoneypotAccount',
+        'Install-HoneypotDecentralized',
+        'Remove-HoneypotDecentralized'
     )
 
     # Cmdlets to export from this module

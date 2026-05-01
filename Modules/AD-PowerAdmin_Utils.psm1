@@ -1021,3 +1021,86 @@ Function Show-AuditReport {
         [System.IO.File]::AppendAllLines($OutputFile, $PT.ToArray(), [System.Text.Encoding]::ASCII)
     }
 }
+
+function Get-AdOuSearch {
+    <#
+    .SYNOPSIS
+    Hierarchical AD OU browser that lets the user drill down the OU tree level by level.
+
+    .DESCRIPTION
+    Starts at the domain root and displays the direct child OUs at the current level.
+    The user can drill into a child OU by number, step back up with U, select the current
+    location with S, or cancel with Q. Returns the DistinguishedName of the selected location,
+    or an empty string if the user cancels.
+
+    .EXAMPLE
+    [string]$OuDN = Get-AdOuSearch
+    #>
+    [OutputType([string])]
+    param()
+
+    try {
+        [string]$DomainDN = (Get-ADDomain -ErrorAction Stop).DistinguishedName
+    } catch {
+        Write-Host "  ERROR: Could not query Active Directory: $_" -ForegroundColor Red
+        return ''
+    }
+
+    [string]$CurrentDN = $DomainDN
+
+    while ($true) {
+        try {
+            $ChildOUs = @(Get-ADOrganizationalUnit -SearchBase $CurrentDN -SearchScope OneLevel -Filter * -Properties Name, DistinguishedName -ErrorAction Stop | Sort-Object Name)
+        } catch {
+            Write-Host "  ERROR: Could not list OUs under '$CurrentDN': $_" -ForegroundColor Red
+            return ''
+        }
+
+        [bool]$AtRoot = ($CurrentDN -eq $DomainDN)
+
+        Write-Host ""
+        Write-Host ("  Location: {0}" -f $CurrentDN) -ForegroundColor Cyan
+        Write-Host ""
+
+        if ($ChildOUs.Count -gt 0) {
+            for ($i = 0; $i -lt $ChildOUs.Count; $i++) {
+                Write-Host ("  {0,3}. {1}" -f ($i + 1), $ChildOUs[$i].Name)
+            }
+            Write-Host ""
+        } else {
+            Write-Host "  (no child OUs)" -ForegroundColor DarkGray
+            Write-Host ""
+        }
+
+        [string]$DrillHint   = if ($ChildOUs.Count -gt 0) { 'number=drill down  ' } else { '' }
+        [string]$SelectLabel = if ($AtRoot) { 'S=select domain root' } else { 'S=select this OU' }
+        [string]$UpHint      = if (-not $AtRoot) { '  U=go up' } else { '' }
+        Write-Host ("  Options: {0}{1}{2}  Q=cancel" -f $DrillHint, $SelectLabel, $UpHint) -ForegroundColor Cyan
+
+        [string]$Choice = Read-Host "  Select"
+
+        switch ($Choice.ToUpper()) {
+            'S' { return $CurrentDN }
+            'Q' { return '' }
+            'U' {
+                if ($AtRoot) {
+                    Write-Host "  Already at domain root." -ForegroundColor Yellow
+                } else {
+                    $CurrentDN = $CurrentDN -replace '^[^,]+,', ''
+                }
+            }
+            default {
+                [int]$Selection = 0
+                if ([Int32]::TryParse($Choice, [ref]$Selection) -and $Selection -ge 1 -and $Selection -le $ChildOUs.Count) {
+                    $CurrentDN = $ChildOUs[$Selection - 1].DistinguishedName
+                } else {
+                    if ($ChildOUs.Count -gt 0) {
+                        Write-Host ("  Invalid option. Enter 1-{0}, S, U, or Q." -f $ChildOUs.Count) -ForegroundColor Yellow
+                    } else {
+                        Write-Host "  Invalid option. Enter S, U, or Q." -ForegroundColor Yellow
+                    }
+                }
+            }
+        }
+    }
+}
