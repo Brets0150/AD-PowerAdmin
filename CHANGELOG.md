@@ -4,6 +4,65 @@
 
 ---
 
+### Modules/AD-PowerAdmin_Honeypot.psm1 -- GPO-Based Scheduled Task Deployment
+
+**Added:**
+- `New-HoneypotDCTaskGPOContent` (private) -- Generates the GPP `ScheduledTasks.xml` string for
+  the decentralized DC monitor scheduled task. Uses the `TaskV2` GPP element (Vista+), runs as
+  `NT AUTHORITY\System` with S4U logon (no stored password), uses `action="R"` (Replace) for
+  idempotent updates, and sets a fixed `uid` so re-running the install updates the same GPP entry
+  rather than creating duplicate tasks. The `StartBoundary` of `2000-01-01T00:00:00` ensures the
+  task starts immediately on the first GP apply.
+- `Install-HoneypotDCTaskGPO` (private) -- Creates (or updates) the `AD-PowerAdmin_HoneypotDCMonitor`
+  GPO, links it to the Domain Controllers OU via `Install-ADPAGPOBaseline`, writes the GPP
+  `ScheduledTasks.xml` to SYSVOL, increments the GPT.INI computer version counter, and updates the
+  GPO AD object with the GPP Scheduled Tasks extension GUIDs
+  (`{AADCED64-746C-4633-A97C-D61349046527}` / `{CAB54552-DEEA-4691-817E-ED4A4D1AFC72}`) and the new
+  version number, targeting the PDC emulator to avoid replication-lag failures.
+
+**Changed:**
+- `Invoke-HoneypotDCDeploy` -- Removed `$RunAsUser`, `$RunAsPassword`, and `$AdminCred` parameters.
+  Removed the `Invoke-Command` (PSRemoting) block that registered the scheduled task. The function
+  is now file-deployment only (UNC directory creation, file copy, settings file write). The scheduled
+  task is no longer registered per-DC; it is deployed domain-wide by the GPO after all file copies.
+- `Install-HoneypotDecentralized` -- Removed the "Scheduled task identity" run-as selection block
+  and the `Get-Credential` admin credentials prompt (neither are required for UNC-only file copy or
+  GPO-based task deployment). Updated the deployment summary to show "via GPO" instead of
+  "Scheduled task as". Added a `Install-HoneypotDCTaskGPO` call after the per-DC file copy loop;
+  reports GPO creation success or failure and instructs the operator to run `gpupdate /force` for
+  immediate application. Updated the docstring to remove all PSRemoting prerequisites.
+- `Remove-HoneypotDecentralized` -- Removed the `Invoke-Command` (PSRemoting) block and the
+  `Get-Credential` admin credentials prompt. Replaced with: (1) a prompt to remove the
+  `AD-PowerAdmin_HoneypotDCMonitor` GPO via `Remove-ADPAGPO -RemoveLinks` (removes the task from
+  all DCs on next GP refresh), and (2) per-DC UNC directory removal using `Remove-Item` against the
+  admin share path. No PSRemoting or WinRM required for either operation.
+
+**Why it was changed:** The original `Invoke-Command` approach required WinRM to be reachable on
+each target DC. Domain controllers are frequently hardened to block inbound WinRM connections.
+Group Policy Preferences scheduled task delivery uses only the standard AD/SYSVOL channels (LDAP
+and SMB) already required for domain membership, eliminating the WinRM dependency entirely.
+
+**Impact:** `Install-HoneypotDecentralized` no longer prompts for run-as account or admin
+credentials. The task is always deployed as `NT AUTHORITY\System` via GPO and applies to all DCs
+in the Domain Controllers OU. DCs without the files will have the task registered but it exits
+immediately when the script file is not found. `gpupdate /force` applies the task without waiting
+for the background GP refresh (~90 minutes).
+
+---
+
+### Modules/AD-PowerAdmin_Installer.psm1 -- Progress Bar Bug Fix
+
+**Fixed:**
+- `Update-ADPowerAdminModules` -- Set `$ProgressPreference = 'SilentlyContinue'` around all
+  `Invoke-WebRequest` calls and restore the original value on exit. In Windows PowerShell 5.1,
+  `Invoke-WebRequest` renders a download progress bar to the host buffer by default; when many
+  requests are made in a loop the terminal appears frozen and requires a manual Enter press to
+  continue. Suppressing the progress bar eliminates the hang.
+- `Update-ADPowerAdminSettingsFile` -- Same fix applied. Progress preference is suppressed for the
+  duration of the function and restored in the `finally` block.
+
+---
+
 ### Modules/AD-PowerAdmin_Honeypot.psm1 -- Decentralized Monitor Mode
 
 **Added:**

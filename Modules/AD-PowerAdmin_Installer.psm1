@@ -1083,6 +1083,12 @@ function Update-ADPowerAdminModules {
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+    # Suppress Invoke-WebRequest's download progress bar. In PS5.1 the progress
+    # bar writes to the host buffer and makes the terminal appear frozen until
+    # Enter is pressed. Restore the original preference when the function exits.
+    [string]$OriginalProgressPreference = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+
     # Determine the Git ref to pull from.
     [string]$Channel = if ($global:UpdateChannel) { $global:UpdateChannel } else { 'Release' }
 
@@ -1181,6 +1187,8 @@ function Update-ADPowerAdminModules {
         Write-Host ""
         Write-Host "NOTE: Restart PowerShell for updated modules to take effect in this session." -ForegroundColor Yellow
     }
+
+    $ProgressPreference = $OriginalProgressPreference
 # End of the Update-ADPowerAdminModules function.
 }
 
@@ -1339,6 +1347,8 @@ function Update-ADPowerAdminSettingsFile {
     [string]$GitRef  = ''
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    [string]$OriginalProgressPreference = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
 
     if ($Channel -eq 'Development') {
         $GitRef = 'main'
@@ -1440,6 +1450,7 @@ function Update-ADPowerAdminSettingsFile {
 
     } finally {
         if (Test-Path $TempFile) { Remove-Item $TempFile -Force -ErrorAction SilentlyContinue }
+        $ProgressPreference = $OriginalProgressPreference
     }
 }
 

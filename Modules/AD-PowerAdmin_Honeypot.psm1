@@ -1497,7 +1497,7 @@ Function Remove-HoneypotAccount {
 Function New-HoneypotLiteSettingsContent {
     # Generates the text of a minimal AD-PowerAdmin_settings.ps1 for a decentralized DC
     # deployment. Contains only the variables required for the monitor and email alert.
-    # $DeployPath is the root directory on the target DC (e.g. C:\ADPowerAdmin-Monitor).
+    # $DeployPath is the root directory on the target DC (e.g. C:\Scripts\AD-PowerAdmin).
     param(
         [Parameter(Mandatory=$true)][string]$DeployPath
     )
@@ -1540,18 +1540,231 @@ Function New-HoneypotLiteSettingsContent {
     return $Content
 }
 
-Function Invoke-HoneypotDCDeploy {
-    # Copies the minimal file set to one domain controller and registers the scheduled task.
-    # Returns $true on full success, $false if any step fails.
+Function New-HoneypotDCTaskGPOContent {
+    # Generates the GPP ScheduledTasks.xml content for the decentralized DC monitor task.
+    # The fixed uid ensures re-running the install updates the same GPP entry, not a duplicate.
+    # action="R" (Replace) creates the task on first GP apply and replaces it on subsequent applies.
     param(
-        [Parameter(Mandatory=$true)][string]$DCHostname,
         [Parameter(Mandatory=$true)][string]$DeployPath,
-        [Parameter(Mandatory=$false)][string]$RunAsUser     = '',
-        [Parameter(Mandatory=$false)][string]$RunAsPassword = '',
-        [Parameter(Mandatory=$true)][System.Management.Automation.PSCredential]$AdminCred
+        [Parameter(Mandatory=$true)][int]$IntervalMinutes
     )
 
-    # Build the UNC root path (e.g. C:\ADPowerAdmin-Monitor -> \\DC\C$\ADPowerAdmin-Monitor).
+    [string]$Timestamp  = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    [string]$TaskUid    = '{AD50FADE-ADPA-4D43-ABCD-ADB0DE123456}'
+    [string]$ScriptFile = "$DeployPath\AD-PowerAdmin.ps1"
+    [string]$Interval   = "PT${IntervalMinutes}M"
+
+    [string]$Xml = @"
+<?xml version="1.0" encoding="utf-8"?>
+<ScheduledTasks clsid="{CC63F200-7309-4ba0-B154-A0CE60735378}">
+  <TaskV2 clsid="{D8896631-B747-47a7-84A6-C155337F3BC8}" name="AD-PowerAdmin_HoneypotMonitor" image="0" changed="$Timestamp" uid="$TaskUid">
+    <Properties action="R" name="AD-PowerAdmin_HoneypotMonitor" runAs="NT AUTHORITY\System" logonType="S4U">
+      <Task version="1.3">
+        <RegistrationInfo>
+          <Author>AD-PowerAdmin</Author>
+          <Description>Honeytoken account monitor -- queries the local Security Event Log for authentication events against the honeytoken account and sends an email alert if any are found.</Description>
+        </RegistrationInfo>
+        <Principals>
+          <Principal id="Author">
+            <UserId>NT AUTHORITY\System</UserId>
+            <LogonType>S4U</LogonType>
+            <RunLevel>HighestAvailable</RunLevel>
+          </Principal>
+        </Principals>
+        <Settings>
+          <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+          <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+          <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+          <AllowHardTerminate>false</AllowHardTerminate>
+          <StartWhenAvailable>true</StartWhenAvailable>
+          <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+          <AllowStartOnDemand>true</AllowStartOnDemand>
+          <Enabled>true</Enabled>
+          <Hidden>false</Hidden>
+          <RunOnlyIfIdle>false</RunOnlyIfIdle>
+          <WakeToRun>false</WakeToRun>
+          <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
+          <Priority>7</Priority>
+        </Settings>
+        <Triggers>
+          <TimeTrigger>
+            <Repetition>
+              <Interval>$Interval</Interval>
+              <StopAtDurationEnd>false</StopAtDurationEnd>
+            </Repetition>
+            <StartBoundary>2000-01-01T00:00:00</StartBoundary>
+            <Enabled>true</Enabled>
+          </TimeTrigger>
+        </Triggers>
+        <Actions Context="Author">
+          <Exec>
+            <Command>PowerShell.exe</Command>
+            <Arguments>-NonInteractive -NoProfile -File &quot;$ScriptFile&quot; -Unattended -JobName 'HoneypotHourlyMonitor'</Arguments>
+            <WorkingDirectory>$DeployPath</WorkingDirectory>
+          </Exec>
+        </Actions>
+      </Task>
+    </Properties>
+  </TaskV2>
+</ScheduledTasks>
+"@
+
+    return $Xml
+}
+
+Function Install-HoneypotDCTaskGPO {
+    # Creates (or updates) the AD-PowerAdmin_HoneypotDCMonitor GPO, links it to the Domain
+    # Controllers OU, and writes the GPP ScheduledTasks.xml to SYSVOL. Group Policy then
+    # deploys the AD-PowerAdmin_HoneypotMonitor scheduled task to every DC automatically --
+    # no PSRemoting or WinRM required.
+    param(
+        [Parameter(Mandatory=$true)][string]$DeployPath,
+        [Parameter(Mandatory=$true)][int]$IntervalMinutes
+    )
+
+    [string]$GpoName = 'AD-PowerAdmin_HoneypotDCMonitor'
+
+    try {
+        $Domain = Get-ADDomain
+    } catch {
+        Write-Host ("  [FAIL] Could not retrieve domain information: {0}" -f $_) -ForegroundColor Red
+        return $false
+    }
+
+    # Step 1: Create the GPO and link it to the Domain Controllers OU via GPOMgr.
+    Write-Host ("  Creating/updating GPO '{0}' ..." -f $GpoName) -ForegroundColor Gray
+    $GpoDef = @{
+        Name        = $GpoName
+        Description = 'AD-PowerAdmin: deploys the honeytoken monitor scheduled task to all domain controllers via Group Policy Preferences. The task queries only the local Security Event Log (no RPC) and emails an alert on any authentication event against the honeytoken account.'
+        Links       = @($Domain.DomainControllersContainer)
+    }
+    Install-ADPAGPOBaseline -GpoDefinition $GpoDef | Out-Null
+
+    # Step 2: Retrieve the GPO GUID (required for SYSVOL path construction).
+    try {
+        $Gpo = Get-GPO -Name $GpoName -ErrorAction Stop
+    } catch {
+        Write-Host ("  [FAIL] Could not retrieve GPO '{0}' after creation: {1}" -f $GpoName, $_) -ForegroundColor Red
+        return $false
+    }
+    [string]$GuidStr    = '{' + $Gpo.Id.ToString().ToUpper() + '}'
+    [string]$SysvolBase = "\\$($Domain.DNSRoot)\SYSVOL\$($Domain.DNSRoot)\Policies\$GuidStr"
+    [string]$PrefDir    = "$SysvolBase\Machine\Preferences\ScheduledTasks"
+    [string]$XmlPath    = "$PrefDir\ScheduledTasks.xml"
+    [string]$GptIniPath = "$SysvolBase\GPT.INI"
+
+    Write-Host ("  [OK] GPO '{0}' ready (GUID: {1})." -f $GpoName, $GuidStr) -ForegroundColor Green
+
+    # Step 3: Create the Preferences\ScheduledTasks directory in SYSVOL.
+    try {
+        New-Item -Path $PrefDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        Write-Host ("  [OK] SYSVOL preferences directory ready.") -ForegroundColor Green
+    } catch {
+        Write-Host ("  [FAIL] Could not create SYSVOL directory '{0}': {1}" -f $PrefDir, $_) -ForegroundColor Red
+        return $false
+    }
+
+    # Step 4: Write the GPP ScheduledTasks.xml.
+    try {
+        [string]$XmlContent = New-HoneypotDCTaskGPOContent -DeployPath $DeployPath -IntervalMinutes $IntervalMinutes
+        [System.IO.File]::WriteAllText($XmlPath, $XmlContent, [System.Text.Encoding]::UTF8)
+        Write-Host ("  [OK] Written ScheduledTasks.xml to SYSVOL.") -ForegroundColor Green
+    } catch {
+        Write-Host ("  [FAIL] Could not write ScheduledTasks.xml: {0}" -f $_) -ForegroundColor Red
+        return $false
+    }
+
+    # Step 5: Increment the GPT.INI computer version counter so DCs detect the policy change.
+    # The 32-bit version packs user config (high 16 bits) and computer config (low 16 bits).
+    [int]$CurrentVersion = 0
+    try {
+        [string]$GptIniContent = Get-Content $GptIniPath -Raw -ErrorAction Stop
+        if ($GptIniContent -match 'Version=(\d+)') {
+            $CurrentVersion = [int]$Matches[1]
+        }
+    } catch {
+        Write-Host "  [WARN] Could not read GPT.INI (will create new version entry): $_" -ForegroundColor Yellow
+        [string]$GptIniContent = "[General]`r`nVersion=0`r`n"
+    }
+
+    [int]$UserVer    = ($CurrentVersion -shr 16) -band 0xFFFF
+    [int]$CompVer    = $CurrentVersion -band 0xFFFF
+    [int]$NewVersion = ($UserVer -shl 16) -bor ($CompVer + 1)
+
+    try {
+        [string]$UpdatedIni = $GptIniContent -replace 'Version=\d+', "Version=$NewVersion"
+        [System.IO.File]::WriteAllText($GptIniPath, $UpdatedIni, [System.Text.Encoding]::ASCII)
+        Write-Host ("  [OK] GPT.INI version incremented ($CurrentVersion -> $NewVersion).") -ForegroundColor Green
+    } catch {
+        Write-Host ("  [FAIL] Could not update GPT.INI: {0}" -f $_) -ForegroundColor Red
+        return $false
+    }
+
+    # Step 6: Update the GPO AD object with the GPP Scheduled Tasks extension GUIDs and new version.
+    # GPP Scheduled Tasks CSE GUID:  {AADCED64-746C-4633-A97C-D61349046527}
+    # GPP Scheduled Tasks Tool GUID: {CAB54552-DEEA-4691-817E-ED4A4D1AFC72}
+    # New-GPO (via Install-ADPAGPOBaseline) writes to the PDC emulator; target it explicitly
+    # to avoid a replication-lag race where a different DC has not yet received the new GPO.
+    [string]$PDC          = $Domain.PDCEmulator
+    [string]$PoliciesBase = "CN=Policies,CN=System,$($Domain.DistinguishedName)"
+    [string]$LdapFilter   = "(&(objectClass=groupPolicyContainer)(displayName=$GpoName))"
+    [string]$GppSchedExt  = '[{AADCED64-746C-4633-A97C-D61349046527}{CAB54552-DEEA-4691-817E-ED4A4D1AFC72}]'
+
+    Write-Host ("  Locating GPO AD object on PDC emulator ({0}) ..." -f $PDC) -ForegroundColor Gray
+
+    try {
+        $GpoAdObj = Get-ADObject `
+            -Server     $PDC `
+            -LDAPFilter $LdapFilter `
+            -SearchBase $PoliciesBase `
+            -Properties gPCMachineExtensionNames `
+            -ErrorAction Stop
+    } catch {
+        Write-Host ("  [FAIL] Error searching for GPO AD object on '{0}': {1}" -f $PDC, $_) -ForegroundColor Red
+        return $false
+    }
+
+    if (-not $GpoAdObj) {
+        Write-Host ("  [FAIL] Could not locate GPO AD object for '{0}' on '{1}'." -f $GpoName, $PDC) -ForegroundColor Red
+        return $false
+    }
+
+    [string]$GpoDn    = $GpoAdObj.DistinguishedName
+    [string]$ExistExt = $GpoAdObj.gPCMachineExtensionNames
+
+    if ([string]::IsNullOrWhiteSpace($ExistExt)) {
+        [string]$NewExts = $GppSchedExt
+    } elseif ($ExistExt -notlike '*AADCED64-746C-4633-A97C-D61349046527*') {
+        [string]$NewExts = $ExistExt + $GppSchedExt
+    } else {
+        [string]$NewExts = $ExistExt
+    }
+
+    try {
+        Set-ADObject -Server $PDC -Identity $GpoDn -Replace @{
+            versionNumber            = $NewVersion
+            gPCMachineExtensionNames = $NewExts
+        }
+        Write-Host ("  [OK] GPO AD object updated on {0} (versionNumber, gPCMachineExtensionNames)." -f $PDC) -ForegroundColor Green
+    } catch {
+        Write-Host ("  [FAIL] Could not update GPO AD object on '{0}': {1}" -f $PDC, $_) -ForegroundColor Red
+        return $false
+    }
+
+    return $true
+}
+
+Function Invoke-HoneypotDCDeploy {
+    # Copies the minimal file set to one domain controller via UNC admin share.
+    # The scheduled task is NOT created here -- it is deployed domain-wide via the
+    # AD-PowerAdmin_HoneypotDCMonitor GPO after all file copies complete.
+    # Returns $true on successful file copy, $false if any step fails.
+    param(
+        [Parameter(Mandatory=$true)][string]$DCHostname,
+        [Parameter(Mandatory=$true)][string]$DeployPath
+    )
+
+    # Build the UNC root path (e.g. C:\Scripts\AD-PowerAdmin -> \\DC\C$\Scripts\AD-PowerAdmin).
     [string]$UncRoot    = '\\' + $DCHostname + '\' + ($DeployPath -replace '^([A-Za-z]):\\', '$1$\')
     [string]$UncModules = "$UncRoot\Modules"
     [string]$UncReports = "$UncRoot\Reports"
@@ -1614,47 +1827,6 @@ Function Invoke-HoneypotDCDeploy {
         return $false
     }
 
-    # Step 5: Create the scheduled task on the remote DC via PSRemoting.
-    try {
-        [int]$Interval = if ($global:HoneypotMonitorIntervalMinutes) { $global:HoneypotMonitorIntervalMinutes } else { 15 }
-
-        Invoke-Command -ComputerName $DCHostname -Credential $AdminCred -ErrorAction Stop -ScriptBlock {
-            param($DeployPath, $IntervalMinutes, $RunAsUser, $RunAsPassword)
-
-            [string]$TaskName  = 'AD-PowerAdmin_HoneypotMonitor'
-            [string]$ScriptArg = ("-NonInteractive -NoProfile -File `"{0}\AD-PowerAdmin.ps1`" -Unattended -JobName 'HoneypotHourlyMonitor'" -f $DeployPath)
-
-            $Existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-            if ($Existing) {
-                Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-            }
-
-            $FirstRun = (Get-Date).AddMinutes($IntervalMinutes)
-            $Trigger  = New-ScheduledTaskTrigger -Once -At $FirstRun `
-                -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
-            $Action   = New-ScheduledTaskAction -Execute 'PowerShell.exe' `
-                -Argument $ScriptArg -WorkingDirectory $DeployPath
-            $Settings = New-ScheduledTaskSettingsSet -RunOnlyIfNetworkAvailable
-
-            if ([string]::IsNullOrWhiteSpace($RunAsUser)) {
-                $Principal = New-ScheduledTaskPrincipal `
-                    -UserID 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-                Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger `
-                    -Settings $Settings -Principal $Principal | Out-Null
-            } else {
-                Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger `
-                    -Settings $Settings -RunLevel Highest `
-                    -User $RunAsUser -Password $RunAsPassword | Out-Null
-            }
-        } -ArgumentList $DeployPath, $Interval, $RunAsUser, $RunAsPassword
-
-        [string]$PrincipalDesc = if ([string]::IsNullOrWhiteSpace($RunAsUser)) { 'NT AUTHORITY\SYSTEM' } else { $RunAsUser }
-        Write-Host ("    [OK] Scheduled task registered on {0} as {1}" -f $DCHostname, $PrincipalDesc) -ForegroundColor Green
-    } catch {
-        Write-Host ("    [FAIL] Could not register scheduled task on {0}: {1}" -f $DCHostname, $_) -ForegroundColor Red
-        return $false
-    }
-
     return $true
 }
 
@@ -1665,16 +1837,19 @@ Function Install-HoneypotDecentralized {
 
     .DESCRIPTION
         Copies the minimum required files (AD-PowerAdmin.ps1, the Honeypot and Utils modules,
-        and a generated lite settings file) to each selected domain controller via the admin
-        share (\\DC\C$). Creates the AD-PowerAdmin_HoneypotMonitor scheduled task on each DC
-        via PSRemoting. Each DC then queries only its own local Security log -- eliminating the
-        RPC overhead of the centralized mode -- and sends its own email alert if honeytoken
+        and a generated lite settings file) to each selected domain controller via the UNC
+        admin share (\\DC\C$). After the file copy, creates or updates the
+        AD-PowerAdmin_HoneypotDCMonitor Group Policy Object and links it to the Domain
+        Controllers OU. Group Policy then deploys the AD-PowerAdmin_HoneypotMonitor scheduled
+        task (running as NT AUTHORITY\System) to every DC without any PSRemoting or WinRM
+        dependency. Each DC queries only its own local Security log -- eliminating the RPC
+        overhead of the centralized mode -- and sends its own email alert if honeytoken
         activity is detected.
 
         Prerequisites:
           - The honeytoken account must already be provisioned (run Install Honeypot Account first).
-          - PSRemoting must be enabled on each target DC.
-          - The executing account must have admin rights on each target DC.
+          - The executing account must have write access to the DC admin shares (\\DC\C$).
+          - No PSRemoting or WinRM required.
 
         Use this mode when the centralized monitor is too slow due to resource-constrained DCs
         that take excessive time to respond to remote Security Event Log queries.
@@ -1738,51 +1913,19 @@ Function Install-HoneypotDecentralized {
     }
 
     # Deployment path on each DC.
-    [string]$DefaultPath = 'C:\ADPowerAdmin-Monitor'
+    [string]$DefaultPath = 'C:\Scripts\AD-PowerAdmin'
     [string]$PathInput   = Read-Host ("  Deployment path on each DC [default: {0}]" -f $DefaultPath)
     [string]$DeployPath  = if ([string]::IsNullOrWhiteSpace($PathInput)) { $DefaultPath } else { $PathInput.Trim() }
-
-    # Run-as account selection.
-    Write-Host ''
-    Write-Host '  Scheduled task identity:' -ForegroundColor White
-    Write-Host '    [1] NT AUTHORITY\SYSTEM  (default -- no password required)' -ForegroundColor Gray
-    Write-Host '    [2] Domain user account  (requires stored password)' -ForegroundColor Gray
-    [string]$RunAsChoice = Read-Host '  Selection [default: 1]'
-
-    [string]$RunAsUser     = ''
-    [string]$RunAsPassword = ''
-    if ($RunAsChoice.Trim() -eq '2') {
-        $RunAsUser = Read-Host '  Domain user (DOMAIN\username or UPN)'
-        if ([string]::IsNullOrWhiteSpace($RunAsUser)) {
-            Write-Host '  No user entered. Defaulting to SYSTEM.' -ForegroundColor Yellow
-            $RunAsUser = ''
-        } else {
-            [System.Security.SecureString]$SecPw = Read-Host ('  Password for {0}' -f $RunAsUser) -AsSecureString
-            $RunAsPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecPw)
-            )
-        }
-    }
-
-    # Admin credentials for PSRemoting and UNC access.
-    Write-Host ''
-    Write-Host '  Administrative credentials are required for PSRemoting and file copy.' -ForegroundColor White
-    $AdminCred = Get-Credential -Message 'Enter admin credentials for target DC(s)'
-    if ($null -eq $AdminCred) {
-        Write-Host '  No credentials provided. Exiting.' -ForegroundColor Yellow
-        return
-    }
 
     # Summary and confirmation.
     Write-Host ''
     Write-Host ('=' * 70) -ForegroundColor White
     Write-Host '  Deployment Summary' -ForegroundColor White
     Write-Host ('=' * 70) -ForegroundColor White
-    Write-Host ('  Target DC(s)      : {0}' -f ($SelectedDCs -join ', ')) -ForegroundColor White
-    Write-Host ('  Deploy path       : {0}' -f $DeployPath) -ForegroundColor White
-    [string]$PrincipalSummary = if ([string]::IsNullOrWhiteSpace($RunAsUser)) { 'NT AUTHORITY\SYSTEM' } else { $RunAsUser }
-    Write-Host ('  Scheduled task as : {0}' -f $PrincipalSummary) -ForegroundColor White
-    Write-Host ('  Monitor interval  : {0} minutes' -f $global:HoneypotMonitorIntervalMinutes) -ForegroundColor White
+    Write-Host ('  Target DC(s)     : {0}' -f ($SelectedDCs -join ', ')) -ForegroundColor White
+    Write-Host ('  Deploy path      : {0}' -f $DeployPath) -ForegroundColor White
+    Write-Host ('  Scheduled task   : NT AUTHORITY\System via GPO (AD-PowerAdmin_HoneypotDCMonitor)') -ForegroundColor White
+    Write-Host ('  Monitor interval : {0} minutes' -f $global:HoneypotMonitorIntervalMinutes) -ForegroundColor White
     Write-Host ''
     [string]$Confirm = Read-Host '  Proceed? (y/N)'
     if ($Confirm.Trim().ToUpper() -ne 'Y') {
@@ -1790,25 +1933,39 @@ Function Install-HoneypotDecentralized {
         return
     }
 
-    # Deploy to each selected DC.
+    # Deploy files to each selected DC via UNC admin share.
     Write-Host ''
     [int]$Succeeded = 0
     [int]$Failed    = 0
     foreach ($DC in $SelectedDCs) {
-        [bool]$Result = Invoke-HoneypotDCDeploy `
-            -DCHostname    $DC          `
-            -DeployPath    $DeployPath  `
-            -RunAsUser     $RunAsUser   `
-            -RunAsPassword $RunAsPassword `
-            -AdminCred     $AdminCred
+        [bool]$Result = Invoke-HoneypotDCDeploy -DCHostname $DC -DeployPath $DeployPath
         if ($Result) { $Succeeded++ } else { $Failed++ }
         Write-Host ''
     }
 
+    Write-Host ('  File deployment complete: {0} succeeded, {1} failed.' -f $Succeeded, $Failed) -ForegroundColor Cyan
+    Write-Host ''
+
+    # Create or update the GPO that delivers the scheduled task to all DCs via Group Policy.
+    # This runs once after all file copies; the GPO applies to the entire Domain Controllers OU.
+    Write-Host ('=' * 70) -ForegroundColor White
+    Write-Host '  Configuring Group Policy scheduled task delivery ...' -ForegroundColor White
+    Write-Host ('=' * 70) -ForegroundColor White
+    [int]$Interval = if ($global:HoneypotMonitorIntervalMinutes) { $global:HoneypotMonitorIntervalMinutes } else { 15 }
+    [bool]$GpoOk   = Install-HoneypotDCTaskGPO -DeployPath $DeployPath -IntervalMinutes $Interval
+    Write-Host ''
+
     Write-Host ('=' * 70) -ForegroundColor Cyan
-    Write-Host ('  Deployment complete: {0} succeeded, {1} failed.' -f $Succeeded, $Failed) -ForegroundColor Cyan
-    Write-Host '  Each deployed DC now monitors its own Security log independently.' -ForegroundColor Cyan
+    if ($GpoOk) {
+        Write-Host '  [OK] GPO created and linked to the Domain Controllers OU.' -ForegroundColor Cyan
+        Write-Host '  Group Policy will deploy the task on the next GP refresh (up to ~90 min).' -ForegroundColor Gray
+        Write-Host '  Run "gpupdate /force" on each DC to apply immediately.' -ForegroundColor Gray
+    } else {
+        Write-Host '  [FAIL] GPO creation failed. Scheduled task will not be deployed until' -ForegroundColor Red
+        Write-Host '         the GPO issue is resolved. File copies above may still be valid.' -ForegroundColor Red
+    }
     if ($Succeeded -gt 0) {
+        Write-Host ''
         Write-Host '  NOTE: The central AD-PowerAdmin settings file still has HoneypotMonitorMode' -ForegroundColor Yellow
         Write-Host '        set to Centralized. To disable centralized querying and rely solely' -ForegroundColor Yellow
         Write-Host '        on the decentralized tasks, set HoneypotMonitorMode = Decentralized' -ForegroundColor Yellow
@@ -1824,9 +1981,10 @@ Function Remove-HoneypotDecentralized {
         Removes the decentralized honeytoken monitor deployment from domain controllers.
 
     .DESCRIPTION
-        Removes the AD-PowerAdmin_HoneypotMonitor scheduled task from selected domain controllers
-        via PSRemoting, and optionally deletes the deployment directory. Does not affect the
-        central AD-PowerAdmin installation or the honeytoken account itself.
+        Removes the AD-PowerAdmin_HoneypotDCMonitor GPO (which removes the scheduled task from
+        all DCs on the next Group Policy refresh) and optionally deletes the deployment directory
+        from selected DCs via UNC admin share. Does not affect the central AD-PowerAdmin
+        installation or the honeytoken account itself. No PSRemoting or WinRM required.
     #>
 
     Write-Host ''
@@ -1835,69 +1993,74 @@ Function Remove-HoneypotDecentralized {
     Write-Host ('=' * 70) -ForegroundColor Cyan
     Write-Host ''
 
-    # Enumerate DCs and present numbered list.
-    try {
-        $AllDCs = @(Get-ADDomainController -Filter * | Select-Object -ExpandProperty HostName | Sort-Object)
-    } catch {
-        Write-Host ("  [FAIL] Could not enumerate domain controllers: {0}" -f $_) -ForegroundColor Red
-        return
-    }
-
-    Write-Host '  Domain Controllers:' -ForegroundColor White
-    for ([int]$i = 0; $i -lt $AllDCs.Count; $i++) {
-        Write-Host ("    [{0}] {1}" -f ($i + 1), $AllDCs[$i]) -ForegroundColor Gray
-    }
+    # Ask what to remove.
+    Write-Host '  What would you like to remove?' -ForegroundColor White
     Write-Host ''
+    [string]$RemoveGpoInput = Read-Host '  Remove the AD-PowerAdmin_HoneypotDCMonitor GPO? Removes the scheduled task from ALL DCs on next GP refresh. (y/N)'
+    [bool]$RemoveGpo        = ($RemoveGpoInput.Trim().ToUpper() -eq 'Y')
 
-    [string]$DCSelection = Read-Host '  Enter DC numbers to clean up (comma-separated) or A for all'
-    if ([string]::IsNullOrWhiteSpace($DCSelection)) {
-        Write-Host '  No selection made. Exiting.' -ForegroundColor Yellow
+    [string]$RemoveDirInput = Read-Host '  Remove deployment directories from specific DCs? (y/N)'
+    [bool]$RemoveDir        = ($RemoveDirInput.Trim().ToUpper() -eq 'Y')
+
+    if (-not $RemoveGpo -and -not $RemoveDir) {
+        Write-Host '  Nothing selected. Exiting.' -ForegroundColor Yellow
         return
     }
 
+    # If removing directories, enumerate DCs and let user select which ones.
     [string[]]$SelectedDCs = @()
-    if ($DCSelection.Trim().ToUpper() -eq 'A') {
-        $SelectedDCs = $AllDCs
-    } else {
-        foreach ($Token in ($DCSelection -split ',')) {
-            [string]$Trimmed = $Token.Trim()
-            [int]$Idx = 0
-            if ([int]::TryParse($Trimmed, [ref]$Idx) -and $Idx -ge 1 -and $Idx -le $AllDCs.Count) {
-                $SelectedDCs += $AllDCs[$Idx - 1]
+    [string]$DeployPath    = ''
+    if ($RemoveDir) {
+        try {
+            $AllDCs = @(Get-ADDomainController -Filter * | Select-Object -ExpandProperty HostName | Sort-Object)
+        } catch {
+            Write-Host ("  [FAIL] Could not enumerate domain controllers: {0}" -f $_) -ForegroundColor Red
+            return
+        }
+
+        Write-Host ''
+        Write-Host '  Domain Controllers:' -ForegroundColor White
+        for ([int]$i = 0; $i -lt $AllDCs.Count; $i++) {
+            Write-Host ("    [{0}] {1}" -f ($i + 1), $AllDCs[$i]) -ForegroundColor Gray
+        }
+        Write-Host ''
+
+        [string]$DCSelection = Read-Host '  Enter DC numbers to remove directories from (comma-separated) or A for all'
+        if ([string]::IsNullOrWhiteSpace($DCSelection)) {
+            Write-Host '  No selection made. Directory removal skipped.' -ForegroundColor Yellow
+            $RemoveDir = $false
+        } else {
+            if ($DCSelection.Trim().ToUpper() -eq 'A') {
+                $SelectedDCs = $AllDCs
             } else {
-                Write-Host ("  [WARN] Invalid selection '{0}' -- skipped." -f $Trimmed) -ForegroundColor Yellow
+                foreach ($Token in ($DCSelection -split ',')) {
+                    [string]$Trimmed = $Token.Trim()
+                    [int]$Idx = 0
+                    if ([int]::TryParse($Trimmed, [ref]$Idx) -and $Idx -ge 1 -and $Idx -le $AllDCs.Count) {
+                        $SelectedDCs += $AllDCs[$Idx - 1]
+                    } else {
+                        Write-Host ("  [WARN] Invalid selection '{0}' -- skipped." -f $Trimmed) -ForegroundColor Yellow
+                    }
+                }
+            }
+
+            if ($SelectedDCs.Count -eq 0) {
+                Write-Host '  No valid DCs selected. Directory removal skipped.' -ForegroundColor Yellow
+                $RemoveDir = $false
+            } else {
+                [string]$DefaultPath = 'C:\Scripts\AD-PowerAdmin'
+                [string]$PathInput   = Read-Host ("  Deployment path to remove [default: {0}]" -f $DefaultPath)
+                $DeployPath          = if ([string]::IsNullOrWhiteSpace($PathInput)) { $DefaultPath } else { $PathInput.Trim() }
             }
         }
     }
 
-    if ($SelectedDCs.Count -eq 0) {
-        Write-Host '  No valid DCs selected. Exiting.' -ForegroundColor Yellow
-        return
-    }
-
-    # Deployment path to remove (must match what was used during install).
-    [string]$DefaultPath = 'C:\ADPowerAdmin-Monitor'
-    [string]$PathInput   = Read-Host ("  Deployment path to remove [default: {0}]" -f $DefaultPath)
-    [string]$DeployPath  = if ([string]::IsNullOrWhiteSpace($PathInput)) { $DefaultPath } else { $PathInput.Trim() }
-
-    # Whether to delete the deploy directory after removing the task.
-    [string]$RemoveDirInput = Read-Host ('  Also delete deployment directory ({0}) from each DC? (y/N)' -f $DeployPath)
-    [bool]$RemoveDir        = ($RemoveDirInput.Trim().ToUpper() -eq 'Y')
-
-    # Admin credentials.
+    # Confirm before proceeding.
     Write-Host ''
-    Write-Host '  Administrative credentials are required for PSRemoting.' -ForegroundColor White
-    $AdminCred = Get-Credential -Message 'Enter admin credentials for target DC(s)'
-    if ($null -eq $AdminCred) {
-        Write-Host '  No credentials provided. Exiting.' -ForegroundColor Yellow
-        return
+    Write-Host ('  Remove GPO (AD-PowerAdmin_HoneypotDCMonitor) : {0}' -f $(if ($RemoveGpo) { 'Yes -- affects all DCs' } else { 'No' })) -ForegroundColor White
+    if ($RemoveDir -and $SelectedDCs.Count -gt 0) {
+        Write-Host ('  Remove directory ({0}) from : {1}' -f $DeployPath, ($SelectedDCs -join ', ')) -ForegroundColor White
     }
-
-    # Confirm.
-    Write-Host ''
-    Write-Host ('  Target DC(s) : {0}' -f ($SelectedDCs -join ', ')) -ForegroundColor White
-    Write-Host ('  Remove task  : AD-PowerAdmin_HoneypotMonitor') -ForegroundColor White
-    Write-Host ('  Remove dir   : {0}' -f $(if ($RemoveDir) { $DeployPath } else { 'No' })) -ForegroundColor White
     Write-Host ''
     [string]$Confirm = Read-Host '  Proceed? (y/N)'
     if ($Confirm.Trim().ToUpper() -ne 'Y') {
@@ -1906,44 +2069,46 @@ Function Remove-HoneypotDecentralized {
     }
 
     Write-Host ''
-    [int]$Succeeded = 0
-    [int]$Failed    = 0
 
-    foreach ($DC in $SelectedDCs) {
-        Write-Host ("  [DC] {0}" -f $DC) -ForegroundColor Cyan
+    # Remove the GPO (removes scheduled task from all DCs via GP).
+    if ($RemoveGpo) {
+        Write-Host '  Removing GPO AD-PowerAdmin_HoneypotDCMonitor ...' -ForegroundColor White
         try {
-            Invoke-Command -ComputerName $DC -Credential $AdminCred -ErrorAction Stop -ScriptBlock {
-                param($DeployPath, $RemoveDir)
-
-                [string]$TaskName = 'AD-PowerAdmin_HoneypotMonitor'
-                $Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-                if ($Task) {
-                    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-                    Write-Output "    [OK] Scheduled task removed."
-                } else {
-                    Write-Output "    [INFO] Scheduled task not found (already removed or not installed)."
-                }
-
-                if ($RemoveDir) {
-                    if (Test-Path $DeployPath) {
-                        Remove-Item -Path $DeployPath -Recurse -Force
-                        Write-Output ("    [OK] Deployment directory removed: {0}" -f $DeployPath)
-                    } else {
-                        Write-Output ("    [INFO] Deployment directory not found: {0}" -f $DeployPath)
-                    }
-                }
-            } -ArgumentList $DeployPath, $RemoveDir | ForEach-Object { Write-Host $_ -ForegroundColor Green }
-
-            $Succeeded++
+            [bool]$GpoRemoved = Remove-ADPAGPO -Name 'AD-PowerAdmin_HoneypotDCMonitor' -RemoveLinks
+            if ($GpoRemoved) {
+                Write-Host '  [OK] GPO removed. Task will be deleted from DCs on next GP refresh.' -ForegroundColor Green
+                Write-Host '  Run "gpupdate /force" on each DC to apply immediately.' -ForegroundColor Gray
+            } else {
+                Write-Host '  [FAIL] GPO removal reported failure. Check GPMC for residual objects.' -ForegroundColor Red
+            }
         } catch {
-            Write-Host ("    [FAIL] {0}: {1}" -f $DC, $_) -ForegroundColor Red
-            $Failed++
+            Write-Host ("  [FAIL] GPO removal error: {0}" -f $_) -ForegroundColor Red
+        }
+        Write-Host ''
+    }
+
+    # Remove deployment directories via UNC admin share (no PSRemoting required).
+    if ($RemoveDir -and $SelectedDCs.Count -gt 0) {
+        Write-Host '  Removing deployment directories ...' -ForegroundColor White
+        foreach ($DC in $SelectedDCs) {
+            [string]$UncDeploy = '\\' + $DC + '\' + ($DeployPath -replace '^([A-Za-z]):\\', '$1$\')
+            Write-Host ("  [DC] {0}" -f $DC) -ForegroundColor Cyan
+            try {
+                if (Test-Path $UncDeploy) {
+                    Remove-Item -Path $UncDeploy -Recurse -Force -ErrorAction Stop
+                    Write-Host ("    [OK] Removed: {0}" -f $UncDeploy) -ForegroundColor Green
+                } else {
+                    Write-Host ("    [INFO] Path not found (already removed or not deployed): {0}" -f $UncDeploy) -ForegroundColor Gray
+                }
+            } catch {
+                Write-Host ("    [FAIL] Could not remove '{0}': {1}" -f $UncDeploy, $_) -ForegroundColor Red
+            }
         }
         Write-Host ''
     }
 
     Write-Host ('=' * 70) -ForegroundColor Cyan
-    Write-Host ('  Removal complete: {0} succeeded, {1} failed.' -f $Succeeded, $Failed) -ForegroundColor Cyan
+    Write-Host '  Decentralized monitor removal complete.' -ForegroundColor Cyan
     Write-Host ('=' * 70) -ForegroundColor Cyan
     Write-Host ''
 }
