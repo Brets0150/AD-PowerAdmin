@@ -837,7 +837,7 @@ Function Get-ExchangeAuditReport {
         [string]$EmailBody += "Review the exported CSV report in $global:ReportsPath for details."
 
         Send-Email -ToEmail $global:ADAdminEmail `
-                   -FromEmail $global:ReportsEmailFrom `
+                   -FromEmail $global:FromEmail `
                    -Subject "ADPowerAdmin: Exchange AD Security Audit - Severity: $OverallSeverity" `
                    -Body $EmailBody
     }

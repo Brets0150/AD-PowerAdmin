@@ -83,7 +83,6 @@
         'Get-PasswordAuditAdminReport',
         'Test-PwUserFollowup',
         'Start-MonthlyPasswordAudit',
-        'New-RandomPassword',
         'Test-NtlmHashesInDirectory',
         'Get-PasswordNotRequiredAccounts',
         'Get-PasswordNotRequiredAudit',

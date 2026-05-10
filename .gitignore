@@ -7,15 +7,10 @@ temp*
 hibp-ntlm-hashes*/*
 pwned-passwords-ntlm-ordered-by-hash-v8.txt
 AD-PowerAdmin.wiki*/*
+AD-PowerAdmin.wiki
 Research*/*
 weak-passwords.txt
 # Not Ready for release.
-Modules/AD-PowerAdmin_Azure.psd1
-Modules/AD-PowerAdmin_Azure.psm1
-Modules/AD-PowerAdmin_SmbAdminShareAudit*
-Modules/AD-PowerAdmin_PasswordsCtl*
-Modules/AD-PowerAdmin_Installer*
-Modules/AD-PowerAdmin_Installer.psm1
-Modules/AD-PowerAdmin_Installer.psd1
-Modules/AD-PowerAdmin_PasswordsCtl.psd1
-Modules/AD-PowerAdmin_PasswordsCtl.psm1
+AD-PowerAdmin_Azure*
+AD-PowerAdmin_SmbAdminShareAudit*
+AD-PowerAdmin_GPOBestPracticesDeployer*

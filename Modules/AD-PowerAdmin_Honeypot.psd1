@@ -57,7 +57,9 @@
         'Show-HoneypotReport',
         'Remove-HoneypotAccount',
         'Install-HoneypotDecentralized',
-        'Remove-HoneypotDecentralized'
+        'Remove-HoneypotDecentralized',
+        'Show-HoneypotHelp',
+        'Invoke-HoneypotDetectionTest'
     )
 
     # Cmdlets to export from this module
@@ -84,7 +86,7 @@
             ProjectUri = 'https://github.com/Brets0150/AD-PowerAdmin'
 
             # Channel: Alpha, Beta, Production
-            Channel = 'Beta'
+            Channel = 'Production'
 
             # ReleaseNotes of this module
             ReleaseNotes = @'

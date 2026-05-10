@@ -24,7 +24,8 @@ Function Initialize-Module {
     # Register the sub-menu items.
     $global:SubMenus += @{
         'HoneypotMenu' = @{
-            Title = "Honeytoken Account Management"
+            Title       = "Honeytoken Account Management"
+            HelpCommand = "Show-HoneypotHelp"
             Items = @{
                 'HoneypotInstall' = @{
                     Title   = "Install Honeypot Account"
@@ -40,6 +41,11 @@ Function Initialize-Module {
                     Title   = "Verify Account Safety"
                     Label   = "Verify the honeytoken account has no privileged group memberships, SPNs, or delegation rights."
                     Command = "Test-HoneytokenUserSafety"
+                }
+                'HoneypotDetectionTest' = @{
+                    Title   = "Test Detection System"
+                    Label   = "Trigger controlled authentication events against the honeytoken account to verify that Security log detection and email alerting are working end to end."
+                    Command = "Invoke-HoneypotDetectionTest"
                 }
                 'HoneypotRemove' = @{
                     Title   = "Remove Honeypot Account"
@@ -99,28 +105,19 @@ Function Get-HoneypotDefaultDenyGroup {
     return 'GG_Honeytoken_DenyLogon'
 }
 
-Function New-HoneypotRandomPassword {
-    # Generates a 32-character cryptographically random password and returns it as a SecureString.
-    [string]$CharSet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#%^&*()-_=+'
-    $Rng    = [System.Security.Cryptography.RNGCryptoServiceProvider]::new()
-    $Bytes  = [byte[]]::new(32)
-    $Rng.GetBytes($Bytes)
-    $Plain  = -join ($Bytes | ForEach-Object { $CharSet[$_ % $CharSet.Length] })
-    $Rng.Dispose()
-    return (ConvertTo-SecureString $Plain -AsPlainText -Force)
-}
-
 Function Get-HoneypotEventsBatch {
     # Queries one DC for honeytoken authentication events in the given time window.
     # Enriches each matching event with Severity, DomainController, and HoneytokenAccount properties.
     #
-    # Uses an XPath query so the DC evaluates the TargetUserName filter before sending any
-    # data over the network. With FilterHashtable the DC would send every authentication event
-    # in the window (potentially hundreds) and PowerShell would filter them locally -- the XPath
-    # approach sends only events targeting the honeytoken account (typically zero on a clean run).
+    # Uses -FilterHashtable instead of -FilterXPath. -FilterHashtable accepts datetime objects
+    # directly for StartTime/EndTime, letting PowerShell handle UTC conversion internally. This
+    # avoids the class of failures where -FilterXPath with a manually-constructed UTC string
+    # returns zero events on some Windows versions due to how the remote Event Log RPC service
+    # evaluates the XPath TimeCreated predicate.
     #
-    # The client-side username check below is kept as a safety net for any edge cases where
-    # the XPath filter does not fully cover the event format (e.g. unusual field ordering).
+    # Username filtering is done entirely client-side: the hashtable filter has no field for
+    # EventData values, so all events matching EventID + time window are returned and then
+    # filtered by TargetUserName / ServiceName in the loop below.
     param(
         [Parameter(Mandatory=$true)][string]$ComputerName,
         [Parameter(Mandatory=$true)][string]$Username,
@@ -128,36 +125,30 @@ Function Get-HoneypotEventsBatch {
         [Parameter(Mandatory=$true)][datetime]$EndTime
     )
 
-    # Windows Event Log XPath requires UTC timestamps in ISO 8601 format.
-    [string]$UtcStart = $StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.000Z')
-    [string]$UtcEnd   = $EndTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.000Z')
-
-    # XPath evaluated by the DC Event Log service before any events cross the network.
-    # Windows Event Log XPath supports exact-match Data element predicates but does not
-    # support string functions such as starts-with() inside EventData predicates.
-    # Exact match on TargetUserName covers all five event types for standard Windows
-    # authentication (NTLM and Kerberos). The client-side Split('@')[0] check below
-    # acts as a safety net for the rare cross-realm Kerberos case where the realm
-    # suffix is appended to the account name.
-    [string]$XPath = (
-        "*[System[" +
-            "(EventID=4624 or EventID=4625 or EventID=4768 or EventID=4771 or EventID=4740)" +
-            " and TimeCreated[@SystemTime>='{0}' and @SystemTime<='{1}']" +
-        "] and EventData[Data[@Name='TargetUserName']='{2}']]" -f $UtcStart, $UtcEnd, $Username
-    )
-
-    # Detect local machine to bypass RPC/DCOM entirely (direct log file access).
-    [bool]$IsLocal = ($ComputerName -eq $env:COMPUTERNAME) -or
-                     ($ComputerName -eq 'localhost')        -or
+    # Detect local machine to bypass RPC/DCOM (direct log file access).
+    # Compare only the NetBIOS hostname portion: Get-ADDomainController returns FQDNs like
+    # FL-222.tdcme.loc while $env:COMPUTERNAME is the short name FL-222. Without this
+    # split, the IsLocal check always fails when running on the DC itself, causing a
+    # remote self-query that may silently fail depending on firewall configuration.
+    [string]$LocalNetBios = $env:COMPUTERNAME.ToUpper()
+    [string]$QueryNetBios = $ComputerName.Split('.')[0].ToUpper()
+    [bool]$IsLocal = ($QueryNetBios -eq $LocalNetBios) -or
+                     ($ComputerName -eq 'localhost')   -or
                      ($ComputerName -eq '127.0.0.1')
+
+    [hashtable]$Filter = @{
+        LogName   = 'Security'
+        Id        = @(4624, 4625, 4768, 4771, 4740)
+        StartTime = $StartTime
+        EndTime   = $EndTime
+    }
 
     [datetime]$QueryStart = Get-Date
     try {
         if ($IsLocal) {
-            $RawEvents = Get-WinEvent -LogName 'Security' -FilterXPath $XPath -ErrorAction SilentlyContinue
+            $RawEvents = Get-WinEvent -FilterHashtable $Filter -ErrorAction SilentlyContinue
         } else {
-            $RawEvents = Get-WinEvent -ComputerName $ComputerName -LogName 'Security' `
-                -FilterXPath $XPath -ErrorAction SilentlyContinue
+            $RawEvents = Get-WinEvent -ComputerName $ComputerName -FilterHashtable $Filter -ErrorAction SilentlyContinue
         }
     } catch {
         Write-Host ("    [DC-WARN] {0}: Security log query failed -- {1}" -f $ComputerName, $_) -ForegroundColor Yellow
@@ -167,11 +158,31 @@ Function Get-HoneypotEventsBatch {
 
     [string]$QueryMode = if ($IsLocal) { 'local' } else { 'remote' }
     [int]$RawCount = if ($RawEvents) { $RawEvents.Count } else { 0 }
-    Write-Host ("    [DC-DATA] {0}: {1} event(s) for '{2}' returned in {3:N1}s ({4} XPath filter)" -f $ComputerName, $RawCount, $Username, $QuerySec, $QueryMode) -ForegroundColor DarkGray
+    Write-Host ("    [DC-DATA] {0}: {1} event(s) for '{2}' returned in {3:N1}s ({4} filter)" -f $ComputerName, $RawCount, $Username, $QuerySec, $QueryMode) -ForegroundColor DarkGray
+
+    # Second query: Kerberos service ticket requests (Event 4769) when a bait SPN is configured.
+    # Event 4769 identifies the target by ServiceName (= the honeytoken sAMAccountName),
+    # not TargetUserName, so it requires a separate query.
+    if (-not [string]::IsNullOrWhiteSpace($global:HoneypotSPN)) {
+        [hashtable]$Filter4769 = @{
+            LogName   = 'Security'
+            Id        = @(4769)
+            StartTime = $StartTime
+            EndTime   = $EndTime
+        }
+        try {
+            [array]$Kerberos4769 = if ($IsLocal) {
+                Get-WinEvent -FilterHashtable $Filter4769 -ErrorAction SilentlyContinue
+            } else {
+                Get-WinEvent -ComputerName $ComputerName -FilterHashtable $Filter4769 -ErrorAction SilentlyContinue
+            }
+        } catch { $Kerberos4769 = @() }
+        if ($Kerberos4769) { $RawEvents = @($RawEvents) + @($Kerberos4769) }
+    }
 
     if (-not $RawEvents) { return @() }
 
-    # Events are returned only when honeytoken activity is detected -- parse and enrich them.
+    # Events are returned only when activity exists in the window -- parse and enrich them.
     [datetime]$ParseStart = Get-Date
     $Enriched = @()
     foreach ($Evt in $RawEvents) {
@@ -181,8 +192,13 @@ Function Get-HoneypotEventsBatch {
             Add-Member -InputObject $Evt -MemberType NoteProperty -Name $_.Name -Value $_.'#text' -Force
         }
 
-        # Client-side username safety check.
-        $TargetUser = if ($Evt.TargetUserName) { $Evt.TargetUserName.Split('@')[0] } else { '' }
+        # Client-side username filter.
+        # Event 4769 stores the account name in ServiceName; all other events use TargetUserName.
+        if ($Evt.Id -eq 4769) {
+            $TargetUser = if ($Evt.ServiceName) { $Evt.ServiceName.Split('@')[0] } else { '' }
+        } else {
+            $TargetUser = if ($Evt.TargetUserName) { $Evt.TargetUserName.Split('@')[0] } else { '' }
+        }
         if ($TargetUser -ne $Username) { continue }
 
         $Severity = if ($Evt.Id -eq 4624) { 'CRITICAL' } else { 'HIGH' }
@@ -274,10 +290,14 @@ Function New-HoneypotDenyGroup {
 
 Function New-HoneytokenUser {
     # Creates the honeytoken AD user account with hardened attributes.
+    # $SpnValue: if non-empty, sets a Kerberoasting bait SPN on the account.
+    # $EnableReversibleEncryption: if true, stores password with reversible encryption (DCSync bait).
     param(
         [Parameter(Mandatory=$true)][hashtable]$Profile,
         [Parameter(Mandatory=$true)][string]$OuDn,
-        [Parameter(Mandatory=$true)][string]$DenyGroupName
+        [Parameter(Mandatory=$true)][string]$DenyGroupName,
+        [Parameter(Mandatory=$false)][string]$SpnValue = '',
+        [Parameter(Mandatory=$false)][bool]$EnableReversibleEncryption = $false
     )
 
     [string]$SamAccountName = $Profile.SamAccountName
@@ -290,31 +310,40 @@ Function New-HoneytokenUser {
         if ($Confirm -notmatch '^[Yy]$') { return $false }
     }
 
-    [securestring]$SecurePassword = New-HoneypotRandomPassword
+    # Generate both forms of the password. The plain text is needed for the LDAP bind
+    # that initializes lastLogonTimestamp (see below). It is cleared in a finally block
+    # and never written to disk, the event log, or any persistent store.
+    [string]$PlainPassword = New-RandomPassword -Length 32
+    [securestring]$SecurePassword = ConvertTo-SecureString $PlainPassword -AsPlainText -Force
 
     Write-Host "  Creating honeytoken user '$SamAccountName' ..." -ForegroundColor White
 
     $NewUserParams = @{
-        SamAccountName        = $SamAccountName
-        UserPrincipalName     = "$SamAccountName@$((Get-ADDomain).DNSRoot)"
-        Name                  = $Profile.DisplayName
-        DisplayName           = $Profile.DisplayName
-        GivenName             = $Profile.GivenName
-        Surname               = $Profile.Surname
-        Description           = $Profile.Description
-        Department            = $Profile.Department
-        Title                 = $Profile.Title
-        AccountPassword       = $SecurePassword
-        Enabled               = $true
-        PasswordNeverExpires  = $true
-        CannotChangePassword  = $true
-        ChangePasswordAtLogon = $false
-        Path                  = $OuDn
+        SamAccountName                  = $SamAccountName
+        UserPrincipalName               = "$SamAccountName@$((Get-ADDomain).DNSRoot)"
+        Name                            = $Profile.DisplayName
+        DisplayName                     = $Profile.DisplayName
+        GivenName                       = $Profile.GivenName
+        Surname                         = $Profile.Surname
+        Description                     = $Profile.Description
+        Department                      = $Profile.Department
+        Title                           = $Profile.Title
+        AccountPassword                 = $SecurePassword
+        Enabled                         = $true
+        PasswordNeverExpires            = $true
+        CannotChangePassword            = $true
+        ChangePasswordAtLogon           = $false
+        AllowReversiblePasswordEncryption = $EnableReversibleEncryption
+        Path                            = $OuDn
     }
 
     try {
         if (-not $Existing) {
             New-ADUser @NewUserParams
+        } else {
+            # Reset the password when reconfiguring so the provisioning auth below has a known credential.
+            Set-ADAccountPassword -Identity $SamAccountName -NewPassword $SecurePassword -Reset -ErrorAction Stop
+            Set-ADUser -Identity $SamAccountName -AllowReversiblePasswordEncryption $EnableReversibleEncryption -ErrorAction Stop
         }
         # Disable all delegation regardless of whether the account is new or existing.
         Set-ADUser -Identity $SamAccountName -AccountNotDelegated $true
@@ -322,7 +351,55 @@ Function New-HoneytokenUser {
         Write-Host "  [OK] Account '$SamAccountName' provisioned with hardened attributes." -ForegroundColor Green
     } catch {
         Write-Host "  [FAIL] Failed to create or configure honeytoken account: $_" -ForegroundColor Red
+        $PlainPassword = $null
         return $false
+    }
+
+    # Initialize lastLogonTimestamp via a one-time LDAP bind.
+    # The attribute is SAM-owned; direct LDAP writes are blocked even for Domain Admins.
+    # A real Kerberos/NTLM authentication is the only deterministic path. We bind while
+    # we still hold the plain-text password and before the deny-logon GPO has propagated
+    # (fresh install) or before the account is known to be in the deny-logon group on
+    # every DC (re-provisioning). The bind generates a controlled Event 4624 during
+    # provisioning -- the monitor scheduled task is not yet running at this point.
+    [string]$AuthDomain = (Get-ADDomain).DNSRoot
+    [System.DirectoryServices.DirectoryEntry]$BindEntry = $null
+    try {
+        $BindEntry = [System.DirectoryServices.DirectoryEntry]::new(
+            "LDAP://$AuthDomain",
+            "$SamAccountName@$AuthDomain",
+            $PlainPassword,
+            [System.DirectoryServices.AuthenticationTypes]::Secure
+        )
+        $null = $BindEntry.distinguishedName
+        Write-Host '  [OK] lastLogonTimestamp initialized via provisioning authentication.' -ForegroundColor Green
+    } catch {
+        Write-Host '  [INFO] Provisioning authentication was blocked (deny-logon policy may already be applied on the authenticating DC).' -ForegroundColor Cyan
+        Write-Host '         lastLogonTimestamp will be set on the account''s first detected activity.' -ForegroundColor Gray
+    } finally {
+        if ($null -ne $BindEntry) { try { $BindEntry.Dispose() } catch {} }
+        $BindEntry     = $null
+        $PlainPassword = $null
+    }
+
+    # Set Kerberoasting bait SPN if requested.
+    if (-not [string]::IsNullOrWhiteSpace($SpnValue)) {
+        # Verify the SPN is not already registered on another account.
+        $SpnConflict = Get-ADObject -Filter "servicePrincipalName -eq '$SpnValue'" -ErrorAction SilentlyContinue
+        if ($SpnConflict -and $SpnConflict.DistinguishedName -ne (Get-ADUser -Identity $SamAccountName).DistinguishedName) {
+            Write-Host "  [WARN] SPN '$SpnValue' is already registered on '$($SpnConflict.Name)'. Skipping SPN assignment." -ForegroundColor Yellow
+        } else {
+            try {
+                Set-ADUser -Identity $SamAccountName -ServicePrincipalNames @{Add = $SpnValue} -ErrorAction Stop
+                Write-Host "  [OK] Kerberoasting bait SPN set: $SpnValue" -ForegroundColor Green
+            } catch {
+                Write-Host "  [WARN] Could not set SPN '$SpnValue': $_" -ForegroundColor Yellow
+            }
+        }
+    }
+
+    if ($EnableReversibleEncryption) {
+        Write-Host '  [OK] Reversible password encryption enabled (DCSync bait attribute).' -ForegroundColor Green
     }
 
     # Create or validate the deny-logon group and add the honeytoken user to it.
@@ -422,7 +499,8 @@ Function Set-HoneypotSettings {
         [Parameter(Mandatory=$true)][AllowEmptyString()][string]$Username,
         [Parameter(Mandatory=$true)][AllowEmptyString()][string]$DenyGroup,
         [Parameter(Mandatory=$true)][AllowEmptyString()][string]$OU,
-        [Parameter(Mandatory=$false)][int]$IntervalMinutes = -1
+        [Parameter(Mandatory=$false)][int]$IntervalMinutes = -1,
+        [Parameter(Mandatory=$false)][AllowEmptyString()][string]$SPN = $null
     )
 
     [string]$SettingsFile = "$global:ThisScriptDir\AD-PowerAdmin_settings.ps1"
@@ -434,15 +512,19 @@ Function Set-HoneypotSettings {
     [string]$Content = Get-Content $SettingsFile -Raw
     [string]$BoolStr = if ($Audit) { 'true' } else { 'false' }
 
-    # Each replacement targets the specific variable line and updates only its value.
-    $Content = $Content -replace '(\[bool\]\$global:HoneypotAudit\s*=\s*\$)(true|false)',            ('${1}' + $BoolStr)
-    $Content = $Content -replace "(\[string\]\`$global:HoneypotUsername\s*=\s*')[^']*(')",            ('${1}' + $Username  + '${2}')
-    $Content = $Content -replace "(\[string\]\`$global:HoneypotDenyGroup\s*=\s*')[^']*(')",           ('${1}' + $DenyGroup + '${2}')
-    $Content = $Content -replace "(\[string\]\`$global:HoneypotOU\s*=\s*')[^']*(')",                  ('${1}' + $OU       + '${2}')
+    $Content = Set-SettingsFileValue -Content $Content -VarName 'HoneypotAudit'     -NewValue $BoolStr  -VarType 'bool'
+    $Content = Set-SettingsFileValue -Content $Content -VarName 'HoneypotUsername'  -NewValue $Username  -VarType 'string-single'
+    $Content = Set-SettingsFileValue -Content $Content -VarName 'HoneypotDenyGroup' -NewValue $DenyGroup -VarType 'string-single'
+    $Content = Set-SettingsFileValue -Content $Content -VarName 'HoneypotOU'        -NewValue $OU        -VarType 'string-single'
 
     if ($IntervalMinutes -ge 1) {
-        $Content = $Content -replace '(\[int\]\$global:HoneypotMonitorIntervalMinutes\s*=\s*)\d+', ('${1}' + $IntervalMinutes)
+        $Content = Set-SettingsFileValue -Content $Content -VarName 'HoneypotMonitorIntervalMinutes' -NewValue $IntervalMinutes -VarType 'int'
         $global:HoneypotMonitorIntervalMinutes = $IntervalMinutes
+    }
+
+    if ($null -ne $SPN) {
+        $Content = Set-SettingsFileValue -Content $Content -VarName 'HoneypotSPN' -NewValue $SPN -VarType 'string-single'
+        $global:HoneypotSPN = $SPN
     }
 
     [System.IO.File]::WriteAllText($SettingsFile, $Content, [System.Text.Encoding]::UTF8)
@@ -553,7 +635,7 @@ SeDenyNetworkLogonRight = *$GroupSid
     # Security Settings CSE GUID: {827D319E-6EAC-11D2-A4EA-00C04F79F83A}
     # Associated tool GUID:       {803E14A0-B4FB-11D0-A0D0-00A0C90F574B}
     #
-    # New-GPO (called via Install-ADPAGPOBaseline) always writes to the PDC emulator.
+    # New-GPO (called via Install-GPOBaseline) always writes to the PDC emulator.
     # Querying a different DC before replication completes causes "object not found".
     # Target the PDC emulator explicitly for both read and write to eliminate that race.
     [string]$PDC            = $Domain.PDCEmulator
@@ -650,7 +732,7 @@ Function Install-HoneypotGPO {
 
     Write-Host "  Creating GPO '$GpoName' ..." -ForegroundColor White
 
-    # Create and link the GPO using GPOMgr's Install-ADPAGPOBaseline.
+    # Create and link the GPO using GPOMgr's Install-GPOBaseline.
     $GpoDefinition = @{
         Name        = $GpoName
         Description = 'AD-PowerAdmin Honeypot Module: Denies all logon rights to the honeytoken deny-logon group. Managed by AD-PowerAdmin -- do not edit manually.'
@@ -658,14 +740,14 @@ Function Install-HoneypotGPO {
     }
 
     try {
-        $Result = Install-ADPAGPOBaseline -GpoDefinition $GpoDefinition
+        $Result = Install-GPOBaseline -GpoDefinition $GpoDefinition
     } catch {
         Write-Host "  [FAIL] GPO baseline creation failed: $_" -ForegroundColor Red
         return $false
     }
 
     # Verify the GPO exists regardless of whether it was newly created or already present.
-    $GpoCheck = Find-ADPAGPO -Name $GpoName
+    $GpoCheck = Find-GPO -Name $GpoName
     if ($GpoCheck.Count -eq 0) {
         Write-Host "  [FAIL] GPO '$GpoName' was not found after creation attempt." -ForegroundColor Red
         if ($Result -and $Result.Errors) { $Result.Errors | ForEach-Object { Write-Host "    $_" -ForegroundColor Red } }
@@ -698,7 +780,7 @@ Function Remove-HoneypotGPO {
     # Removes the honeytoken deny-logon GPO and all its scope-of-management links.
     [string]$GpoName = Get-HoneypotGPOName
 
-    $Existing = Find-ADPAGPO -Name $GpoName
+    $Existing = Find-GPO -Name $GpoName
     if ($Existing.Count -eq 0) {
         Write-Host "  [INFO] GPO '$GpoName' not found (may already have been removed)." -ForegroundColor Yellow
         return
@@ -772,13 +854,13 @@ Function Install-HoneypotAccount {
 
     # Curated list of realistic honeytoken profiles.
     $Profiles = @(
-        @{ SamAccountName = 'svc_backup_sync';   DisplayName = 'Backup Sync Service';   GivenName = 'Backup';   Surname = 'Sync';        Description = 'Backup synchronization service account';       Department = 'Infrastructure';        Title = 'Service Account'        }
-        @{ SamAccountName = 'svc_print_audit';   DisplayName = 'Print Audit Service';   GivenName = 'Print';    Surname = 'Audit';       Description = 'Print server audit service account';           Department = 'IT Operations';          Title = 'Service Account'        }
-        @{ SamAccountName = 'svc_file_index';    DisplayName = 'File Index Service';    GivenName = 'File';     Surname = 'Index';       Description = 'File indexing and search service account';     Department = 'Infrastructure';        Title = 'Service Account'        }
-        @{ SamAccountName = 'svc_report_reader'; DisplayName = 'Report Reader Service'; GivenName = 'Report';   Surname = 'Reader';      Description = 'Reporting services read-only account';         Department = 'Finance';               Title = 'Service Account'        }
-        @{ SamAccountName = 'vpn.healthcheck';   DisplayName = 'VPN Health Check';      GivenName = 'VPN';      Surname = 'HealthCheck'; Description = 'VPN gateway health monitoring account';        Department = 'Network Operations';    Title = 'Service Account'        }
-        @{ SamAccountName = 'adm_helpdesk_temp'; DisplayName = 'Helpdesk Admin Temp';   GivenName = 'Helpdesk'; Surname = 'Admin';       Description = 'Temporary helpdesk elevated access account';   Department = 'IT Support';            Title = 'Helpdesk Administrator' }
-        @{ SamAccountName = 'sql_report_reader'; DisplayName = 'SQL Report Reader';     GivenName = 'SQL';      Surname = 'Reports';     Description = 'SQL Server reporting services account';        Department = 'Business Intelligence'; Title = 'Service Account'        }
+        @{ SamAccountName = 'svc_backup_sync';   DisplayName = 'Backup Sync Service';   GivenName = 'Backup';   Surname = 'Sync';        Description = 'Backup sync svc acct - temp pw: Backup@2024';          SpnService = 'MSExchangeMBx'; Department = 'Infrastructure';        Title = 'Service Account'        }
+        @{ SamAccountName = 'svc_print_audit';   DisplayName = 'Print Audit Service';   GivenName = 'Print';    Surname = 'Audit';       Description = 'Print audit svc - default pwd: Print!Svc01';           SpnService = 'HTTP';          Department = 'IT Operations';          Title = 'Service Account'        }
+        @{ SamAccountName = 'svc_file_index';    DisplayName = 'File Index Service';    GivenName = 'File';     Surname = 'Index';       Description = 'File indexer svc acct - temp: FileIdx@Corp';           SpnService = 'wsman';         Department = 'Infrastructure';        Title = 'Service Account'        }
+        @{ SamAccountName = 'svc_report_reader'; DisplayName = 'Report Reader Service'; GivenName = 'Report';   Surname = 'Reader';      Description = 'Reports read-only acct - pw: R3port@ReadOnly';         SpnService = 'TERMSRV';       Department = 'Finance';               Title = 'Service Account'        }
+        @{ SamAccountName = 'vpn.healthcheck';   DisplayName = 'VPN Health Check';      GivenName = 'VPN';      Surname = 'HealthCheck'; Description = 'VPN monitor - vendor default creds: Netw0rk!Mon';      SpnService = 'HTTP';          Department = 'Network Operations';    Title = 'Service Account'        }
+        @{ SamAccountName = 'adm_helpdesk_temp'; DisplayName = 'Helpdesk Admin Temp';   GivenName = 'Helpdesk'; Surname = 'Admin';       Description = 'Temp helpdesk elevated acct - reset pw: H3lpD3sk@Tmp'; SpnService = 'WSMAN';         Department = 'IT Support';            Title = 'Helpdesk Administrator' }
+        @{ SamAccountName = 'sql_report_reader'; DisplayName = 'SQL Report Reader';     GivenName = 'SQL';      Surname = 'Reports';     Description = 'SQL reports svc - default install pw: SqlR3p0rt!';     SpnService = 'MSSQLSvc';      Department = 'Business Intelligence'; Title = 'Service Account'        }
     )
 
     Write-Host 'Select a honeytoken username from the list below.' -ForegroundColor White
@@ -805,34 +887,13 @@ Function Install-HoneypotAccount {
     Write-Host "  Selected: $($ChosenProfile.SamAccountName)  ($($ChosenProfile.DisplayName))" -ForegroundColor Green
     Write-Host ''
 
-    # Collect the target OU.
-    Write-Host 'Available top-level OUs in this domain:' -ForegroundColor White
-    try {
-        Get-ADOrganizationalUnit -Filter * -SearchScope OneLevel `
-            -SearchBase (Get-ADDomain).DistinguishedName |
-            Select-Object -ExpandProperty DistinguishedName |
-            ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
-    } catch {
-        Write-Host '  [WARN] Could not enumerate OUs.' -ForegroundColor Yellow
+    # Collect the target OU using the interactive browser.
+    Write-Host 'Select the OU where the honeytoken account should be created:' -ForegroundColor White
+    [string]$OuDn = Get-AdOuSearch
+    if ([string]::IsNullOrWhiteSpace($OuDn)) {
+        Write-Host '  [INFO] Installation cancelled.' -ForegroundColor Cyan
+        return
     }
-    Write-Host ''
-    Write-Host 'Enter the DistinguishedName of the OU where the account should be created.' -ForegroundColor White
-    Write-Host 'Example: OU=Service Accounts,DC=corp,DC=example,DC=com' -ForegroundColor Gray
-
-    [string]$OuDn = ''
-    do {
-        $OuDn = (Read-Host 'OU DistinguishedName').Trim()
-        if ([string]::IsNullOrWhiteSpace($OuDn)) {
-            Write-Host '  OU cannot be empty.' -ForegroundColor Red
-            continue
-        }
-        $OuCheck = Get-ADOrganizationalUnit -Identity $OuDn -ErrorAction SilentlyContinue
-        if (-not $OuCheck) {
-            Write-Host "  [WARN] OU '$OuDn' was not found in AD. Verify the DN before continuing." -ForegroundColor Yellow
-            $UseAnyway = Read-Host '  Use this OU anyway? (y/N)'
-            if ($UseAnyway -notmatch '^[Yy]$') { $OuDn = '' }
-        }
-    } until (-not [string]::IsNullOrWhiteSpace($OuDn))
 
     # Allow the admin to customise the deny-logon group name.
     [string]$DenyGroup = Get-HoneypotDefaultDenyGroup
@@ -840,6 +901,39 @@ Function Install-HoneypotAccount {
     Write-Host "Deny-logon group: $DenyGroup" -ForegroundColor White
     $CustomGroup = Read-Host 'Press ENTER to accept or type a different group name'
     if (-not [string]::IsNullOrWhiteSpace($CustomGroup)) { $DenyGroup = $CustomGroup.Trim() }
+
+    # Kerberoasting bait SPN (optional).
+    # Adding an SPN makes the account a Kerberoastable target; any service ticket request
+    # (Event 4769) against it is an attack indicator. The suggested SPN is based on the account's
+    # service class and the domain FQDN -- it does not need to resolve to a real host.
+    Write-Host ''
+    Write-Host 'Kerberoasting bait SPN (optional):' -ForegroundColor White
+    Write-Host '  Adding an SPN makes this account targetable by Kerberoasting tools.' -ForegroundColor Gray
+    Write-Host '  Any Kerberos service ticket request (Event 4769) becomes an attack indicator.' -ForegroundColor Gray
+    [string]$DomainFqdn    = (Get-ADDomain).DNSRoot
+    [string]$SpnHostname   = ($ChosenProfile.SamAccountName -replace '[_.]', '-') + '.' + $DomainFqdn
+    [string]$SuggestedSpn  = if ($ChosenProfile.SpnService -eq 'MSSQLSvc') {
+        "$($ChosenProfile.SpnService)/$($SpnHostname):1433"
+    } else {
+        "$($ChosenProfile.SpnService)/$SpnHostname"
+    }
+    Write-Host ("  Suggested: {0}" -f $SuggestedSpn) -ForegroundColor Cyan
+    [string]$SpnInput = Read-Host '  Press ENTER to use suggestion, type a custom SPN, or type N to skip'
+    [string]$SpnValue = ''
+    if ($SpnInput.Trim().ToUpper() -ne 'N') {
+        $SpnValue = if ([string]::IsNullOrWhiteSpace($SpnInput)) { $SuggestedSpn } else { $SpnInput.Trim() }
+    }
+
+    # Reversible encryption (optional).
+    # Enabling this stores the password in a recoverable form in AD, making the account a
+    # higher-priority target for operators with DCSync rights. Since the password is a
+    # cryptographically random 32-char string the harvested value is useless to an attacker,
+    # but the attribute increases the account's attractiveness as a target.
+    Write-Host ''
+    Write-Host 'Reversible password encryption (optional):' -ForegroundColor White
+    Write-Host '  Marks the account as a DCSync high-value target without real credential risk.' -ForegroundColor Gray
+    [string]$RevEncInput = Read-Host '  Enable reversible encryption? (y/N)'
+    [bool]$EnableReversibleEncryption = ($RevEncInput.Trim().ToUpper() -eq 'Y')
 
     # Collect the monitoring check interval.
     Write-Host ''
@@ -859,11 +953,13 @@ Function Install-HoneypotAccount {
     # Show summary and ask for final confirmation.
     Write-Host ''
     Write-Host 'Summary:' -ForegroundColor White
-    Write-Host ("  Username         : {0}" -f $ChosenProfile.SamAccountName) -ForegroundColor White
-    Write-Host ("  Display Name     : {0}" -f $ChosenProfile.DisplayName)     -ForegroundColor White
-    Write-Host ("  OU               : {0}" -f $OuDn)                          -ForegroundColor White
-    Write-Host ("  Deny Group       : {0}" -f $DenyGroup)                     -ForegroundColor White
-    Write-Host ("  Monitor Interval : {0} minutes" -f $MonitorInterval)       -ForegroundColor White
+    Write-Host ("  Username              : {0}" -f $ChosenProfile.SamAccountName) -ForegroundColor White
+    Write-Host ("  Display Name          : {0}" -f $ChosenProfile.DisplayName)     -ForegroundColor White
+    Write-Host ("  OU                    : {0}" -f $OuDn)                          -ForegroundColor White
+    Write-Host ("  Deny Group            : {0}" -f $DenyGroup)                     -ForegroundColor White
+    Write-Host ("  Kerberoasting SPN     : {0}" -f $(if ([string]::IsNullOrWhiteSpace($SpnValue)) { '(none)' } else { $SpnValue })) -ForegroundColor White
+    Write-Host ("  Reversible Encryption : {0}" -f $(if ($EnableReversibleEncryption) { 'Enabled' } else { 'Disabled' })) -ForegroundColor White
+    Write-Host ("  Monitor Interval      : {0} minutes" -f $MonitorInterval)       -ForegroundColor White
     Write-Host ''
 
     $FinalConfirm = Read-Host 'Proceed with account creation? (y/N)'
@@ -875,15 +971,16 @@ Function Install-HoneypotAccount {
     Write-Host ''
     Write-Host 'Provisioning honeytoken account ...' -ForegroundColor White
 
-    $Created = New-HoneytokenUser -Profile $ChosenProfile -OuDn $OuDn -DenyGroupName $DenyGroup
+    $Created = New-HoneytokenUser -Profile $ChosenProfile -OuDn $OuDn -DenyGroupName $DenyGroup `
+        -SpnValue $SpnValue -EnableReversibleEncryption $EnableReversibleEncryption
     if (-not $Created) {
         Write-Host '[FAIL] Account provisioning failed. Installation aborted.' -ForegroundColor Red
         return
     }
 
-    Write-Host ''
-    Write-Host 'Running safety validation ...' -ForegroundColor White
-    Test-HoneytokenUserSafety -SamAccountName $ChosenProfile.SamAccountName
+    # Sync the SPN into the session so Set-HoneypotSettings and the safety check
+    # both see the correct value without an extra Get-ADDomain round-trip.
+    $global:HoneypotSPN = $SpnValue
 
     Write-Host ''
     Write-Host 'Creating deny-logon Group Policy Object ...' -ForegroundColor White
@@ -895,11 +992,15 @@ Function Install-HoneypotAccount {
 
     Write-Host ''
     Write-Host 'Writing configuration to settings file ...' -ForegroundColor White
-    Set-HoneypotSettings -Audit $true -Username $ChosenProfile.SamAccountName -DenyGroup $DenyGroup -OU $OuDn -IntervalMinutes $MonitorInterval
+    Set-HoneypotSettings -Audit $true -Username $ChosenProfile.SamAccountName -DenyGroup $DenyGroup -OU $OuDn -IntervalMinutes $MonitorInterval -SPN $SpnValue
 
     Write-Host ''
     Write-Host "Creating monitoring scheduled task (every $MonitorInterval minutes) ..." -ForegroundColor White
     New-HoneypotScheduledTask -ScriptPath $global:ThisScript
+
+    Write-Host ''
+    Write-Host 'Running safety validation ...' -ForegroundColor White
+    Test-HoneytokenUserSafety -SamAccountName $ChosenProfile.SamAccountName
 
     Write-Host ''
     Write-Host ('=' * 70) -ForegroundColor Green
@@ -909,7 +1010,6 @@ Function Install-HoneypotAccount {
     Write-Host 'Recommended follow-up:' -ForegroundColor Yellow
     Write-Host "  1. Allow 5-10 minutes for Group Policy to propagate to all domain controllers." -ForegroundColor Yellow
     Write-Host "  2. Confirm scheduled task 'AD-PowerAdmin_HoneypotMonitor' appears in Task Scheduler." -ForegroundColor Yellow
-    Write-Host "  3. Run 'Verify Account Safety' from this menu to confirm the account is hardened." -ForegroundColor Yellow
     Write-Host ''
 }
 
@@ -976,13 +1076,31 @@ Function Test-HoneytokenUserSafety {
         Write-Host '  [WARN] Account is disabled and will not generate detection events.' -ForegroundColor Yellow
     }
 
-    # SPNs.
-    if ($User.ServicePrincipalNames.Count -eq 0) {
-        Write-Host '  [OK]   No Service Principal Names (SPNs) configured.' -ForegroundColor Green
+    # SPNs -- treat the configured Kerberoasting bait SPN as intentional; flag unexpected ones.
+    [string]$ConfiguredSpn = $global:HoneypotSPN
+    if ([string]::IsNullOrWhiteSpace($ConfiguredSpn)) {
+        # No intentional SPN configured -- any SPN is unexpected and a hardening failure.
+        if ($User.ServicePrincipalNames.Count -eq 0) {
+            Write-Host '  [OK]   No Service Principal Names (SPNs) configured.' -ForegroundColor Green
+        } else {
+            Write-Host '  [FAIL] Account has unexpected SPNs (Kerberoasting risk):' -ForegroundColor Red
+            $User.ServicePrincipalNames | ForEach-Object { Write-Host "           $_" -ForegroundColor Red }
+            $AllPassed = $false
+        }
     } else {
-        Write-Host '  [FAIL] Account has SPNs configured (Kerberoasting risk):' -ForegroundColor Red
-        $User.ServicePrincipalNames | ForEach-Object { Write-Host "           $_" -ForegroundColor Red }
-        $AllPassed = $false
+        # Intentional Kerberoasting bait SPN -- validate it is present and no extras exist.
+        [bool]$HasExpected = $User.ServicePrincipalNames -contains $ConfiguredSpn
+        [array]$ExtraSpns  = @($User.ServicePrincipalNames | Where-Object { $_ -ne $ConfiguredSpn })
+        if ($HasExpected) {
+            Write-Host ("  [OK]   Kerberoasting bait SPN is set: {0}" -f $ConfiguredSpn) -ForegroundColor Green
+        } else {
+            Write-Host ("  [WARN] Expected Kerberoasting bait SPN is missing: {0}" -f $ConfiguredSpn) -ForegroundColor Yellow
+        }
+        if ($ExtraSpns.Count -gt 0) {
+            Write-Host '  [FAIL] Unexpected additional SPNs detected (not the configured bait SPN):' -ForegroundColor Red
+            $ExtraSpns | ForEach-Object { Write-Host "           $_" -ForegroundColor Red }
+            $AllPassed = $false
+        }
     }
 
     # Unconstrained delegation.
@@ -1016,13 +1134,13 @@ Function Test-HoneytokenUserSafety {
 
     # Deny-logon GPO existence and domain-root link check.
     [string]$GpoName  = Get-HoneypotGPOName
-    $GpoFound         = Find-ADPAGPO -Name $GpoName
+    $GpoFound         = Find-GPO -Name $GpoName
     if ($GpoFound.Count -eq 0) {
         Write-Host "  [FAIL] Deny-logon GPO '$GpoName' does not exist. Run the install wizard to create it." -ForegroundColor Red
         $AllPassed = $false
     } else {
         [string]$DomainDn = (Get-ADDomain).DistinguishedName
-        [bool]$GpoLinked  = Test-ADPAGPO -Name $GpoName -Links @($DomainDn) -Quiet
+        [bool]$GpoLinked  = Test-GPO -Name $GpoName -Links @($DomainDn) -Quiet
         if ($GpoLinked) {
             Write-Host "  [OK]   Deny-logon GPO '$GpoName' exists and is linked to domain root." -ForegroundColor Green
         } else {
@@ -1162,6 +1280,9 @@ Function Start-HoneypotMonitor {
     $Body           += "  - Credential stuffing or replay`r`n"
     $Body           += "  - Attacker reconnaissance or validation`r`n"
     $Body           += "  - Leaked or compromised credentials in use`r`n"
+    if (-not [string]::IsNullOrWhiteSpace($global:HoneypotSPN)) {
+        $Body       += "  - Kerberoasting attack (Event 4769: service ticket requested for bait SPN '$($global:HoneypotSPN)')`r`n"
+    }
     $Body           += "`r`n$Divider"
     $Body           += "Event Details:`r`n$Divider"
 
@@ -1176,6 +1297,10 @@ Function Start-HoneypotMonitor {
         $Body += "Logon Type       : $($_.LogonType)`r`n"
         $Body += "Auth Package     : $($_.AuthenticationPackageName)`r`n"
         $Body += "Process Name     : $($_.ProcessName)`r`n"
+        if ($_.Id -eq 4769) {
+            $Body += "Service Name     : $($_.ServiceName)`r`n"
+            $Body += "Ticket Options   : $($_.TicketOptions)`r`n"
+        }
         $Body += $Divider
     }
 
@@ -1192,12 +1317,16 @@ Function Start-HoneypotMonitor {
     [string]$ReportName = "HoneytokenAlert_$($Username)_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
     Export-AdPowerAdminData -Data $Events -ReportName $ReportName -Force
 
-    Send-Email -ToEmail   $global:ADAdminEmail `
-               -FromEmail $global:ReportsEmailFrom `
-               -Subject   $Subject `
-               -Body      $Body
-
-    Write-Host "Alert sent. $EventCount event(s) detected. Report exported to '$global:ReportsPath'." -ForegroundColor Yellow
+    if ([string]::IsNullOrWhiteSpace($global:ADAdminEmail) -or [string]::IsNullOrWhiteSpace($global:SMTPServer)) {
+        Write-Host "  [SKIP] Alert email not sent: ADAdminEmail or SMTPServer is not configured in AD-PowerAdmin_settings.ps1." -ForegroundColor Yellow
+        Write-Host "         $EventCount event(s) detected. Report exported to '$global:ReportsPath'." -ForegroundColor Yellow
+    } else {
+        Send-Email -ToEmail   $global:ADAdminEmail `
+                   -FromEmail $global:FromEmail `
+                   -Subject   $Subject `
+                   -Body      $Body
+        Write-Host "Alert sent to $global:ADAdminEmail. $EventCount event(s) detected. Report exported to '$global:ReportsPath'." -ForegroundColor Yellow
+    }
 }
 
 Function Show-HoneypotReport {
@@ -1470,7 +1599,7 @@ Function Remove-HoneypotAccount {
     # Step 6: Optional GPO removal.
     Write-Host 'Step 6: Removing deny-logon Group Policy Object (optional).' -ForegroundColor White
     [string]$HoneypotGpoName = Get-HoneypotGPOName
-    $GpoExists = Find-ADPAGPO -Name $HoneypotGpoName
+    $GpoExists = Find-GPO -Name $HoneypotGpoName
     if ($GpoExists.Count -gt 0) {
         $RemoveGpo = Read-Host "  Remove GPO '$HoneypotGpoName'? (y/N)"
         if ($RemoveGpo -match '^[Yy]$') {
@@ -1520,11 +1649,11 @@ Function New-HoneypotLiteSettingsContent {
 [string]`$global:HoneypotUsername                  = '$($global:HoneypotUsername)'
 [string]`$global:HoneypotDenyGroup                 = '$($global:HoneypotDenyGroup)'
 [string]`$global:HoneypotOU                        = '$($global:HoneypotOU)'
+[string]`$global:HoneypotSPN                       = '$($global:HoneypotSPN)'
 [string]`$global:HoneypotMonitorMode               = 'Decentralized'
 
 [string]`$global:ADAdminEmail                      = '$($global:ADAdminEmail)'
 [string]`$global:FromEmail                         = '$($global:FromEmail)'
-[string]`$global:ReportsEmailFrom                  = '$($global:ReportsEmailFrom)'
 
 [string]`$global:SMTPServer                        = '$($global:SMTPServer)'
 [int]`$global:SMTPPort                             = $($global:SMTPPort)
@@ -1638,7 +1767,7 @@ Function Install-HoneypotDCTaskGPO {
         Description = 'AD-PowerAdmin: deploys the honeytoken monitor scheduled task to all domain controllers via Group Policy Preferences. The task queries only the local Security Event Log (no RPC) and emails an alert on any authentication event against the honeytoken account.'
         Links       = @($Domain.DomainControllersContainer)
     }
-    Install-ADPAGPOBaseline -GpoDefinition $GpoDef | Out-Null
+    Install-GPOBaseline -GpoDefinition $GpoDef | Out-Null
 
     # Step 2: Retrieve the GPO GUID (required for SYSVOL path construction).
     try {
@@ -1703,7 +1832,7 @@ Function Install-HoneypotDCTaskGPO {
     # Step 6: Update the GPO AD object with the GPP Scheduled Tasks extension GUIDs and new version.
     # GPP Scheduled Tasks CSE GUID:  {AADCED64-746C-4633-A97C-D61349046527}
     # GPP Scheduled Tasks Tool GUID: {CAB54552-DEEA-4691-817E-ED4A4D1AFC72}
-    # New-GPO (via Install-ADPAGPOBaseline) writes to the PDC emulator; target it explicitly
+    # New-GPO (via Install-GPOBaseline) writes to the PDC emulator; target it explicitly
     # to avoid a replication-lag race where a different DC has not yet received the new GPO.
     [string]$PDC          = $Domain.PDCEmulator
     [string]$PoliciesBase = "CN=Policies,CN=System,$($Domain.DistinguishedName)"
@@ -1771,20 +1900,68 @@ Function Invoke-HoneypotDCDeploy {
 
     Write-Host ("  [DC] {0} -- Deploy path: {1}" -f $DCHostname, $DeployPath) -ForegroundColor Cyan
 
-    # Step 1: Create directory structure via UNC admin share.
+    # Step 1: Create root directory via UNC admin share.
     try {
-        foreach ($Dir in @($UncRoot, $UncModules, $UncReports)) {
+        if (-not (Test-Path $UncRoot)) {
+            New-Item -Path $UncRoot -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        }
+        Write-Host ("    [OK] Root directory ready: {0}" -f $UncRoot) -ForegroundColor Green
+    } catch {
+        Write-Host ("    [FAIL] Could not create root directory: {0}" -f $_) -ForegroundColor Red
+        return $false
+    }
+
+    # Step 2: Lock down the root directory ACL before writing any files.
+    # Remove inherited permissions and grant only SYSTEM and Administrators full control.
+    # Any files and subdirectories created below will inherit this ACL, ensuring no
+    # non-administrative account (including regular domain users or an attacker with standard
+    # access) can read or modify the scripts that run as SYSTEM via the scheduled task.
+    try {
+        $NewAcl = New-Object System.Security.AccessControl.DirectorySecurity
+        # Disable inheritance and discard all inherited ACEs (start with a clean ACL).
+        $NewAcl.SetAccessRuleProtection($true, $false)
+
+        [System.Security.AccessControl.FileSystemAccessRule]$SystemAce = `
+            New-Object System.Security.AccessControl.FileSystemAccessRule(
+                'NT AUTHORITY\SYSTEM',
+                [System.Security.AccessControl.FileSystemRights]::FullControl,
+                ([System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'),
+                [System.Security.AccessControl.PropagationFlags]::None,
+                [System.Security.AccessControl.AccessControlType]::Allow
+            )
+        $NewAcl.AddAccessRule($SystemAce)
+
+        [System.Security.AccessControl.FileSystemAccessRule]$AdminAce = `
+            New-Object System.Security.AccessControl.FileSystemAccessRule(
+                'BUILTIN\Administrators',
+                [System.Security.AccessControl.FileSystemRights]::FullControl,
+                ([System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'),
+                [System.Security.AccessControl.PropagationFlags]::None,
+                [System.Security.AccessControl.AccessControlType]::Allow
+            )
+        $NewAcl.AddAccessRule($AdminAce)
+
+        Set-Acl -Path $UncRoot -AclObject $NewAcl -ErrorAction Stop
+        Write-Host ("    [OK] ACL set: SYSTEM + Administrators only (inheritance disabled).") -ForegroundColor Green
+    } catch {
+        Write-Host ("    [FAIL] Could not set directory ACL on '{0}': {1}" -f $UncRoot, $_) -ForegroundColor Red
+        return $false
+    }
+
+    # Step 3: Create subdirectories (inherit the restricted ACL from the root).
+    try {
+        foreach ($Dir in @($UncModules, $UncReports)) {
             if (-not (Test-Path $Dir)) {
                 New-Item -Path $Dir -ItemType Directory -Force -ErrorAction Stop | Out-Null
             }
         }
-        Write-Host ("    [OK] Directory structure created: {0}" -f $UncRoot) -ForegroundColor Green
+        Write-Host ("    [OK] Subdirectory structure created.") -ForegroundColor Green
     } catch {
-        Write-Host ("    [FAIL] Could not create directory structure: {0}" -f $_) -ForegroundColor Red
+        Write-Host ("    [FAIL] Could not create subdirectories: {0}" -f $_) -ForegroundColor Red
         return $false
     }
 
-    # Step 2: Copy main entry point.
+    # Step 4: Copy main entry point.
     try {
         Copy-Item -Path "$global:ThisScriptDir\AD-PowerAdmin.ps1" -Destination "$UncRoot\AD-PowerAdmin.ps1" -Force -ErrorAction Stop
         Write-Host ("    [OK] Copied AD-PowerAdmin.ps1") -ForegroundColor Green
@@ -2110,5 +2287,371 @@ Function Remove-HoneypotDecentralized {
     Write-Host ('=' * 70) -ForegroundColor Cyan
     Write-Host '  Decentralized monitor removal complete.' -ForegroundColor Cyan
     Write-Host ('=' * 70) -ForegroundColor Cyan
+    Write-Host ''
+}
+
+Function Test-HoneypotAuditPolicy {
+    # Checks whether the local DC is configured to log the Security events the honeytoken
+    # monitor searches for. Uses auditpol subcategory GUIDs (language-independent lookup).
+    # Returns $true if all four required subcategories are logging; $false otherwise.
+    #
+    # Uses the plain-text auditpol output (no /r CSV flag). The /r CSV path depends on
+    # column position and header-line detection, both of which vary across Windows versions
+    # and produce silent 'Unknown' results when the format differs from expectations.
+    # The plain-text output always places the effective setting at the end of the subcategory
+    # line; pattern-matching against the four known English setting strings is simpler and
+    # more reliable than CSV field indexing.
+    # Check order: 'Success and Failure' must be tested before 'Success' or 'Failure' alone
+    # to avoid a substring false match.
+    [hashtable[]]$Checks = @(
+        @{ Guid = '{0cce9215-69ae-11d9-bed3-505054503030}'; Name = 'Logon';                               Events = '4624, 4625' }
+        @{ Guid = '{0cce9217-69ae-11d9-bed3-505054503030}'; Name = 'Account Lockout';                    Events = '4740'       }
+        @{ Guid = '{0cce9242-69ae-11d9-bed3-505054503030}'; Name = 'Kerberos Authentication Service';    Events = '4768, 4771' }
+        @{ Guid = '{0cce9240-69ae-11d9-bed3-505054503030}'; Name = 'Kerberos Service Ticket Operations'; Events = '4769'       }
+    )
+    [bool]$AllGood = $true
+    foreach ($Check in $Checks) {
+        [string]$Setting = 'Unknown'
+        try {
+            [string[]]$Lines = & auditpol.exe /get /subcategory:"$($Check.Guid)" 2>&1
+            foreach ($Line in $Lines) {
+                if ($Line -match 'No Auditing')        { $Setting = 'No Auditing';        break }
+                if ($Line -match 'Success and Failure') { $Setting = 'Success and Failure'; break }
+                if ($Line -match '\bSuccess\b')         { $Setting = 'Success';             break }
+                if ($Line -match '\bFailure\b')         { $Setting = 'Failure';             break }
+            }
+        } catch {}
+        if ($Setting -eq 'No Auditing' -or $Setting -eq 'Unknown') {
+            Write-Host ("  [WARN] {0} ({1}): {2} -- these events will NOT be logged" -f $Check.Name, $Check.Events, $Setting) -ForegroundColor Yellow
+            Write-Host ("         Fix: auditpol /set /subcategory:`"{0}`" /success:enable /failure:enable" -f $Check.Name) -ForegroundColor DarkGray
+            $AllGood = $false
+        } else {
+            Write-Host ("  [OK]   {0} ({1}): {2}" -f $Check.Name, $Check.Events, $Setting) -ForegroundColor Green
+        }
+    }
+    return $AllGood
+}
+
+Function Invoke-HoneypotTestAuthAttempt {
+    # Sends two deliberate failed authentication attempts against the honeytoken account:
+    # one using Kerberos (AuthType::Negotiate) and one using explicit NTLM (AuthType::Ntlm).
+    # Negotiate selects Kerberos when the DC supports GSSAPI, which generates Event 4771
+    # (Kerberos pre-auth failure) but NOT 4625. The second NTLM bind forces the NTLM path,
+    # which generates Event 4625 (failed logon) on the DC.
+    # Both binds use the same randomly generated wrong password.
+    [string]$SamAccountName = $global:HoneypotUsername
+    [string]$DomainFqdn     = (Get-ADDomain).DNSRoot
+    [string]$WrongPassword  = 'Tw!' + [System.Guid]::NewGuid().ToString('N').Substring(0, 20)
+
+    Add-Type -AssemblyName System.DirectoryServices.Protocols
+
+    [System.DirectoryServices.Protocols.LdapDirectoryIdentifier]$Id   = $null
+    [System.Net.NetworkCredential]$Cred                                = $null
+    [System.DirectoryServices.Protocols.LdapConnection]$Conn          = $null
+
+    try {
+        $Id   = [System.DirectoryServices.Protocols.LdapDirectoryIdentifier]::new($DomainFqdn, 389)
+        $Cred = [System.Net.NetworkCredential]::new($SamAccountName, $WrongPassword, $DomainFqdn)
+
+        # Kerberos bind: AuthType::Negotiate selects Kerberos when the DC advertises GSSAPI.
+        # Generates Event 4771 (Kerberos pre-authentication failure).
+        Write-Host ("  [1/2] Kerberos bind as '{0}' (Negotiate -> Kerberos)..." -f $SamAccountName) -ForegroundColor White
+        try {
+            $Conn = [System.DirectoryServices.Protocols.LdapConnection]::new(
+                $Id, $Cred, [System.DirectoryServices.Protocols.AuthType]::Negotiate
+            )
+            $Conn.SessionOptions.ProtocolVersion = 3
+            $Conn.AutoBind = $false
+            $Conn.Bind($Cred)
+            Write-Host '  [CRITICAL] Kerberos bind SUCCEEDED -- honeytoken account is not protected!' -ForegroundColor Red
+            Write-Host '             The deny-logon GPO is not applied or has not yet propagated to this DC.' -ForegroundColor Red
+            Write-Host '             Run Test-HoneytokenUserSafety to diagnose the GPO configuration.' -ForegroundColor Red
+        } catch {
+            Write-Host '  [OK] Kerberos bind rejected as expected. Expected event: 4771.' -ForegroundColor Green
+        } finally {
+            if ($null -ne $Conn) { try { $Conn.Dispose() } catch {} }
+            $Conn = $null
+        }
+
+        # NTLM bind: AuthType::Ntlm forces NTLM regardless of Kerberos availability.
+        # Generates Event 4625 (An account failed to log on) on the DC.
+        Write-Host ("  [2/2] NTLM bind as '{0}'..." -f $SamAccountName) -ForegroundColor White
+        try {
+            $Conn = [System.DirectoryServices.Protocols.LdapConnection]::new(
+                $Id, $Cred, [System.DirectoryServices.Protocols.AuthType]::Ntlm
+            )
+            $Conn.SessionOptions.ProtocolVersion = 3
+            $Conn.AutoBind = $false
+            $Conn.Bind($Cred)
+            Write-Host '  [CRITICAL] NTLM bind SUCCEEDED -- honeytoken account is not protected!' -ForegroundColor Red
+            Write-Host '             The deny-logon GPO is not applied or has not yet propagated to this DC.' -ForegroundColor Red
+            Write-Host '             Run Test-HoneytokenUserSafety to diagnose the GPO configuration.' -ForegroundColor Red
+        } catch {
+            Write-Host '  [OK] NTLM bind rejected as expected. Expected event: 4625.' -ForegroundColor Green
+        } finally {
+            if ($null -ne $Conn) { try { $Conn.Dispose() } catch {} }
+            $Conn = $null
+        }
+    } finally {
+        $WrongPassword = $null
+        $Cred          = $null
+        $Id            = $null
+    }
+}
+
+Function Invoke-HoneypotTestServiceTicket {
+    # Requests a Kerberos service ticket for the honeytoken's bait SPN using the current
+    # user's existing TGT. This is the exact request a Kerberoasting tool makes.
+    # Generates Event 4769 on the domain controller.
+    # Does nothing if no bait SPN is configured.
+    [string]$SpnValue       = $global:HoneypotSPN
+    [string]$SamAccountName = $global:HoneypotUsername
+
+    if ([string]::IsNullOrWhiteSpace($SpnValue)) {
+        Write-Host '  [SKIP] No bait SPN configured (HoneypotSPN is empty).' -ForegroundColor Yellow
+        Write-Host '         Assign a Kerberoasting bait SPN during account provisioning to enable 4769 detection.' -ForegroundColor Gray
+        return
+    }
+
+    # Verify the SPN is actually registered in AD before calling klist.
+    # If the SPN exists in settings but was never written to the AD account (or was cleared),
+    # the KDC returns KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN and no 4769 event is logged.
+    Write-Host ("  Verifying SPN '{0}' is registered on '{1}' in AD..." -f $SpnValue, $SamAccountName) -ForegroundColor DarkGray
+    try {
+        $AdAccount = Get-ADUser -Filter "SamAccountName -eq '$SamAccountName'" `
+                                -Properties servicePrincipalName -ErrorAction Stop
+    } catch {
+        Write-Host ("  [FAIL] Could not query AD account '{0}': {1}" -f $SamAccountName, $_) -ForegroundColor Red
+        return
+    }
+    if (-not $AdAccount) {
+        Write-Host ("  [FAIL] Account '{0}' not found in AD." -f $SamAccountName) -ForegroundColor Red
+        return
+    }
+    if ($AdAccount.servicePrincipalName -notcontains $SpnValue) {
+        Write-Host ("  [FAIL] SPN '{0}' is NOT registered on '{1}' in AD." -f $SpnValue, $SamAccountName) -ForegroundColor Red
+        Write-Host "         The KDC cannot issue a service ticket for an unregistered SPN -- no 4769 will be logged." -ForegroundColor Yellow
+        if ($AdAccount.servicePrincipalName) {
+            Write-Host "         SPNs currently on account:" -ForegroundColor Gray
+            $AdAccount.servicePrincipalName | ForEach-Object { Write-Host ("           {0}" -f $_) -ForegroundColor DarkGray }
+        } else {
+            Write-Host "         No SPNs are registered on this account." -ForegroundColor Gray
+        }
+        Write-Host ("         Fix: Set-ADUser -Identity '{0}' -Add @{{servicePrincipalName='{1}'}}" -f $SamAccountName, $SpnValue) -ForegroundColor DarkGray
+        return
+    }
+    Write-Host ("  [OK] SPN confirmed in AD." -f $SpnValue) -ForegroundColor Green
+
+    Write-Host ("  Requesting Kerberos service ticket for SPN '{0}'..." -f $SpnValue) -ForegroundColor White
+    Write-Host '  (Uses the current user''s TGT -- no honeytoken credentials required.)' -ForegroundColor Gray
+
+    [string]$KlistExe = Join-Path $env:SystemRoot 'System32\klist.exe'
+    if (-not (Test-Path $KlistExe)) {
+        Write-Host '  [WARN] klist.exe not found. Cannot request service ticket.' -ForegroundColor Yellow
+        return
+    }
+
+    try {
+        [string[]]$KlistOut = & $KlistExe get "$SpnValue" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host '  [OK] Service ticket requested successfully. Expected event: 4769.' -ForegroundColor Green
+        } else {
+            Write-Host ('  [FAIL] klist exited with code {0}. The KDC rejected the ticket request.' -f $LASTEXITCODE) -ForegroundColor Red
+            Write-Host '         klist output:' -ForegroundColor Gray
+            $KlistOut | ForEach-Object { Write-Host ("           {0}" -f $_) -ForegroundColor DarkGray }
+        }
+    } catch {
+        Write-Host ("  [WARN] klist.exe failed: {0}" -f $_) -ForegroundColor Yellow
+    }
+}
+
+Function Invoke-HoneypotDetectionTest {
+    <#
+    .SYNOPSIS
+        Triggers controlled authentication events to test the honeytoken detection pipeline.
+
+    .DESCRIPTION
+        === Honeytoken Detection System Test. ===
+            Generates real Windows Security Event Log entries against the configured honeytoken
+            account so you can verify that event detection, alert building, and email delivery
+            are working end to end.
+
+            Available tests:
+            [1] Authentication attempt  -- Sends two failed LDAP binds using a random wrong
+                password: one with AuthType::Negotiate (selects Kerberos, generates 4771)
+                and one with AuthType::Ntlm (forces NTLM, generates 4625) on the DC.
+            [2] Kerberos service ticket -- Uses the current user's TGT to request a service
+                ticket for the bait SPN. Generates Event 4769. Requires a bait SPN configured.
+            [3] Both tests together
+            [4] Run monitor check now  -- Immediately runs Start-HoneypotMonitor to search
+                for events and send an alert email if any are found.
+
+            After triggering test events, you will be offered the option to run the monitor
+            check immediately so you can confirm the full pipeline in one step.
+
+    .EXAMPLE
+        Invoke-HoneypotDetectionTest
+
+    .NOTES
+        Menu path: Honeytoken Management -> Test Detection System.
+    #>
+
+    if ([string]::IsNullOrWhiteSpace($global:HoneypotUsername)) {
+        Write-Host 'No honeytoken account configured. Run Install Honeypot Account first.' -ForegroundColor Red
+        return
+    }
+
+    # Verify audit policy prerequisites once on entry so the admin sees any gaps before testing.
+    Write-Host ''
+    Write-Host '  Checking Security audit policy on this DC...' -ForegroundColor DarkGray
+    [bool]$AuditReady = Test-HoneypotAuditPolicy
+    if (-not $AuditReady) {
+        Write-Host ''
+        Write-Host '  One or more subcategories are disabled. Tests will still run but the monitor' -ForegroundColor Yellow
+        Write-Host '  may find 0 events until the audit policy is corrected.' -ForegroundColor Yellow
+    }
+
+    while ($true) {
+        [string]$SpnLabel = if ([string]::IsNullOrWhiteSpace($global:HoneypotSPN)) { '(not configured)' } else { $global:HoneypotSPN }
+
+        Write-Host ''
+        Write-Host ('=' * 70) -ForegroundColor White
+        Write-Host '  Honeytoken Detection Test' -ForegroundColor White
+        Write-Host ('=' * 70) -ForegroundColor White
+        Write-Host ("  Account : {0}" -f $global:HoneypotUsername) -ForegroundColor Gray
+        Write-Host ("  SPN     : {0}" -f $SpnLabel) -ForegroundColor Gray
+        Write-Host ("  Monitor : {0}" -f $(if ($global:HoneypotAudit) { 'Enabled' } else { 'DISABLED -- monitor will not send alerts' })) -ForegroundColor $(if ($global:HoneypotAudit) { 'Gray' } else { 'Yellow' })
+        Write-Host ''
+        Write-Host '  [1] Authentication attempt  -- Events 4771 (Kerberos) + 4625 (NTLM)' -ForegroundColor White
+        Write-Host '  [2] Kerberos service ticket -- Event 4769  (requires bait SPN)' -ForegroundColor White
+        Write-Host '  [3] Both tests' -ForegroundColor White
+        Write-Host '  [4] Run monitor check now   -- process Security log and send alert email' -ForegroundColor White
+        Write-Host '  [Q] Back' -ForegroundColor White
+        Write-Host ''
+
+        [string]$Choice = (Read-Host 'Select').Trim().ToUpper()
+
+        if ($Choice -eq 'Q') { return }
+
+        if ($Choice -eq '1' -or $Choice -eq '3') {
+            Write-Host ''
+            Invoke-HoneypotTestAuthAttempt
+        }
+
+        if ($Choice -eq '2' -or $Choice -eq '3') {
+            Write-Host ''
+            Invoke-HoneypotTestServiceTicket
+        }
+
+        if ($Choice -eq '1' -or $Choice -eq '2' -or $Choice -eq '3') {
+            Write-Host ''
+            [string]$RunMonitor = (Read-Host '  Run monitor check now to detect these events and send alert email? (y/N)').Trim().ToUpper()
+            if ($RunMonitor -eq 'Y') {
+                Write-Host '  Waiting 3 seconds for events to be written to the Security log ...' -ForegroundColor Gray
+                Start-Sleep -Seconds 3
+                Write-Host ''
+                Start-HoneypotMonitor
+            }
+            continue
+        }
+
+        if ($Choice -eq '4') {
+            Write-Host ''
+            Start-HoneypotMonitor
+            continue
+        }
+
+        Write-Host '  Invalid selection. Enter 1, 2, 3, 4, or Q.' -ForegroundColor Yellow
+    }
+}
+
+Function Show-HoneypotHelp {
+    <#
+    .SYNOPSIS
+        Display the Honeytoken system deployment guide.
+    .DESCRIPTION
+        Prints the correct installation order and removal procedure for the Honeytoken
+        detection system, covering both Centralized and Decentralized monitor modes.
+    #>
+
+    Write-Host ''
+    Write-Host '  HONEYTOKEN SYSTEM -- DEPLOYMENT GUIDE' -ForegroundColor Cyan
+    Write-Host ('=' * 70)
+    Write-Host ''
+    Write-Host '  OVERVIEW' -ForegroundColor Yellow
+    Write-Host '  The Honeytoken system has two independent layers:'
+    Write-Host '    1. A hardened AD account that should never be used. Any authentication'
+    Write-Host '       attempt against it is a high-confidence indicator of an attack.'
+    Write-Host '    2. A monitor that queries all DC Security Event Logs on a configurable'
+    Write-Host '       interval and emails an alert on any detection.'
+    Write-Host ''
+    Write-Host '  The monitor runs in one of two modes:'
+    Write-Host '    Centralized (default) -- one central AD-PowerAdmin installation queries'
+    Write-Host '       all DCs remotely. No additional deployment required.'
+    Write-Host '    Decentralized         -- a lightweight copy runs locally on each DC.'
+    Write-Host '       Use this if centralized mode is too slow on resource-constrained DCs.'
+    Write-Host ''
+    Write-Host ('=' * 70)
+    Write-Host ''
+    Write-Host '  INSTALLATION ORDER' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '  Step 1 -- Install Honeypot Account' -ForegroundColor Green
+    Write-Host '    Select "Install Honeypot Account" from this menu.'
+    Write-Host '    The wizard provisions the honeytoken account, creates the deny-logon'
+    Write-Host '    security group, creates and links the AD-PowerAdmin_HoneypotDenyLogon'
+    Write-Host '    GPO at the domain root, and creates the central monitoring scheduled task.'
+    Write-Host '    No manual GPMC steps are required -- the GPO is fully automated.'
+    Write-Host ''
+    Write-Host '  Step 2 -- Allow Group Policy to propagate' -ForegroundColor Green
+    Write-Host '    Wait 5-10 minutes, or run "gpupdate /force" on each domain controller.'
+    Write-Host '    The deny-logon rights assignment must be in effect on all DCs before the'
+    Write-Host '    account is considered live. Until then, a 4624 (Successful Logon) could'
+    Write-Host '    be a false positive from a DC that has not yet applied the policy.'
+    Write-Host ''
+    Write-Host '  Step 3 -- Verify Account Safety' -ForegroundColor Green
+    Write-Host '    Select "Verify Account Safety" from this menu.'
+    Write-Host '    Confirms the account has no dangerous attributes: no SPNs, no delegation,'
+    Write-Host '    no privileged group memberships, deny-logon group membership intact.'
+    Write-Host ''
+    Write-Host '  Step 4 -- (Optional) Deploy Decentralized Monitor' -ForegroundColor Green
+    Write-Host '    Only needed if centralized mode is too slow (80+ seconds per DC).'
+    Write-Host '    Select "Deploy Decentralized Monitor" from this menu.'
+    Write-Host '    Files are copied to each selected DC via UNC admin share (no WinRM).'
+    Write-Host '    The AD-PowerAdmin_HoneypotDCMonitor GPO is linked to the Domain'
+    Write-Host '    Controllers OU and delivers the monitoring scheduled task via GP.'
+    Write-Host '    Run "gpupdate /force" on each DC to apply immediately.'
+    Write-Host '    To stop the central sweep, set HoneypotMonitorMode = Decentralized'
+    Write-Host '    in the central AD-PowerAdmin_settings.ps1.'
+    Write-Host ''
+    Write-Host ('=' * 70)
+    Write-Host ''
+    Write-Host '  REMOVAL ORDER' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '  Step 1 -- (If applicable) Remove Decentralized Monitor first' -ForegroundColor Green
+    Write-Host '    Select "Remove Decentralized Monitor" from this menu.'
+    Write-Host '    Removes the AD-PowerAdmin_HoneypotDCMonitor GPO (the scheduled task is'
+    Write-Host '    removed from all DCs on the next GP refresh) and optionally removes the'
+    Write-Host '    deployment directory from selected DCs via UNC admin share.'
+    Write-Host '    Run "gpupdate /force" on each DC to apply immediately.'
+    Write-Host ''
+    Write-Host '  Step 2 -- Remove Honeypot Account' -ForegroundColor Green
+    Write-Host '    Select "Remove Honeypot Account" from this menu.'
+    Write-Host '    Removes the central monitoring scheduled task, removes the account from'
+    Write-Host '    the deny-logon group, disables or deletes the AD account, removes the'
+    Write-Host '    deny-logon group (if empty), removes the AD-PowerAdmin_HoneypotDenyLogon'
+    Write-Host '    GPO, and clears all configuration from the settings file.'
+    Write-Host '    Each destructive step requires explicit confirmation before proceeding.'
+    Write-Host ''
+    Write-Host ('=' * 70)
+    Write-Host ''
+    Write-Host '  NOTES' -ForegroundColor Yellow
+    Write-Host '    - Alerts are emailed to the address in $global:ADAdminEmail.'
+    Write-Host '    - A 4624 (Successful Logon) is always CRITICAL. The deny-logon GPO must'
+    Write-Host '      block all logon types. If a 4624 occurs, escalate immediately and verify'
+    Write-Host '      the AD-PowerAdmin_HoneypotDenyLogon GPO is linked and enforced.'
+    Write-Host '    - The account username must never appear in any service, scheduled task,'
+    Write-Host '      application configuration, or legitimate logon process.'
+    Write-Host '    - Run "Verify Account Safety" periodically to confirm no privileges have'
+    Write-Host '      accumulated on the honeytoken account since deployment.'
     Write-Host ''
 }

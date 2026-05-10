@@ -545,6 +545,56 @@ Modules_Examples/AD-PowerAdmin_Example.psd1  ->  Modules/AD-PowerAdmin_<Name>.ps
 - Call `Initialize-Module` at the **bottom of the file** (not inside a function).
 - Implement all exported functions with comment-based help.
 - Abstract any logic used in more than one place (or likely to be reused) into a dedicated helper function -- see Code Reusability Standards below.
+- **If this module depends on another AD-PowerAdmin module**, declare and enforce the dependency -- see Inter-Module Dependencies below.
+
+### Inter-Module Dependencies
+
+`Initialize-AllModules` loads modules in filesystem order (alphabetical by `.psd1` filename). If
+your module calls functions exported by another AD-PowerAdmin module, that other module may not be
+loaded yet when `Initialize-Module` runs. You must declare and enforce the dependency explicitly.
+
+**Convention -- two locations:**
+
+**1. In the `.psd1` manifest** (documentation + future tooling hook):
+```powershell
+PrivateData = @{
+    PSData = @{
+        RequiredADPAModules = @('AD-PowerAdmin_GPOMgr')
+        # ...
+    }
+}
+```
+
+**2. At the top of `Initialize-Module` in the `.psm1`** (runtime enforcement):
+```powershell
+Function Initialize-Module {
+    # Bootstrap Utils if this module loads alphabetically before it (e.g. any module
+    # with a name that sorts before 'AD-PowerAdmin_Utils'). Assert-ADPAModuleDependency
+    # lives in Utils and cannot be called until Utils is imported.
+    if (-not (Get-Module -Name 'AD-PowerAdmin_Utils')) {
+        $UtilsPath = Join-Path $global:ModulesPath 'AD-PowerAdmin_Utils.psd1'
+        if (Test-Path $UtilsPath) {
+            try { Import-Module $UtilsPath -Force -ErrorAction Stop } catch { }
+        }
+    }
+    if (-not (Assert-ADPAModuleDependency -RequiredModules @('AD-PowerAdmin_GPOMgr'))) {
+        Write-Host "[WARN] MyModule was not registered: required module AD-PowerAdmin_GPOMgr is unavailable." -ForegroundColor Yellow
+        return
+    }
+    # ... rest of menu registration
+}
+```
+
+`Assert-ADPAModuleDependency` (from `AD-PowerAdmin_Utils`) checks whether each named module is
+loaded, attempts to import it from `$global:ModulesPath` if not, and returns `$false` with a
+`[FAIL]` message if it still cannot be loaded. If it returns `$false`, `Initialize-Module`
+must `return` immediately without registering any menu entries -- the module simply will not
+appear in the menu rather than registering broken entries that fail silently at invocation.
+
+**Load-order note:** `Initialize-AllModules` loads `.psd1` files in alphabetical order. Because
+`AD-PowerAdmin_Utils` sorts after most module names, any module whose filename sorts before
+`AD-PowerAdmin_Utils` must include the Utils bootstrap block shown above. Without it,
+`Assert-ADPAModuleDependency` will throw "not recognized" at `Initialize-Module` call time.
 
 ### Step 4 -- Create or update the wiki page
 

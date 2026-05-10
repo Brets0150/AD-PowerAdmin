@@ -4,6 +4,1088 @@
 
 ---
 
+### Modules/AD-PowerAdmin_GPOMgr.psd1 -- Promoted to Production
+
+**Changed:**
+- `Channel` set to `'Production'`. The module has completed Beta validation across Honeypot,
+  AuditPolicy, and BestPracticesDeployer integration, passed pre-production review (naming reform,
+  verb-group reorder, Utils migration), and has no known issues.
+
+---
+
+### Multiple Modules -- GPOMgr Pre-Production Refactor + Inter-Module Dependency Framework
+
+**Added to Utils (v1.4):**
+- `Assert-ADPAModuleDependency` -- Framework-wide helper for inter-module dependency enforcement.
+  Called from `Initialize-Module` of any module that depends on another AD-PowerAdmin module.
+  Checks whether the required module is loaded, attempts to import it from `$global:ModulesPath`
+  if not, and returns `$false` with a `[FAIL]` message if it cannot be loaded. When it returns
+  `$false`, `Initialize-Module` must return immediately without registering menu entries.
+- `Get-ResolvedDomain` -- Resolves the current AD domain name from an optional parameter or
+  the session default (`$env:USERDNSDOMAIN`). Migrated from `AD-PowerAdmin_GPOMgr` (was private
+  there) to make domain resolution available framework-wide.
+- Replaced wildcard `FunctionsToExport = @("*")` with an explicit list for performance and
+  predictability (v1.4).
+
+**Changed in GPOMgr (v3.0) -- breaking rename of public API:**
+- Renamed 19 public functions by removing the `ADPA` abbreviation where no native GroupPolicy
+  cmdlet conflict exists. Three names retained ADPA to avoid collision with native cmdlets:
+  - `New-ADPAGPO` (native `New-GPO` exists)
+  - `Remove-ADPAGPO` (native `Remove-GPO` exists)
+  - `Backup-ADPAGPO` (native `Backup-GPO` exists)
+- Complete rename map (old -> new):
+  - `Find-ADPAGPO` -> `Find-GPO`
+  - `Test-ADPAGPO` -> `Test-GPO`
+  - `Set-ADPAGPORegistrySetting` -> `Set-GPORegistrySetting`
+  - `Remove-ADPAGPORegistrySetting` -> `Remove-GPORegistrySetting`
+  - `Add-ADPAGPOLink` -> `Add-GPOLink`
+  - `Remove-ADPAGPOLink` -> `Remove-GPOLink`
+  - `Set-ADPAGPOPermission` -> `Set-GPOPermission`
+  - `Export-ADPAGPOReport` -> `Export-GPOReport`
+  - `Install-ADPAGPOBaseline` -> `Install-GPOBaseline`
+  - `Remove-ADPAGPOBaseline` -> `Remove-GPOBaseline`
+  - `Search-ADPAGPOSetting` -> `Search-GPOSetting`
+  - `Backup-AllADPAGPOs` -> `Backup-AllGPOs`
+  - `Get-ADPAGPOBackupList` -> `Get-GPOBackupList`
+  - `Restore-ADPAGPOBackup` -> `Restore-GPOBackup`
+  - `Invoke-ADPAGPOModification` -> `Invoke-GPOModification`
+  - `Search-ADPAGPOSecuritySetting` -> `Search-GPOSecuritySetting`
+  - `Set-ADPAGPOSecuritySetting` -> `Set-GPOSecuritySetting`
+  - `Set-ADPAGPOAdvancedAuditPolicy` -> `Set-GPOAdvancedAuditPolicy`
+  - `Get-ADPAGPOAdvancedAuditPolicy` -> `Get-GPOAdvancedAuditPolicy`
+- Reordered all functions into framework-standard verb groups: Retrieval (Find, Test, Export,
+  Get, Search), Modification (New, Set, Add, Install, Backup, Restore, Invoke), Removal (Remove).
+- Removed `Get-ResolvedDomain` (private) -- migrated to `AD-PowerAdmin_Utils` as a shared utility.
+
+**Changed in GPOBestPracticesDeployer (v1.3):**
+- Added `Assert-ADPAModuleDependency` check at the top of `Initialize-Module`. If
+  `AD-PowerAdmin_GPOMgr` cannot be loaded, the module does not register menu entries and prints
+  a `[WARN]` message instead of silently registering broken entries.
+- Added `RequiredADPAModules = @('AD-PowerAdmin_GPOMgr')` to `PrivateData.PSData` in the
+  manifest as the documentation-level dependency declaration.
+- Updated all 7 GPOMgr call sites to use the v3.0 renamed function names.
+
+**Changed in AuditPolicy + Honeypot:**
+- Updated all call sites to use the renamed GPOMgr v3.0 function names.
+
+**Changed in CLAUDE.md:**
+- Added "Inter-Module Dependencies" subsection under "How to Create a New Module" documenting
+  the `Assert-ADPAModuleDependency` pattern, the `RequiredADPAModules` convention, and the
+  requirement that `Initialize-Module` return early if dependency check fails.
+
+---
+
+### Modules/AD-PowerAdmin_Utils.psm1 -- Remove Dead Code
+
+**Removed:**
+- `Send-EmailTest` -- Removed. This interactive SMTP tester was never registered in any menu
+  and had no call sites anywhere in the codebase. Its functionality is fully covered by
+  `Test-EmailConfiguration` in `AD-PowerAdmin_Installer`, which is registered in the main menu
+  and maintained alongside the current `Send-Email` implementation.
+
+---
+
+### Multiple Modules -- Promote Shared Utilities to Utils (v1.3)
+
+**Added to Utils (v1.3):**
+- `Test-PasswordIsComplex` -- Promoted from `AD-PowerAdmin_PasswordsCtl` where it was private.
+  Tests whether a string meets Windows default password complexity requirements (upper, lower,
+  digit, symbol from at least three categories, minimum eight characters). Now available to
+  any module that generates or validates passwords.
+- `New-RandomPassword` -- Promoted from `AD-PowerAdmin_PasswordsCtl` where it was exported but
+  effectively only used within that module. Rewrote with a `-Length` parameter (default 64) and
+  an `-AsSecureString` switch. Uses unbiased byte-rejection sampling via RNGCryptoServiceProvider
+  across the full printable-ASCII range (33-126); retries until `Test-PasswordIsComplex` passes.
+  Returning a SecureString directly avoids callers having to wrap the result themselves.
+- `Set-SettingsFileValue` -- Promoted from `AD-PowerAdmin_Installer` where it was private.
+  Applies a targeted regex replacement for one `$global:*` variable in the settings file content
+  string. Supports six declaration styles: `bool`, `int`, `string-single`, `string-double`,
+  `string-varref`, `array-ou-locations`. Returns the modified content; the caller writes the file.
+  Now available to any module that needs to persist configuration changes to the settings file.
+
+**Removed from PasswordsCtl:**
+- `New-RandomPassword` -- Removed from the module; now provided by Utils. Removed from
+  `FunctionsToExport`. Internal callers (`Update-KRBTGTPassword`) resolve it from Utils after
+  all modules load.
+- `Test-PasswordIsComplex` -- Removed from the module; now provided by Utils. Was private
+  (not in `FunctionsToExport`); `New-RandomPassword` in Utils calls it from Utils.
+
+**Removed from Installer:**
+- `Set-SettingsFileValue` -- Removed from the module; now provided by Utils. Was private
+  (not in `FunctionsToExport`). The one call site in `Start-SettingsWizard` resolves it
+  from Utils after all modules load.
+
+**Changed in Honeypot:**
+- `New-HoneypotRandomPassword` -- Removed. This function was dead code: it was defined but
+  never called. Password generation was already being done inline inside `New-HoneytokenUser`.
+- `New-HoneytokenUser` -- Replaced the six-line inline RNGCryptoServiceProvider block (with
+  modulo-biased charset sampling) with a single `New-RandomPassword -Length 32` call from Utils.
+  The Utils version uses unbiased rejection sampling and validates complexity.
+- `Set-HoneypotSettings` -- Replaced six hand-coded `$Content -replace` regex expressions with
+  equivalent `Set-SettingsFileValue` calls from Utils. Behavior is identical; duplication is
+  eliminated.
+
+**Why:** Three functions in the codebase were duplicating logic that is useful across modules.
+  `New-RandomPassword` and `Test-PasswordIsComplex` are needed wherever passwords are generated
+  or validated. `Set-SettingsFileValue` is needed wherever a module must persist configuration
+  to the settings file. Centralizing them in Utils removes duplication, ensures consistent
+  behavior, and makes the functions available to future modules without reimplementation.
+
+---
+
+### Modules/AD-PowerAdmin_Honeypot.psd1 -- Promote to Production
+
+**Changed:**
+- `Channel` -- Promoted from `Beta` to `Production` after successful end-to-end validation:
+  authentication test events (4771, 4625) confirmed generated and detected, audit policy
+  pre-checks reporting correctly, email pre-flight guard handling unconfigured settings
+  cleanly, and unattended scheduled task running and logging correctly under Windows Task
+  Scheduler on Server 2016 (PS 5.1.14393).
+
+---
+
+### AD-PowerAdmin_settings.ps1 + Multiple Modules -- Settings File Cleanup
+
+**Changed:**
+- `$global:ReportsEmailFrom` -- Removed. This variable was always set to `$global:FromEmail` and served only as a redundant alias. All callers in `AD-PowerAdmin_PasswordsCtl`, `AD-PowerAdmin_LogMgr`, `AD-PowerAdmin_Honeypot`, and `AD-PowerAdmin_ExchangeAdSecurity` now reference `$global:FromEmail` directly. The Installer settings wizard prompt for this variable has been removed accordingly.
+- `$global:ReportAdminEmailTo` -- Removed. This variable was always set to `$global:ADAdminEmail` and served only as a redundant alias. All callers in `AD-PowerAdmin_PasswordsCtl` now reference `$global:ADAdminEmail` directly. The Installer settings wizard prompt for this variable has been removed accordingly.
+- `$global:SMTPPort` -- Changed type declaration from `[string]` to `[int]` and value from `'25'` to `25`. The port is used as a number and the string type was a mismatch. The Installer wizard now uses `Read-SettingInt` and `VarType = 'int'` when writing this value back to the settings file.
+
+**Fixed:**
+- Duplicate `# EXAMPLE: [string]$global:SMTPServer = ''` comment line in `AD-PowerAdmin_settings.ps1` -- one instance removed.
+- Incorrect variable names `$global:ReportEmailFrom` referenced in two comment lines -- corrected as part of the surrounding block removal.
+- `Send-Email` credential fallback in `AD-PowerAdmin_Utils.psm1` -- line 235 referenced `$global:SMTPUser` (undefined), which silently skipped credential injection even when `$global:SMTPUsername` and `$global:SMTPPassword` were configured. Corrected to `$global:SMTPUsername`.
+- Decentralized honeypot settings template in `AD-PowerAdmin_Honeypot.psm1` -- removed the line that emitted `$global:ReportsEmailFrom` into the generated settings snippet, since that variable no longer exists.
+
+**Impact:** No change in email sending behavior. The removed variables were always equal to the variables they referenced. The `SMTPUsername` credential bug fix means SMTP authentication will now work correctly when credentials are configured.
+
+---
+
+### Modules/AD-PowerAdmin_Installer.psm1 + .psd1 -- Email Configuration Diagnostic Test
+
+**Added:**
+- `Test-EmailConfiguration` -- Multi-stage SMTP diagnostic function accessible from the
+  AD-PowerAdmin Management submenu. Performs four sequential stages:
+  1. **Settings validation** -- confirms `SMTPServer`, `FromEmail`, and `ADAdminEmail` are all
+     non-empty; exits early with a targeted fix message if any are missing.
+  2. **DNS resolution** -- detects whether `SMTPServer` is an IP address (skips DNS) or a
+     hostname (calls `[System.Net.Dns]::GetHostEntry`); prints resolved IPs or failure details
+     with likely causes on error.
+  3. **TCP port connectivity** -- opens a `System.Net.Sockets.TcpClient` connection with a
+     5-second timeout; distinguishes a timeout from an active refusal and lists firewall,
+     wrong-port, and server-offline as likely causes.
+  4. **SMTP send test** -- drives `Net.Mail.SmtpClient` directly (rather than calling
+     `Send-Email`) so exceptions propagate to a catch block that distinguishes
+     `SmtpException` (auth/relay failure with `StatusCode`), `AuthenticationException`
+     (TLS handshake failure), `SocketException` (network drop after TCP success), and a
+     general catch-all. On success, confirms the message was sent and asks the admin to
+     verify delivery. The test email body includes the hostname, timestamp, and all SMTP
+     settings used, giving the admin a confirmation receipt for the exact configuration.
+  Prints a `[PASS]` / `[FAIL]` banner at each stage and a final summary. On any failure,
+  directs the admin to the Settings Wizard in the same submenu.
+
+**Why:** Alerting is a critical component of AD-PowerAdmin's security monitoring. When email
+  delivery fails silently (e.g., after a network change or settings file edit), there is no
+  built-in tool to distinguish a misconfigured setting from a firewall block from an SMTP
+  authentication failure. This function gives administrators a single command that walks
+  through every layer of the delivery path and surfaces exactly where the problem is.
+
+---
+
+### AD-PowerAdmin.ps1 -- Unattended Log Silence and Error Suppression
+
+**Fixed:**
+- `Initialize-Debug` -- The function used a `try/catch` around `Get-Transcript | Out-Null` to
+  detect whether a transcript was already running. In PowerShell 5.1, `Get-Transcript` returns
+  `$null` silently when no transcript is active -- it does NOT throw. The try block always
+  succeeded, `$TranscriptRunning` was always `$true`, and the `if (!$TranscriptRunning)` guard
+  never allowed `Start-Transcript` to execute. The debug log was therefore never created when
+  the script ran under PS 5.1 (including the default Windows Task Scheduler environment).
+  Replaced the pattern with: default `$false`, try calling `Get-Transcript -ErrorAction Stop`
+  inside a try/catch, and use `IsNullOrWhiteSpace` on the result. The outer catch handles
+  `CommandNotFoundException` on Server 2016 RTM builds (PS 5.1.14393) where `Get-Transcript`
+  does not exist; the inner null-safe check handles builds where it exists but returns `$null`
+  when no transcript is active.
+- `Start-Automation` -- The `Invoke-Expression` call that dispatches the unattended job command
+  used `-ErrorAction:SilentlyContinue`, which silenced all errors thrown by the called function.
+  Any runtime error inside the job (e.g., inside `Start-HoneypotMonitor`) was swallowed before
+  it could be written to the transcript, making failures completely invisible in the log.
+  Removed the `-ErrorAction:SilentlyContinue` flag so errors propagate normally and are captured
+  by the active transcript.
+- `Start-Automation` -- Windows Task Scheduler passes PowerShell `-File` script arguments as
+  raw Windows command-line tokens. Single quotes are NOT stripped by Windows argument parsing
+  (only double quotes are removed). A task configured with `-JobName 'HoneypotHourlyMonitor'`
+  delivered the literal string `'HoneypotHourlyMonitor'` (with quote characters) to `$JobName`.
+  The hashtable key is `HoneypotHourlyMonitor` without quotes, so the `$_.JobName -eq $JobName`
+  comparison always failed and no job ever ran. Added `$JobName = $JobName.Trim("'").Trim('"')`
+  immediately after the null-check to strip any surrounding quote characters before matching.
+
+**Why:** The scheduled-task path (unattended mode, PS 5.1) produced no output in either
+  `AD-PowerAdmin_Unattended.log` or `AD-PowerAdmin_Debug.log` even with both `$global:Debug`
+  and `$global:UnattendedLog` set to `$true`, and no job function was being executed at all.
+  The three fixes together restore both log output and correct job dispatch for unattended
+  runs under Windows Task Scheduler on Server 2016.
+
+---
+
+### Modules/AD-PowerAdmin_Utils.psm1 + AD-PowerAdmin_AuditPolicy.psm1 -- Promote Generic Helpers to Utils (v1.2 / v1.9)
+
+**Added to Utils (v1.2):**
+- `Get-SystemRole` -- Returns `'DomainController'`, `'MemberServer'`, or `'Workstation'` by querying
+  `Win32_OperatingSystem.ProductType` via CIM. Promoted from `Get-ADPSystemRole` in the AuditPolicy
+  module, which was private and unavailable to other modules. Any module that needs role-aware behavior
+  (baseline selection, DC-only checks, etc.) can now call this shared function.
+- `Write-WrappedText` -- Writes a labeled, word-wrapped text block to the console. First line is
+  `Indent + Label + text`; continuation lines are indented to align under the label. Promoted from
+  `Write-ADPWrappedText` in the AuditPolicy module. Complements the existing `Get-WordWrap` utility
+  (which returns wrapped strings without writing to the console). Any module with a help page or
+  formatted diagnostic output can now use this without reimplementing the alignment logic.
+
+**Removed from AuditPolicy (v1.9):**
+- `Get-ADPSystemRole` -- Private function removed; replaced by `Get-SystemRole` from Utils. All call
+  sites in `Start-ADPAuditPolicyCheck` and `Export-ADPAuditPolicyReport` updated.
+- `Write-ADPWrappedText` -- Private function removed; replaced by `Write-WrappedText` from Utils. All
+  call sites in `Show-ADPAuditFindings` and `Show-ADPAuditPolicyHelp` updated.
+
+**Why:** Both functions contained no audit-policy-specific logic and were candidates for reuse by any
+  current or future module. Moving them to Utils removes the module-scoped prefix, makes them available
+  framework-wide, and eliminates the need for other modules to reimplement the same WMI call or the
+  same label-alignment formatting pattern.
+
+---
+
+### Modules/AD-PowerAdmin_Utils.psm1 -- Send-Email Clean Failure on Missing Configuration
+
+**Fixed:**
+- `Send-Email` -- Required parameters (`ToEmail`, `FromEmail`, `Subject`, `Body`) were declared
+  `Mandatory=$true`. When a caller passed an empty string (e.g., `$global:ADAdminEmail` not yet
+  configured), PowerShell threw an unhandled `ParameterBindingValidationException` before the
+  function body could run, producing a raw engine error with no actionable message. Changed all
+  parameters to `Mandatory=$false` and added explicit `[string]::IsNullOrWhiteSpace` checks at
+  the top of the function body for all four required fields. Each check emits a clear red message
+  naming the missing setting and the settings file where it must be configured, then returns.
+- `Send-Email` -- Fixed a duplicate `Position=3` attribute on both `$CcEmail` and `$Subject`,
+  which causes undefined positional parameter binding behavior in PowerShell. Assigned unique
+  sequential positions (3 through 10) to all parameters.
+- `Send-Email` -- The `$SmtpServer` and `$SmtpPort` resolution blocks used `$SmtpX -ne ''`
+  comparisons, which do not handle `$null`. Replaced all empty-string comparisons throughout
+  the parameter resolution logic with `[string]::IsNullOrWhiteSpace()` for consistency and
+  correctness. Also fixed a case inconsistency where the SmtpServer block checked
+  `$global:SmtpServer` (lowercase 's') but read `$global:SMTPServer` (uppercase).
+- `Send-Email` -- Credential resolution used two independent `if` blocks, meaning global
+  credentials always overrode explicit parameters. Replaced with `if/elseif` so explicit
+  parameters take precedence over global settings, matching the precedence order used for
+  SmtpServer and SmtpPort.
+
+**Why:** Any caller passing an unconfigured global variable as `ToEmail` or `FromEmail`
+  triggered a raw PowerShell engine error instead of a recoverable diagnostic. The fix ensures
+  `Send-Email` always fails gracefully with a message that points to the correct remediation.
+
+---
+
+### Modules/AD-PowerAdmin_Honeypot.psm1 -- Audit Policy Check False Negative
+
+**Fixed:**
+- `Test-HoneypotAuditPolicy` -- The function used `auditpol.exe /get /subcategory:GUID /r`
+  and parsed the CSV output by filtering out any line starting with "Machine" and then
+  splitting on commas to extract field index 4 (Inclusion Setting). On the target Windows
+  version this parsing fails silently for all four subcategories: the `Where-Object` filter
+  returns nothing (likely due to a format or blank-line difference in the `/r` output),
+  so `[0]` yields `$null`, the split produces a 1-element array, the `Count -ge 5` guard
+  fails, and every subcategory reports "Unknown" -- triggering a false WARN even when
+  auditing is fully enabled (confirmed by the monitor finding real events immediately after).
+  Replaced with plain-text `auditpol /get /subcategory:GUID` (no `/r`) and direct
+  pattern-matching against the four known setting strings: "No Auditing", "Success and
+  Failure", "Success", "Failure". "Success and Failure" is tested first to avoid a
+  substring false-match against the single-word checks.
+
+**Why:** Administrators were seeing audit policy warnings on a correctly configured DC,
+  causing unnecessary confusion before every test run. The /r CSV parsing is fragile across
+  Windows versions; the plain-text pattern match is format-independent.
+
+---
+
+### Modules/AD-PowerAdmin_Honeypot.psm1 -- Detection Test and Event Search Bug Fixes
+
+**Fixed:**
+- `Get-HoneypotEventsBatch` -- Complete rewrite of the event query mechanism. The original
+  implementation used `Get-WinEvent -FilterXPath` with a manually-constructed UTC timestamp
+  string (`yyyy-MM-ddTHH:mm:ss.000Z`). The Windows Event Log RPC service evaluates this
+  XPath on the remote DC; on some Windows Server versions, the TimeCreated XPath predicate
+  silently returns zero results over RPC even when matching events are present. The query has
+  been replaced with `Get-WinEvent -FilterHashtable` using `StartTime`/`EndTime` datetime
+  objects directly, which lets PowerShell handle UTC conversion internally via the structured
+  query XML path rather than raw XPath string evaluation. This resolves the silent zero-result
+  failure for 4771 and other Kerberos events confirmed present in the Security log.
+- `Get-HoneypotEventsBatch` -- The `IsLocal` detection compared `$ComputerName` against
+  `$env:COMPUTERNAME` with an exact string match. `Get-ADDomainController` returns FQDNs
+  (e.g. `FL-222.tdcme.loc`) while `$env:COMPUTERNAME` is the NetBIOS short name (`FL-222`).
+  The comparison always failed when the script ran on the DC itself, causing every query to
+  take the remote RPC path (querying the local machine over the network) instead of the direct
+  local log access path. Fixed by splitting both names on `.` and comparing only the NetBIOS
+  portion before checking equality.
+- `Invoke-HoneypotTestServiceTicket` -- The function called `klist.exe get SPN` without first
+  confirming the SPN was registered as `servicePrincipalName` on the honeytoken AD account. If
+  the SPN existed in `$global:HoneypotSPN` but was absent from the account in AD, the KDC
+  returned `KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN` and no 4769 event was logged; the klist exit code
+  was reported only as a vague warning. Added a pre-flight `Get-ADUser -Properties
+  servicePrincipalName` check before calling klist. If the SPN is missing, the function shows
+  the SPNs currently on the account and the exact `Set-ADUser` remediation command.
+
+- `Invoke-HoneypotTestAuthAttempt` -- The function used `AuthType::Negotiate` for the LDAP bind.
+  Negotiate selects Kerberos when the DC advertises GSSAPI support (which all DCs do), generating
+  Event 4771 (Kerberos pre-auth failure) but never 4625 (failed logon), because 4625 is produced
+  only by NTLM authentication failures. Added a second LDAP bind using `AuthType::Ntlm` after the
+  existing Kerberos bind. Both binds use the same randomly generated wrong password. The NTLM bind
+  generates Event 4625 on the DC, completing coverage of both authentication protocol detection
+  paths. The two binds are shown separately in output ([1/2] Kerberos, [2/2] NTLM) so the admin
+  can confirm each is rejected as expected.
+- `Start-HoneypotMonitor` -- The `Send-Email` call had no guard against empty `$global:ADAdminEmail`
+  or `$global:SMTPServer`. When either is unconfigured, `Send-Email` threw an unhandled
+  `ParameterBindingValidationException` that printed a raw PowerShell error before continuing. Added
+  a pre-flight check: if either setting is empty, a clear `[SKIP]` message is printed and
+  `Send-Email` is not called. The success message now says "Alert sent to <address>" only when the
+  email was actually sent, and includes the recipient address for confirmation.
+
+**Why:** Two compounding bugs prevented the event search from finding 4771 events that were
+  confirmed present in the Security log: the XPath time filter failed silently over RPC on this
+  Windows version, and the IsLocal check misidentified the DC as a remote machine, routing all
+  queries through the failing RPC path. Switching to -FilterHashtable removes both failure modes.
+  The klist pre-flight surfaces the most common cause of missing 4769 events before klist runs.
+  The NTLM bind addition and email guard complete the test pipeline so all detection paths can
+  be exercised end to end.
+
+---
+
+### Modules/AD-PowerAdmin_AuditPolicy.psm1 -- Diagnostic and Help Alignment for Dual-CSE Requirement (v1.8)
+
+**Fixed:**
+- `Test-ADPAuditPolicyGpoDiagnostic` Check 6 -- Event filter previously matched only Security
+  CSE events (`827D319E` / "Security" keyword). Because Advanced Audit Policy GPOs require two
+  separate CSEs -- the Security Settings CSE (`{827D319E-...}`) and the Audit Policy Configuration
+  CSE (`{F3CCC681-...}`) -- a deployment where only the Audit Policy CSE was missing would show
+  zero events in Check 6, making it appear as though GP had not run at all rather than pointing to
+  the missing CSE registration. The filter now also matches `F3CCC681` and the "Audit Policy" string
+  so any CSE event relevant to audit policy processing is captured. Labels updated from "Security CSE
+  events" to "audit policy CSE events" throughout.
+- `Test-ADPAuditPolicyGpoDiagnostic` Resolution Guide step 1 -- Previously read "Security CSE GUID
+  missing from AD object" and named only `{827D319E-...}`. Updated to name both required GUIDs
+  (`{827D319E-...}` Security and `{F3CCC681-...}` Audit Policy) and describe the fix for each.
+- `Test-ADPAuditPolicyGpoDiagnostic` `.DESCRIPTION` -- Check 6 description updated to mention both
+  Security CSE and Audit Policy CSE event filtering.
+
+**Added:**
+- `Show-ADPAuditPolicyHelp` GPO Deployment section -- Added explanatory paragraph documenting the
+  three CSE blocks registered in `gPCMachineExtensionNames` by each deployment (Registry CSE for
+  log sizes and NTLM registry settings, Security Settings CSE for `GptTmpl.inf`, Audit Policy
+  Configuration CSE for `audit.csv`). Without all three, the GP client silently skips the
+  corresponding file on every refresh. Directs administrators to `Test-ADPAuditPolicyGpoDiagnostic`
+  if settings appear not to be applying.
+
+**Why:** The Check 6 event filter was written before the Audit Policy CSE (`{F3CCC681-...}`) was
+  identified as a required second CSE for Advanced Audit Policy GPOs. After that root cause was
+  found and the deployer was fixed, the diagnostic and help page still described only the Security
+  CSE, leaving a gap between what the tool deployed and what it explained.
+
+---
+
+### Modules/AD-PowerAdmin_AuditPolicy.psm1 -- Summary Count Display and Directory Service Log GPO (v1.7)
+
+**Fixed:**
+- `Show-ADPAuditFindings` -- Summary line displayed a blank value instead of the integer count
+  when exactly one finding of a given severity existed. Root cause: `Where-Object` in PS5.1
+  returns a scalar `PSCustomObject` (not an array) when exactly one item passes the filter.
+  Calling `.Count` on a `PSCustomObject` in PS5.1 returns `$null` rather than 1, because scalar
+  member synthesis in PS5.1 synthesizes `.Count = 1` only for simple value types, not for
+  `PSCustomObject`. `$null` interpolates as an empty string in the format string, producing
+  `" High"` instead of `"1 High"`. Fixed by wrapping all four severity `Where-Object` calls
+  in `@()` to force array context before calling `.Count`, which returns the correct integer
+  regardless of whether 0, 1, or many items match.
+- `New-ADPAuditPolicyGpo` -- Directory Service log size policy was writing to the ADMX-backed
+  registry path (`HKLM\SOFTWARE\Policies\Microsoft\Windows\EventLog\Directory Service\MaxSize`)
+  which the Windows Event Log service does not process for application-registered logs. The
+  Event Log service honors the ADMX path only for logs covered by the built-in `EventLog.admx`
+  template (Security, System, Application). The Directory Service log reads its maximum size
+  exclusively from the legacy registry key `HKLM\SYSTEM\CurrentControlSet\Services\Eventlog\
+  Directory Service\MaxSize`, where the value is in bytes (not KB). Fixed by removing Directory
+  Service from the `$LogAdmxNames` ADMX table and adding a dedicated DC-baseline block (step 4b)
+  that writes the preferred size in bytes to the correct SYSTEM path as a non-ADMX Extra Registry
+  Setting. Re-deploying the DC baseline GPO and running `gpupdate /force` will now update the
+  actual log maximum size.
+
+**Why:** The v1.6 fix (adding Directory Service to `$LogAdmxNames`) wrote to the correct GPO
+  object but the wrong registry key. After `gpupdate /force`, the ADMX key in SOFTWARE\Policies
+  was set but the Event Log service never read it, leaving the actual log at 1 MB.
+
+---
+
+### Modules/AD-PowerAdmin_AuditPolicy.psm1 -- Directory Service Log Size Missing from DC Baseline GPO (v1.6)
+
+**Fixed:**
+- `New-ADPAuditPolicyGpo` -- The `Directory Service` Windows Event Log was omitted from the
+  `$LogAdmxNames` dictionary that controls which event logs have their maximum size written to
+  the GPO's Registry.pol. The DomainController baseline (`$script:AuditBaselines.DomainController
+  .EventLogs`) already defines `'Directory Service'` with a 256 MB compliance minimum and a 1 GB
+  preferred size, and `Compare-ADPAuditPolicyBaseline` correctly flags the log as `[HIGH]` when
+  under-sized -- but because the deployer skipped the log, re-deploying the baseline GPO never
+  actually applied the fix. The `$LogAdmxNames` table now includes `'Directory Service' = 'Directory
+  Service'`, causing the deployer to write
+  `HKLM\SOFTWARE\Policies\Microsoft\Windows\EventLog\Directory Service\MaxSize` to Registry.pol.
+
+**Why it was fixed:** The compliance checker (45-check DC audit) correctly identified the
+  Directory Service log at 1 MB as a `[HIGH]` finding, but the fix path (redeploy the DC baseline
+  GPO) silently had no effect because the deployer never included that log. Symptom was the check
+  remaining non-compliant after every GPO redeployment.
+
+**Impact:** Re-deploying the DC baseline GPO (`Deploy DC Baseline GPO`) will now write the
+  `Directory Service` log size policy. After `gpupdate /force`, the log maximum size will be set
+  to 1024 MB (1 GB preferred), which satisfies the >= 256 MB compliance minimum.
+
+---
+
+### Modules/AD-PowerAdmin_GPOMgr.psm1 / AD-PowerAdmin_GPOMgr.psd1 / AD-PowerAdmin_AuditPolicy.psm1 -- Missing Audit Policy CSE in gPCMachineExtensionNames
+
+**Fixed:**
+- `Set-ADPAGPOAdvancedAuditPolicy` and `New-ADPAuditPolicyGpo` -- The Audit Policy Configuration CSE GUID `{F3CCC681-B74C-4060-9F26-CD84525DCA2A}` paired with tool GUID `{0F3F3735-573D-9804-99E4-AB2A69BA5FD4}` was missing from `gPCMachineExtensionNames` on every GPO created by this module. Advanced Audit Policy (audit.csv) is processed by a dedicated CSE that is separate from the Security Settings CSE (`{827D319E-...}`). Without `{F3CCC681-...}` in `gPCMachineExtensionNames`: (1) the GPMC Settings display omits the Advanced Audit Policy section entirely, and (2) the Group Policy client never invokes the Audit Policy CSE so audit.csv settings are never applied to target computers regardless of how many times gpupdate runs.
+- `Update-GptIniVersion` -- Added an `ExtraCseBlocks [string[]]` parameter so callers can register additional CSE blocks alongside the Security CSE. `Set-ADPAGPOAdvancedAuditPolicy` now passes `$AuditPolicyCse` when it calls `Update-GptIniVersion`, ensuring the Audit Policy CSE is registered immediately when audit.csv is written. Also refactored the AD object update to use the proper merge-and-sort pattern (parse existing blocks, add missing ones, sort alphabetically) rather than simple string concatenation, matching the format GPMC produces.
+
+**Why:** Root cause identified by ldapsearch comparison of the AD object attributes on two GPOs: a PS-only GPO and a GPO that had been opened and saved once in the GPMC editor. The PS-only GPO had `gPCMachineExtensionNames` with two blocks (Registry CSE + Security CSE). The GPMC-saved GPO had three blocks, the third being `[{F3CCC681-B74C-4060-9F26-CD84525DCA2A}{0F3F3735-573D-9804-99E4-AB2A69BA5FD4}]`. This confirmed that GPMC registers the Audit Policy CSE when it saves a GPO containing Advanced Audit Policy settings, and that our code was not doing so.
+
+**Impact:** GPOMgr version bumped from 1.9 to 2.0. AuditPolicy version bumped from 1.4 to 1.5. Previously deployed GPOs created by `New-ADPAuditPolicyGpo` have never applied their Advanced Audit Policy settings because the Audit Policy CSE was not registered. Re-run "Deploy DC Baseline GPO" or "Deploy Standard Computer Baseline GPO" (idempotent) then run `gpupdate /force` on target systems. Verify with `auditpol /get /category:*` that subcategory settings now match the baseline.
+
+---
+
+### Modules/AD-PowerAdmin_AuditPolicy.psm1 / AD-PowerAdmin_AuditPolicy.psd1 -- GPMC Settings Display Missing Audit Policy
+
+**Fixed:**
+- `New-ADPAuditPolicyGpo` -- Step 5b (re-registration of Security CSE in gPCMachineExtensionNames after Set-GPRegistryValue overwrote it) used `Get-ADObject -Filter "Name -eq '$GpoGuidStr' ..."` which can silently return `$null` when the filter doesn't match or when there is a transient search issue. When `$null` was returned the `if ($GpoAdObj2)` guard skipped the entire update with no warning, leaving `gPCMachineExtensionNames` set to only the Registry CSE block written by `Set-GPRegistryValue`. GPMC reads `gPCMachineExtensionNames` from the AD object to determine which sections to render in the Settings display; without the Security CSE GUID `{827D319E-6EAC-11D2-A4EA-00C04F79F83A}`, the entire Security Settings section (including Advanced Audit Policy) is omitted from the report, even though audit.csv exists and is correct in SYSVOL. The GPO Editor bypasses this check and reads SYSVOL directly, which is why audit settings appeared correctly in the editor but not in the Settings display. Opening the editor and saving caused GPMC to register the Security CSE GUID in the AD object, after which the Settings display worked. The fix replaces the Filter-based lookup with a DN-based lookup (`Get-ADObject -Identity "CN={GUID},CN=Policies,CN=System,$DomainDN"`) which throws an exception if the object does not exist rather than returning null silently. The fix also explicitly adds both the Security CSE block and the Registry CSE block when building the final value, rather than only patching in the Security CSE, ensuring both the Registry Policy Processing CSE (`{35378EAC-...}`) and Security Settings CSE (`{827D319E-...}`) are always present. Added diagnostic output showing the before and after values of `gPCMachineExtensionNames` so operators can confirm the update on each deployment.
+
+**Why:** Root cause identified by direct SYSVOL comparison between a PS-only GPO and a GPO that had been edited once in the GPMC editor. All SYSVOL files (audit.csv, GptTmpl.inf, Registry.pol, gpt.ini) were identical in content; the only functional difference was that GPMC's editor registered the Security CSE in the AD object when it saved. The prior Filter-based Get-ADObject lookup was the silent failure point.
+
+**Impact:** AuditPolicy module version bumped from 1.3 to 1.4. Previously deployed GPOs created by `New-ADPAuditPolicyGpo` will not have shown audit policy settings in the GPMC Settings display. Re-run "Deploy DC Baseline GPO" (which is idempotent) to update the AD object's `gPCMachineExtensionNames` attribute on existing GPOs. After re-deployment run `gpupdate /force` on target systems.
+
+---
+
+### Modules/AD-PowerAdmin_GPOMgr.psm1 / AD-PowerAdmin_GPOMgr.psd1 -- audit.csv Encoding, INI Format, and gpt.ini Attribute Fixes
+
+**Fixed:**
+- `Set-ADPAGPOAdvancedAuditPolicy` -- audit.csv was written as UTF-16 LE with BOM (`ff fe` prefix). Direct hex comparison against a GPMC-generated audit.csv confirmed the correct encoding is UTF-8 without BOM. The Windows Security Configuration Engine skips audit.csv when a BOM is present because the file format is plain CSV and the BOM is not part of the column header. Changed `[System.Text.Encoding]::Unicode` to `[System.Text.UTF8Encoding]::new($false)` in the `StreamWriter` constructor.
+- `ConvertTo-IniLines` -- Was writing `Key = Value` with spaces around the `=` delimiter. Windows INI files (gpt.ini and GptTmpl.inf) use `Key=Value` without spaces. This mismatch caused the `Version` field in regenerated gpt.ini files to be written with a space, which the Group Policy client could not parse. Fixed to use `"$Key=$($Sections[$Section][$Key])"`.
+- `Update-GptIniVersion` -- Was writing a `gPCMachineExtensionNames` line into the gpt.ini file. The natural Windows gpt.ini contains only `[General]`, `Version=N`, and `displayName=New Group Policy Object`; it never contains `gPCMachineExtensionNames`. That attribute belongs exclusively in the GPO AD object (`groupPolicyContainer`), which is where the GP client reads it. The fix removes any `gPCMachineExtensionNames` key from the parsed INI sections before writing back to disk, and ensures the new-file creation path also writes only the three correct lines.
+
+**Why:** Root cause confirmed by mounting the domain SYSVOL and hexdumping both a GPMC-generated GPO and the script-generated GPO side-by-side. The natural audit.csv had no BOM (`4d 61 63 68 69 6e 65`); the script-generated file had `ff fe` BOM followed by UTF-16 wide characters. After correcting the column layout (v1.8) the SCE could read the file structure but the BOM still blocked processing.
+
+**Impact:** GPOMgr version bumped from 1.8 to 1.9. Re-run "Deploy DC Baseline GPO" or "Deploy Standard Computer Baseline GPO" to redeploy; the operation is idempotent. After redeployment, run `gpupdate /force` on target systems. The Advanced Audit Policy subcategory settings should now appear in GPMC and be applied by the Security Configuration Engine.
+
+---
+
+### AD-PowerAdmin.ps1 -- Credits Screen
+
+**Added:**
+- `Show-Credits` -- Displays a formatted attribution screen listing every third-party tool, module, and code extract that AD-PowerAdmin depends on or embeds. Each entry includes the tool name, author, a brief description of its role in the framework, and the project URL. Credits listed: DSInternals (Michal Grafnetter), Have I Been Pwned Pwned Passwords API (Troy Hunt), Weak Passwords List (weakpasswords.net), Calendar GUI Widget (PowerShell Gallery v1.0.0), and PoShEvents (Jason Walker, PowerShell Gallery v0.2.1).
+- `c` shortcut in `Enter-MainMenu` -- Typing `c` at the interactive menu prompt invokes `Show-Credits`. The option is visible in the menu footer alongside `h. Help`, `q. Quit`, and `qq. Quit Application`.
+
+**Why:** AD-PowerAdmin embeds or directly depends on several third-party works. Providing in-tool attribution acknowledges these contributions and gives administrators a single place to identify external dependencies and their upstream sources.
+
+**Impact:** No change to AD functionality or security posture. The menu footer gains one new visible option. All existing shortcuts are unaffected.
+
+---
+
+### Modules/AD-PowerAdmin_GPOMgr.psm1 / AD-PowerAdmin_GPOMgr.psd1 -- audit.csv Column Layout, Encoding, and GUID Format Corrected
+
+**Fixed:**
+- `Set-ADPAGPOAdvancedAuditPolicy` -- Four corrections confirmed by comparing against a GPMC-generated audit.csv from a manually configured GPO:
+  1. **Encoding**: Changed from UTF-8 without BOM to `[System.IO.StreamWriter]` with `[System.Text.Encoding]::Unicode` (UTF-16 LE with BOM). The SCE and GPMC require this encoding; UTF-8 caused both to silently skip the file.
+  2. **Column layout**: The Windows format puts the text label ("No Auditing", "Success", "Failure", "Success and Failure") in the Inclusion Setting column and the corresponding integer (0-3) in the Setting Value column. Our code had this backwards -- integer in Inclusion Setting, empty in Setting Value. The GPMC snapin calls `Convert.ToUInt32()` on Setting Value; an empty value throws a `FormatException` that crashes the Advanced Audit Policy snapin with "A severe error occurred... Input string was not in a correct format."
+  3. **Subcategory name**: Windows format prepends "Audit " to every subcategory display name (e.g. "Audit Credential Validation", "Audit Audit Policy Change"). Updated to match.
+  4. **GUID case**: Windows format uses lowercase GUIDs. Merge table keys also normalized to lowercase to prevent duplicate entries on idempotent re-deployment.
+- `Get-ADPAGPOAdvancedAuditPolicy` -- Updated to derive the integer inclusion value from the Setting Value column (new format) with fallback to Inclusion Setting text or integer (backward-compatible with pre-fix deployments).
+
+**Why:** Root cause identified by directly inspecting the SYSVOL audit.csv from a GPO that was manually configured through the GPMC UI and comparing field by field against what our code was generating. The column layout was inverted and the subcategory naming and GUID casing did not match the format the snapin expects.
+
+**Impact:** GPOMgr version bumped from 1.7 to 1.8. Re-run "Deploy DC Baseline GPO" or "Deploy Standard Computer Baseline GPO", then `gpupdate /force` on target systems. GPMC should now open the Advanced Audit Policy section without errors and display all configured subcategories.
+
+---
+
+### Modules/AD-PowerAdmin_AuditPolicy.psm1 -- audit.csv Write Verification
+
+**Added:**
+- `New-ADPAuditPolicyGpo` -- After `Set-ADPAGPOAdvancedAuditPolicy` writes audit.csv, immediately calls `Get-ADPAGPOAdvancedAuditPolicy` to read the file back from SYSVOL. Reports the confirmed row count if it matches the expected entry count, or a `[WARN]` with the actual vs expected count if there is a mismatch. This makes SYSVOL write failures immediately visible during deployment rather than requiring manual SYSVOL inspection.
+
+---
+
+### Modules/AD-PowerAdmin_AuditPolicy.psm1 -- Security CSE Overwritten by Registry Writes
+
+**Fixed:**
+- `New-ADPAuditPolicyGpo` -- After writing Advanced Audit Policy subcategory settings (`audit.csv`) and security options (`GptTmpl.inf`) via `Set-ADPAGPOAdvancedAuditPolicy` and `Set-ADPAGPOSecuritySetting`, the function then called `Set-ADPAGPORegistrySetting` (which uses `Set-GPRegistryValue`) to write event log size settings and NTLM audit registry values. The native `Set-GPRegistryValue` GP API rewrites the GPO AD object's `gPCMachineExtensionNames` attribute to register the Registry CSE, overwriting the Security Settings CSE GUID (`{827D319E-6EAC-11D2-A4EA-00C04F79F83A}`) that the earlier `Update-GptIniVersion` calls had registered. With the Security CSE GUID absent from `gPCMachineExtensionNames`, the Group Policy client skips `audit.csv` and `GptTmpl.inf` entirely on every refresh -- audit subcategory settings never apply, and GPMC does not display the Security Settings section. The fix adds a confirmation block (step 5b) between the NTLM settings write and the GPO link that reads `gPCMachineExtensionNames` from the GPO AD object, and if the Security CSE GUID is missing, parses the existing blocks, appends the Security CSE block, sorts alphabetically, and writes the merged value back via `Set-ADObject`.
+
+**Why:** Observed after deploying the DC Audit Policy baseline GPO: GPMC showed only event log size settings (Administrative Templates), with no Advanced Audit Policy or Security Settings sections. The root cause was confirmed by reading `gPCMachineExtensionNames` on the GPO AD object directly -- it contained only the Registry CSE GUID, not the Security CSE GUID.
+
+**Impact:** Any previously deployed GPO created by `New-ADPAuditPolicyGpo` will not have applied its audit subcategory settings. Re-run "Deploy DC Baseline GPO" or "Deploy Standard Computer Baseline GPO" to re-deploy; the operation is idempotent and will update the AD object on the existing GPO. After re-deployment, run `gpupdate /force` on target systems.
+
+---
+
+### Modules/AD-PowerAdmin_AuditPolicy.psm1 / AD-PowerAdmin_AuditPolicy.psd1 -- GPO Diagnostic Function
+
+**Added:**
+- `Test-ADPAuditPolicyGpoDiagnostic` -- Interactive six-check diagnostic for identifying why a deployed audit policy GPO is not producing the expected effective policy on a domain controller or member system. Checks performed in order: (1) GPO existence via Get-GPO; (2) Security Settings CSE GUID registration in the GPO AD object's gPCMachineExtensionNames attribute -- the most common cause of settings not applying; (3) GPO link state for all linked locations via Get-GPOReport; (4) SYSVOL content verification -- audit.csv row count, GptTmpl.inf presence and SCENoApplyLegacyAuditPolicy inclusion, and gpt.ini version vs AD object versionNumber consistency; (5) effective audit policy on the target system via auditpol.exe with baseline comparison showing exactly which subcategories are still wrong and what they are set to; (6) Group Policy Operational event log on the target system for the last 24 hours, identifying GP refresh events and Security CSE success/warning/failure events. Ends with a numbered resolution guide ranked by likelihood of root cause. Registered as a submenu item in AuditPolicyMenu.
+
+**Why:** After deploying the audit policy GPO and running gpupdate /force, the compliance check continued to report the same Critical and High findings. The root cause was the missing Security CSE GUID in the GPO AD object (addressed in a prior fix), but operators needed a systematic tool to diagnose this and similar issues independently without requiring manual inspection of SYSVOL, Active Directory, or event logs.
+
+**Impact:** AuditPolicy module version bumped from 1.2 to 1.3. The diagnostic is accessible from the Audit Policy Management submenu as a fifth option.
+
+---
+
+### Modules/AD-PowerAdmin_GPOMgr.psm1 -- GPO AD Object Not Updated After Security Settings Write
+
+**Fixed:**
+- `Update-GptIniVersion` -- Previously updated only the `gpt.ini` file on SYSVOL. The Group Policy client reads `gPCMachineExtensionNames` from the **GPO AD object** (not from `gpt.ini`) to determine which Client-Side Extensions (CSEs) to invoke. Because the Security Settings CSE GUID `{827D319E-6EAC-11D2-A4EA-00C04F79F83A}` was never written to the AD object's `gPCMachineExtensionNames` attribute, Windows silently skipped the Security CSE on every `gpupdate`. As a result, neither `GptTmpl.inf` (which sets `SCENoApplyLegacyAuditPolicy` and other security options) nor `audit.csv` (which sets Advanced Audit Policy subcategory settings) was ever processed by target computers, regardless of how many times Group Policy was refreshed. The fix extends `Update-GptIniVersion` to also call `Set-ADObject` on the GPO container object in Active Directory, updating both `gPCMachineExtensionNames` (to register the Security CSE) and `versionNumber` (to match the version in `gpt.ini`). Event log size settings were unaffected because those use `Set-GPRegistryValue`, which updates the AD object automatically.
+
+**Why:** Discovered after a deployed GPO produced no change in `auditpol.exe` output even after `gpupdate /force`. Root cause: the Windows GP engine reads the CSE list from the AD object at policy application time, and our SYSVOL-only write left that attribute empty.
+
+**Impact:** GPOMgr version bumped from 1.5 to 1.6. Any GPOs previously deployed by `New-ADPAuditPolicyGpo` or other modules using `Set-ADPAGPOSecuritySetting` or `Set-ADPAGPOAdvancedAuditPolicy` were not applying their security settings. Re-run the relevant deploy action to update the AD object on each affected GPO; the operation is idempotent and will not duplicate settings.
+
+---
+
+### Modules/AD-PowerAdmin_AuditPolicy.psm1 -- SCENoApplyLegacyAuditPolicy Check Always Read Local Registry
+
+**Fixed:**
+- `Compare-ADPAuditPolicyBaseline` -- The `SCENoApplyLegacyAuditPolicy` registry check always read from the local machine's registry regardless of the `$ComputerName` parameter. When targeting a remote domain controller, `auditpol.exe` data came from the DC via `Invoke-Command` but the override key check ran against the local host, producing a false positive (or false negative) for every remote audit. The fix adds a `$IsLocal` check identical to the one used by `Get-ADPEventLogStorageStatus`; when `$ComputerName` is not the local machine, the registry read runs via `Invoke-Command` on the target system.
+
+**Why:** The flaw caused the compliance report to show `SCENoApplyLegacyAuditPolicy` as non-compliant on a remote DC even after the GPO had correctly applied the setting on that DC, giving misleading Critical findings.
+
+**Impact:** AuditPolicy module version bumped from 1.1 to 1.2. Remote compliance checks now correctly reflect the target system's override key state.
+
+---
+
+### Modules/AD-PowerAdmin_AuditPolicy.psm1 -- Baseline Updates from Arctic Wolf Gap Analysis
+
+**Changed:**
+- `$script:AuditPolicyTemplates` (StandardComputer and DomainController) -- Updated both baselines following a gap analysis against Arctic Wolf's recommended GPO Advanced Audit Policy settings. Specific changes:
+  - **DPAPI Activity** added to both baselines at Success. Captures access to DPAPI-protected secrets (browser credential stores, certificate private keys) used by credential theft tools.
+  - **Network Policy Server** added to both baselines at Success+Failure. Captures VPN, wireless 802.1x, and RADIUS authentication events (6272-6280); relevant in any domain with NPS-based access control.
+  - **Authorization Policy Change** upgraded from Success to Success+Failure in both baselines. The failure side captures attempts to remove user rights assignments, which succeeds silently without this setting.
+  - **Security System Extension** upgraded from Success to Success+Failure in both baselines. The failure side captures blocked attempts to register unauthorized authentication packages or notification DLLs.
+- `$script:AuditSubcategoryGuids` -- Added `'Network Policy Server'` GUID `{0CCE9243-69AE-11D9-BED3-505054503030}`.
+- `$script:SubcategoryDescriptions` -- Added description for `'Network Policy Server'` for display in compliance findings.
+
+**Not added (deliberately excluded):**
+- Process Termination -- high volume, low investigative value for most environments; excluded from baseline.
+- Token Right Adjusted -- niche subcategory suited for targeted investigation rather than a domain-wide baseline.
+- Detailed File Share -- high volume per-file SMB access; better applied as a targeted policy on file servers rather than domain-wide.
+
+**Why:** Arctic Wolf's sensor deployment guide identifies these subcategories as necessary for their AD sensor to function correctly. Cross-referencing against our existing baseline revealed four gaps where our coverage was either absent or less strict than the recommended setting.
+
+**Impact:** Existing GPOs deployed before this change will not automatically update. Re-run "Deploy DC Baseline GPO" and "Deploy Standard Computer Baseline GPO" to push the updated settings; both operations are idempotent and will update existing GPOs without creating duplicates.
+
+---
+
+### Modules/AD-PowerAdmin_AuditPolicy.psm1 / AD-PowerAdmin_AuditPolicy.psd1 -- Help Page and GPO Enforcement
+
+**Added:**
+- `Show-ADPAuditPolicyHelp` -- Interactive help page accessible by pressing H in the Audit Policy Management submenu. Displays a purpose overview, a color-coded side-by-side subcategory comparison table (Standard Computer vs Domain Controller), event log size targets by role, and descriptions of the DC-only additional checks (SACL auditing and NTLM audit settings). Color coding distinguishes subcategories that are the same in both baselines (white), where DC requires more than Standard (cyan), and DC-only subcategories not required on standard computers (yellow).
+- `Format-ADPAuditSettingLabel` -- Private helper. Converts an audit inclusion key (SuccessAndFailure, Success, Failure) to a compact display string for use in the help table.
+
+**Changed:**
+- `Initialize-Module` -- Added `HelpCommand = "Show-ADPAuditPolicyHelp"` to the AuditPolicyMenu submenu definition so pressing H in the submenu displays the help page.
+- `New-ADPAuditPolicyGpo` -- Both GPO link calls now pass `-Enforced 'Yes'` to `Add-ADPAGPOLink`. The DC baseline GPO linked to the Domain Controllers OU and the Standard Computer GPO linked to the selected OU are both created as Enforced links, preventing lower-priority policies from overriding the audit policy baseline.
+
+**Why:** Administrators needed a reference page explaining the tool's purpose and the specific differences between the two baselines without having to consult external documentation. Enforced links are required because audit policy GPOs must not be blocked by block-inheritance settings or overridden by lower-priority GPOs on the domain controllers OU; non-enforced links risk silent policy bypass.
+
+**Impact:** Module version bumped from 1.0 to 1.1. The H key is now active in the submenu. GPO links created by future deployments will be Enforced; existing links from prior deployments can be updated by re-running the deploy action (the link call is idempotent and will set Enforced on the existing link).
+
+---
+
+### Modules/AD-PowerAdmin_AuditPolicy.psm1 / AD-PowerAdmin_AuditPolicy.psd1 -- New Module
+
+**Added:**
+- `Initialize-Module` -- Registers the "Audit Policy Management" main-menu entry and "AuditPolicyMenu" submenu with four actions: compliance check, Deploy DC Baseline GPO, Deploy Standard Computer Baseline GPO, and Export Report. Conditionally registers the daily unattended job when `$global:AuditPolicyDailyCheck` is `$true`.
+- `Start-ADPAuditPolicyCheck` -- Orchestrates the full audit workflow. Detects local system role (Domain Controller, Member Server, Workstation), selects the appropriate baseline, collects effective audit policy and event log data, compares against the baseline, and prints color-coded findings. Domain controller runs also include SACL and NTLM audit checks. Optionally audits a second remote system for comparison via Invoke-Command. Supports `-Unattended` to suppress prompts and write findings to Reports/.
+- `Get-ADPAuditPolicyStatus` -- Collects effective audit policy via `auditpol.exe /get /category:* /r` from local or remote systems. Returns parsed CSV objects for use by Compare-ADPAuditPolicyBaseline.
+- `Get-ADPEventLogStorageStatus` -- Collects event log size, enabled state, retention mode, and record count from local or remote systems. Checks both the live log configuration and the ADMX GPO policy registry path.
+- `Compare-ADPAuditPolicyBaseline` -- Compares auditpol and event log data against the Standard Computer or Domain Controller baseline. Returns structured finding objects with severity (Critical, High, Medium, Informational, Compliant) for every subcategory, event log, and the subcategory override registry key.
+- `New-ADPAuditPolicyGpo` -- Creates and configures a baseline GPO. Writes Advanced Audit Policy subcategory settings to audit.csv via GPOMgr, sets the subcategory override security option, configures event log sizes via ADMX registry keys, and writes NTLM audit settings for the DC baseline. The DC GPO links automatically to the Domain Controllers OU; the Standard Computer GPO prompts for interactive OU selection.
+- `Export-ADPAuditPolicyReport` -- Runs the compliance check without interactive prompts and exports all findings to a timestamped CSV in the Reports directory.
+- `Test-ADPDirectoryServiceSacl` -- Domain-controller-only check. Validates that SACL audit rules are configured on the domain root and configuration partition objects. A missing SACL means Directory Service Access and Directory Service Changes audit subcategories generate no events regardless of policy settings.
+- `Test-ADPNtlmAuditSettings` -- Domain-controller-only check. Reads and validates three NTLM audit registry values (RestrictSendingNTLMTraffic, AuditNTLMInDomain, InboundNTLMTraffic) against recommended settings for outbound, inbound, and domain NTLM authentication visibility.
+
+**Why:** The Honeypot module revealed that audit policy was not enabled on the domain, silencing all security event subcategories the honeytoken depends on. A systematic module is needed to detect these gaps, report them with severity context, and deploy remediation via GPO.
+
+**Impact:** Adds "Audit Policy Management" to the main menu with four interactive actions and one optional daily unattended job. No breaking changes to existing modules.
+
+---
+
+### Modules/AD-PowerAdmin_GPOMgr.psm1 / AD-PowerAdmin_GPOMgr.psd1 -- Advanced Audit Policy Support
+
+**Added:**
+- `Set-ADPAGPOAdvancedAuditPolicy` -- Writes Advanced Audit Policy subcategory settings to the `audit.csv` file in a GPO's SYSVOL path (`Machine\Microsoft\Windows NT\Audit\audit.csv`). Merges with any existing entries, writes UTF-8 without BOM, and increments the GPO machine version via `Update-GptIniVersion`. Required for deploying subcategory-level audit policy via GPO, which cannot be done through GptTmpl.inf.
+- `Get-ADPAGPOAdvancedAuditPolicy` -- Reads and parses the `audit.csv` from a named GPO. Returns a collection of subcategory settings with integer inclusion values and text descriptions. Returns an empty collection if no audit.csv exists.
+
+**Why:** The existing GPOMgr infrastructure covers GptTmpl.inf (account policy, security options, legacy audit) but not Advanced Audit Policy subcategory settings, which are stored in a separate `audit.csv` file. The AuditPolicy module requires this primitive to deploy subcategory-level baselines via GPO.
+
+**Impact:** GPOMgr version bumped from 1.4 to 1.5. Both functions are added to `FunctionsToExport`. No changes to existing GPOMgr functions.
+
+---
+
+### AD-PowerAdmin_settings.ps1 -- Audit Policy Daily Check Flag
+
+**Added:**
+- `$global:AuditPolicyDailyCheck` -- Boolean flag (default `$false`). When set to `$true`, the AuditPolicy module registers its compliance check as a daily unattended job. Set to `$false` by default so the daily check is opt-in.
+
+**Why:** Consistent with the pattern used by other daily-optional features (SmbAdminShareAudit, ExchangeADSecurityAudit, SysvolGppCpasswordAudit). Operators who want nightly audit policy monitoring enable it explicitly.
+
+**Impact:** No functional change when left at the default `$false`.
+
+---
+
+### AD-PowerAdmin.ps1 / AD-PowerAdmin_settings.ps1 -- Dedicated Unattended Task Log
+
+**Added:**
+- `Initialize-UnattendedLog` in `AD-PowerAdmin.ps1` -- Starts a dedicated PowerShell
+  transcript (`Reports\AD-PowerAdmin_Unattended.log`) at the beginning of every unattended
+  run, independent of `$global:Debug`. Calls `Stop-AllTranscripts` first to handle the PS5
+  single-transcript limitation before starting the new transcript in append mode.
+- `$global:UnattendedLog` in `AD-PowerAdmin_settings.ps1` -- Boolean flag (default `$true`)
+  that controls whether the dedicated unattended log is written. Set to `$false` to revert
+  to debug-transcript-only behavior.
+
+**Changed:**
+- `Initialize-UnattendedLog` -- Made idempotent. Now checks which transcript is currently
+  active via `Get-Transcript` before acting: does nothing if the unattended log is already
+  running, stops only a different transcript (e.g., the debug log) quietly via
+  `Stop-AllTranscripts | Out-Null`, then starts the unattended log. This prevents the
+  PS5 pipeline-buffering artifact that caused a "Transcript stopped, output file is
+  AD-PowerAdmin_Debug.log" line to appear as the first line of every unattended log session,
+  and eliminates the two-session-per-run behavior (start marker in session 1, end marker
+  in session 2, job output lost between them).
+- `Start-Automation` -- Now calls `Initialize-UnattendedLog` at the start and at both exit
+  paths (Daily and named-job) to ensure the log is active even when a module function starts
+  and stops its own transcript mid-run. Run boundary markers
+  (`=== Unattended Run Start/End ===`) are now written unconditionally instead of only when
+  `$global:Debug` is true. `Stop-AllTranscripts | Out-Null` is called at the end of each
+  run to close the log cleanly and suppress the console "Transcript stopped" message.
+
+**Why:** Unattended scheduled jobs ran silently when `$global:Debug = $false`. Errors, output,
+  and diagnostic information were lost with no audit trail. The dedicated log ensures every
+  scheduled run is captured for post-incident analysis and routine review.
+
+**Impact:** `Reports\AD-PowerAdmin_Unattended.log` is created on first unattended run and
+  appended on all subsequent runs. The file is already covered by the `Reports` gitignore
+  exclusion. No changes to scheduled task configuration are required.
+
+---
+
+### Modules/AD-PowerAdmin_Honeypot.psm1 / AD-PowerAdmin_settings.ps1 -- Arctic Wolf Deception Enhancements
+
+**Added:**
+- `$global:HoneypotSPN` in `AD-PowerAdmin_settings.ps1` -- Stores the Kerberoasting bait SPN set
+  on the honeytoken account during provisioning. Used by `Get-HoneypotEventsBatch` to enable
+  Event 4769 monitoring and by `Test-HoneytokenUserSafety` to distinguish intentional from
+  unexpected SPNs.
+- `$SPN` parameter to `Set-HoneypotSettings` -- Persists the bait SPN to the settings file and
+  syncs `$global:HoneypotSPN` into the running session when a value is provided.
+- Second XPath query in `Get-HoneypotEventsBatch` for Event 4769 (Kerberos service ticket
+  request) when `$global:HoneypotSPN` is non-empty. Event 4769 stores the target account in
+  `ServiceName` (not `TargetUserName`), requiring a separate query. Events from both queries
+  are merged and enriched uniformly. Severity for 4769 is HIGH.
+- `SpnService` field on all seven honeytoken profiles -- Provides a context-appropriate service
+  class (e.g., `MSExchangeMBx`, `HTTP`, `MSSQLSvc`) used to auto-generate the suggested SPN
+  during installation.
+- Kerberoasting bait SPN prompt in `Install-HoneypotAccount` -- Displays a suggested SPN based
+  on the chosen profile's service class and domain FQDN. Admin can accept the suggestion, type
+  a custom SPN, or enter N to skip. Includes SPN uniqueness conflict check before assignment.
+- Reversible password encryption prompt in `Install-HoneypotAccount` -- Optional; marks the
+  account as a DCSync high-value target without real credential risk (password is a random
+  32-char string).
+- `lastLogonTimestamp` population in `New-HoneytokenUser` -- Set to a random value 5-21 days
+  prior to provisioning so the account appears actively used to any attacker enumerating AD
+  objects. Uses `Set-ADUser -Replace @{ lastLogonTimestamp = $FileTimeValue }` (100ns intervals
+  since 1601-01-01 UTC); replicates domain-wide unlike `lastLogon`.
+- Kerberoasting indicator line in `Start-HoneypotMonitor` alert body -- Appended when
+  `$global:HoneypotSPN` is set: "Kerberoasting attack (Event 4769: service ticket requested
+  for bait SPN ...)."
+- Per-event `ServiceName` and `TicketOptions` fields in `Start-HoneypotMonitor` alert body --
+  Included for Event 4769 events only, giving the responder the full service ticket context.
+- `$global:HoneypotSPN` in `New-HoneypotLiteSettingsContent` -- Propagated to the lite
+  `AD-PowerAdmin_settings.ps1` generated for decentralized DC deployments so each DC's local
+  monitor can run the 4769 query when a bait SPN is configured.
+
+**Changed:**
+- Honeytoken profile descriptions -- All seven profiles now carry an enticing fake-credential
+  hint in the `Description` field (e.g., "Backup sync svc acct - temp pw: Backup@2024"). These
+  descriptions are visible to any user with read access to the AD object and are designed to
+  attract an attacker who has enumerated the account and is looking for clues to its password.
+- `New-HoneytokenUser` -- Extended with `$SpnValue` and `$EnableReversibleEncryption` parameters.
+  Sets `AllowReversiblePasswordEncryption` on the new account, populates `lastLogonTimestamp`,
+  and assigns the bait SPN (with conflict check) when provided. SPN assignment failures are
+  non-fatal warnings.
+- `Install-HoneypotAccount` -- Now calls `Set-HoneypotSettings -SPN $SpnValue` to persist the
+  configured SPN alongside the existing account settings.
+- `Test-HoneytokenUserSafety` SPN check -- Now context-aware. When `$global:HoneypotSPN` is
+  set: reports `[OK]` if the configured SPN is present, `[WARN]` if it is missing, and `[FAIL]`
+  only for unexpected additional SPNs. When no SPN is configured: original behavior (any SPN
+  is a `[FAIL]`).
+
+**Why it was changed:** Informed by a review of the Arctic Wolf Active Directory decoy account
+methodology. A honeytoken account that looks identical to a freshly created test account is less
+likely to be targeted by skilled attackers who may recognize the pattern. Realistic attributes --
+a recent `lastLogonTimestamp`, an enticing description, and a Kerberoastable SPN -- make the
+account indistinguishable from a real, carelessly administered service account. The Kerberoasting
+SPN also adds a second, independent detection vector (Event 4769 on any Kerberoast tooling
+attempt) that fires even if the attacker never attempts to authenticate.
+
+**Impact:** Any new honeytoken deployment gains three additional deception layers and a second
+detection event channel. Existing deployments are unaffected until re-provisioned; the
+`Test-HoneytokenUserSafety` SPN check remains a safe `[OK]` for accounts without any SPN and
+is no longer a false `[FAIL]` for accounts with the intentional bait SPN.
+
+---
+
+### Modules/AD-PowerAdmin_Honeypot.psm1 -- Honeytoken Detection Test: Credential Bypass Fix and Audit Policy Check
+
+**Fixed:**
+- `Invoke-HoneypotTestAuthAttempt` -- Replaced `System.DirectoryServices.DirectoryEntry` with
+  `System.DirectoryServices.Protocols.LdapConnection.Bind(NetworkCredential)`. `DirectoryEntry`
+  with `AuthenticationTypes.Secure` on a domain-joined machine uses Windows SSPI Negotiate, which
+  can transparently fall back to the current session's Kerberos TGT instead of the provided
+  credentials. The result was that the admin's session authenticated successfully (reported as
+  `[CRITICAL]`), and no events for the honeytoken account were generated. `LdapConnection.Bind`
+  with an explicit `NetworkCredential` object creates a new SSPI context forced to use only the
+  provided credentials, preventing any session-credential fallback. Also changed `AutoBind = $false`
+  to prevent any implicit bind before the explicit credential bind.
+
+**Added:**
+- `Test-HoneypotAuditPolicy` (private) -- Checks the four Security audit subcategories required
+  for honeytoken event detection by querying `auditpol.exe` in CSV mode (`/r`) with subcategory
+  GUIDs (language-independent). Reports `[OK]` or `[WARN]` with a remediation command for each:
+  Logon (4624/4625), Account Lockout (4740), Kerberos Authentication Service (4768/4771), and
+  Kerberos Service Ticket Operations (4769). Returns `$false` if any subcategory is "No Auditing".
+- Audit policy prerequisite check in `Invoke-HoneypotDetectionTest` -- `Test-HoneypotAuditPolicy`
+  is called once on menu entry. If any subcategory is disabled, a warning is shown before the test
+  menu so the admin knows events may not be generated even if the tests run correctly.
+
+**Why it was fixed:** The original `DirectoryEntry` implementation produced a false `[CRITICAL]`
+  on every run (current session credentials used), zero honeytoken events in the Security log, and
+  no useful diagnostic information about why the monitor found nothing. The audit policy check
+  addresses the second common failure mode: even with correct credential handling, event logging
+  requires the appropriate subcategories to be enabled on the DC. On default Windows Server
+  installations, "Kerberos Service Ticket Operations" (required for Event 4769) is not enabled.
+
+**Impact:** The auth test now generates real Events 4625/4768/4771 for the honeytoken account.
+  The audit policy check makes the prerequisite for event logging explicit before any test runs,
+  turning a silent "0 events found" into an actionable "enable this subcategory" diagnosis.
+
+---
+
+### Modules/AD-PowerAdmin_Honeypot.psm1 -- Honeytoken End-to-End Detection Test
+
+**Added:**
+- `Invoke-HoneypotDetectionTest` (public) -- Interactive menu that triggers controlled
+  authentication events against the honeytoken account so administrators can verify that Security
+  Event Log detection and email alerting are functioning correctly after deployment. Displays
+  current account, SPN, and monitor configuration at the top of the menu. Options: [1] trigger
+  a deliberate failed authentication attempt, [2] request a Kerberos service ticket against the
+  bait SPN, [3] do both in sequence, [4] run the honeytoken monitor immediately, [Q] return to
+  the submenu. After triggering test events, prompts the admin to run the monitor with a 3-second
+  wait for events to reach the Security log. Accessible from the Honeytoken Management submenu.
+- `Invoke-HoneypotTestAuthAttempt` (private) -- Sends a deliberate failed LDAP bind as the
+  honeytoken account using a randomly generated wrong password via `System.DirectoryServices
+  .DirectoryEntry` with `AuthenticationTypes.Secure`. Generates Events 4625 (failed network logon),
+  4768 (Kerberos TGT request), and/or 4771 (Kerberos pre-authentication failure) on the DC that
+  handles the request. Reports CRITICAL if authentication unexpectedly succeeds (indicates GPO
+  deny-logon restriction is not in effect).
+- `Invoke-HoneypotTestServiceTicket` (private) -- Invokes `klist.exe get <SPN>` against the
+  configured bait SPN to force a new TGS-REQ to the KDC, bypassing the local ticket cache.
+  The KDC resolves the SPN in AD (not DNS, so the non-existent service hostname is irrelevant)
+  and issues a service ticket, generating Event 4769 (Kerberos service ticket request) with
+  `ServiceName` matching the honeytoken sAMAccountName. Skipped with a `[SKIP]` message when no
+  bait SPN is configured (`$global:HoneypotSPN` is empty).
+- `HoneypotDetectionTest` submenu item in `Initialize-Module` -- Registers the test in the
+  Honeytoken Management submenu so it is accessible from the interactive menu.
+
+**Why it was added:** After deploying a honeytoken account and monitor, there was no in-tool way
+to verify that the full detection chain is working. The account may be correctly provisioned and
+the scheduled task may exist, yet the monitor might fail to send alerts due to SMTP misconfiguration,
+event log permission issues, or incorrect account name settings. `Invoke-HoneypotDetectionTest`
+provides a one-click smoke test that generates real Security log events and immediately optionally
+runs the monitor, confirming or exposing gaps in the detection pipeline.
+
+**Impact:** Administrators can validate the honeytoken system immediately after installation without
+waiting for an organic attack event. Both authentication events (4625/4768/4771) and Kerberoasting
+events (4769) can be tested independently, allowing targeted diagnosis of which event type is or is
+not being detected correctly.
+
+---
+
+### AD-PowerAdmin.ps1 / Modules/AD-PowerAdmin_Honeypot.psm1 -- Honeytoken Help Guide and OU Browser
+
+**Added:**
+- `Show-HoneypotHelp` (public) -- Displays the Honeytoken system deployment guide: an overview
+  of the two-layer architecture (account + monitor), the correct installation order (account
+  provisioning, GP propagation, safety verification, optional decentralized deployment), the correct
+  removal order (decentralized first, then account removal), and operational notes. Accessible from
+  the Honeytoken Management submenu by pressing H.
+- `HelpCommand` field in the `HoneypotMenu` submenu definition -- Points `Enter-SubMenu` to
+  `Show-HoneypotHelp` when the user presses H.
+- `Enter-SubMenu` in `AD-PowerAdmin.ps1` -- Added optional `HelpCommand` support. When a submenu
+  definition includes a `HelpCommand` key, the footer shows "h. Help / Deployment Guide" and
+  pressing H invokes the command. Submenus without `HelpCommand` are unaffected. The H dispatch
+  follows the same pattern as numbered item dispatch: `Invoke-Expression`, surrounded by the green
+  separator lines, followed by `Pause`.
+
+**Changed:**
+- `Install-HoneypotAccount` -- Replaced the manual OU distinguished-name entry block (flat list of
+  top-level OUs + freeform text input + ad-hoc validation) with a `Get-AdOuSearch` call. The admin
+  now navigates the OU tree interactively level by level, drilling in by number, pressing S to select
+  the current location, or Q to cancel. Cancelling returns to the submenu without provisioning.
+
+**Why it was changed:** The manual DN entry was error-prone (typos in long DN strings) and required
+the admin to know the exact path in advance. `Get-AdOuSearch` provides the same hierarchical browser
+already used by the GPO deployer and settings wizard, giving a consistent experience across all
+OU-selection prompts in the tool. The help guide addresses a usability gap: operators who are
+unfamiliar with the two-mode architecture or the required install/removal sequence have no in-tool
+reference. The H key follows the same convention as Q (special letter inputs in the submenu footer).
+
+---
+
+### Modules/AD-PowerAdmin_GPOMgr.psm1 -- Registry Verification Fix (Test-ADPAGPO, Find-ADPAGPOsWithRegistrySetting)
+
+**Fixed:**
+- `Test-ADPAGPO` -- Replaced the XML-report-based registry setting check with
+  `Get-GPRegistryValue`. The previous implementation used XPath `//q:RegistrySetting` to parse the
+  `Get-GPOReport` XML output, which silently returns zero nodes for "Extra Registry Settings"
+  (settings stored via `Set-GPRegistryValue` at paths not backed by an ADMX template, such as
+  `HKLM\SYSTEM\CurrentControlSet\Control\Lsa\NoLMHash`). This caused a false `[FAIL]` on every
+  registry-setting verification even when the setting was correctly applied and visible in GPMC.
+  `Get-GPRegistryValue` reads the GPO's registry policy data directly and correctly returns the
+  value regardless of ADMX backing.
+- `Find-ADPAGPOsWithRegistrySetting` (private, also known as `Search-ADPAGPOSetting`) -- Same root
+  cause: replaced the XML report scanning loop (`Get-GPOReport` + XPath) with per-GPO
+  `Get-GPRegistryValue` calls. The old approach never matched Extra Registry Settings, so the
+  overlap/conflict check always reported no existing coverage even when a GPO already enforced the
+  setting. The new approach finds both ADMX-backed and Extra Registry Settings correctly.
+- `Get-GPOXmlReport` (private) -- Removed. Was only called by `Test-ADPAGPO`; both callers now
+  use `Get-GPRegistryValue` instead.
+
+**Why it was changed:** `Get-GPOReport -ReportType Xml` does not expose "Extra Registry Settings"
+(non-ADMX-backed settings set via `Set-GPRegistryValue`) under the expected `RegistrySetting` XML
+element in a form that the XPath query was designed to find. The symptom is a `[FAIL]` on the
+post-deployment verification step even though the GPO is correctly configured, as confirmed by
+GPMC showing `SYSTEM\CurrentControlSet\Control\Lsa\NoLMHash 1` under the GPO's Computer
+Configuration. `Get-GPRegistryValue` is the correct API for this use case -- it reads the Registry.pol
+file directly and works for all registry-backed settings regardless of ADMX backing.
+
+**Impact:** `Test-ADPAGPO` with `-RegistrySettings` now correctly reports `[PASS]` for Extra
+Registry Settings such as the LM hash and SMB signing settings deployed by
+`AD-PowerAdmin_GPOBestPracticesDeployer`. `Find-ADPAGPOsWithRegistrySetting` (the overlap checker
+called before each best-practice deployment) now correctly identifies existing coverage and prevents
+duplicate GPOs.
+
+---
+
+### Modules/AD-PowerAdmin_GPOMgr.psm1 / AD-PowerAdmin_GPOBestPracticesDeployer.psm1 -- Overlap Detection (GPOMgr v1.4)
+
+**Added (GPOMgr):**
+- `Search-ADPAGPOSecuritySetting` -- Scans all GPO security templates (GptTmpl.inf) for a
+  supplied list of Section + Key pairs in a single SYSVOL pass per GPO. Returns one result
+  per match with `ActualValue`, `ExpectedValue`, and `Matches` (bool) to classify exact vs
+  partial overlaps. Partial matches (same setting, different value) indicate a potential
+  policy conflict. Efficient for multi-setting entries such as the password policy (8 keys
+  resolved in one read per GPO rather than 8 separate scans).
+
+**Added (BestPracticesDeployer):**
+- `Show-BPCoverageReport` (private) -- Formats and displays coverage results grouped by GPO
+  name. Exact matches are shown in green; partial matches (conflicting values) in yellow.
+  Displays a legend distinguishing the two match types. Called before the mode selection
+  prompt so the administrator can see the full overlap picture before committing to deploy.
+
+**Changed (BestPracticesDeployer):**
+- Coverage check in `Invoke-GPOBestPracticeDeployment` -- Completely rewritten. Now searches
+  both registry settings (via existing `Search-ADPAGPOSetting`) and security template settings
+  (via new `Search-ADPAGPOSecuritySetting`). Results are collected into a unified list and
+  passed to `Show-BPCoverageReport` for display. Partial matches (same setting, different
+  value) are now detected and clearly flagged, allowing the administrator to identify
+  conflicting policies before proceeding. If no overlaps are found, a clean confirmation
+  message is shown.
+
+---
+
+### Modules/AD-PowerAdmin_GPOMgr.psm1 / AD-PowerAdmin_GPOBestPracticesDeployer.psm1 -- Configurable Settings and Security Template Support (GPOMgr v1.3, Deployer v1.2)
+
+**Added (GPOMgr):**
+- `Set-ADPAGPOSecuritySetting` -- Writes a key-value pair to a GPO's security template
+  (GptTmpl.inf) on the domain SYSVOL. Handles directory and file creation, INF section
+  management, gpt.ini version increment, and Security Configuration Engine CSE GUID
+  registration. Used for account policy, lockout policy, and security option settings that
+  cannot be set via `Set-GPRegistryValue`.
+- `ConvertFrom-IniString` (private) -- Parses INI-format strings into an ordered hashtable
+  of sections. Supports GptTmpl.inf and gpt.ini file reads.
+- `ConvertTo-IniLines` (private) -- Serializes a section hashtable back to INI-format strings.
+- `Update-GptIniVersion` (private) -- Increments the machine-side version counter in gpt.ini
+  and registers the Security Configuration Engine CSE GUID so Windows processes the updated
+  security template on the next Group Policy refresh.
+
+**Added (BestPracticesDeployer):**
+- `Resolve-ConfigurableSettings` (private) -- Iterates a settings array and, for each entry
+  where `Configurable = $true`, displays the `Prompt`, shows the default `Value`, and prompts
+  the administrator to accept or override. Returns a resolved copy of the array with final
+  values substituted.
+- `DefaultDomainPasswordPolicy` entry in `$script:GPOBestPractices` -- Configures the domain
+  password and account lockout policy via eight `SecuritySettings` entries (MinimumPasswordLength,
+  PasswordComplexity, PasswordHistorySize, MaximumPasswordAge, MinimumPasswordAge,
+  LockoutBadCount, LockoutDuration, ResetLockoutCount). All numeric fields are configurable
+  with recommended defaults pre-filled. Applies to all domain user accounts; the description
+  warns that account policy is only enforced by GPOs linked to the domain root.
+
+**Changed (BestPracticesDeployer):**
+- `$script:GPOBestPractices` entry schema -- `RegistrySettings` entries now support two
+  optional fields: `Configurable` [bool] and `Prompt` [string]. A new `SecuritySettings`
+  array field is available on each entry for security template settings using the same
+  `Section`, `Key`, `Value`, `Configurable`, `Prompt` structure.
+- `Invoke-BestPracticeApplyToDDP` -- Calls `Resolve-ConfigurableSettings` before deployment.
+  Handles both `RegistrySettings` (via `Invoke-ADPAGPOModification`) and `SecuritySettings`
+  (via `Set-ADPAGPOSecuritySetting`). For entries with only `SecuritySettings`, calls
+  `Backup-ADPAGPO` directly to satisfy the backup-before-modify contract.
+- `Invoke-BestPracticeCreateNewGpo` -- Calls `Resolve-ConfigurableSettings` before GPO
+  creation. Applies both `RegistrySettings` and `SecuritySettings` after creation.
+- `Invoke-GPOBestPracticeDeployment` -- Display block now shows `SecuritySettings` summary
+  alongside `RegistrySettings`, and marks configurable fields with `[configurable]`. Coverage
+  check is guarded so it only runs when `RegistrySettings` is non-empty.
+
+---
+
+### Modules/AD-PowerAdmin_GPOBestPracticesDeployer.psm1 -- Require SMB Signing Best Practice
+
+**Added:**
+- `RequireSmbSigning` entry in `$script:GPOBestPractices` -- Enforces SMB packet signing for
+  both client-side (outbound) and server-side (inbound) SMB communications by setting
+  `RequireSecuritySignature = 1` at both the LanManWorkstation and LanManServer registry paths.
+  Eliminates unsigned SMB sessions that are vulnerable to relay-style attacks and in-transit
+  tampering. Applies to all domain-joined computers. Includes a compatibility note warning
+  administrators to pilot before broad deployment due to potential impact on legacy NAS devices,
+  older Samba servers, and unsupported SMB appliances.
+
+**Added:**
+- `AD-PowerAdmin.wiki/Vulnerabilities/SMB-Signing-Not-Required.md` -- New vulnerability dossier
+  covering the SMB signing not required weakness, relay attack mechanics, both required registry
+  settings (client and server), affected scope, compatibility considerations, rollout guidance,
+  PowerShell detection commands, and MITRE ATT&CK T1557.001 reference.
+
+---
+
+### Modules/AD-PowerAdmin_GPOBestPracticesDeployer.psm1 -- AppliesTo Scope Field
+
+**Changed:**
+- `$script:GPOBestPractices` entries -- Added `AppliesTo` field (string array) to the per-entry
+  schema. Specifies the account or computer scope the policy targets (e.g. `'All Computers'`,
+  `'Workstations'`, `'Domain Controllers'`, `'User Accounts'`). Displayed during deployment to
+  guide the administrator toward the correct OU or link target.
+- `Invoke-GPOBestPracticeDeployment` -- Now displays the `AppliesTo` scope line between the
+  title and the description during deployment.
+- `DisableLMHash` entry -- `AppliesTo` set to `@('All Computers', 'Workstations', 'Servers',
+  'Domain Controllers')`, reflecting that the `NoLMHash` setting is a Computer Configuration
+  policy that should be applied to all domain-joined machines.
+
+---
+
+### Modules/AD-PowerAdmin_GPOBestPracticesDeployer.psm1 -- Data-Driven Architecture (v1.1)
+
+**Changed:**
+- `Initialize-Module` -- Rewritten to build the submenu dynamically from `$script:GPOBestPractices`.
+  Each entry in that array becomes a numbered submenu item automatically. No code changes are
+  required when adding a new setting.
+
+**Added:**
+- `$script:GPOBestPractices` (module-scope data array) -- The single location where all
+  best-practice GPO settings are defined. Each entry is a hashtable with fields: `Id`, `Title`,
+  `Label`, `Description` (string array), `Note`, `DefaultGpoName`, `GpoDescription`, and
+  `RegistrySettings` (hashtable array). The first entry defines the Disable LM Hash Storage
+  setting.
+- `Invoke-GPOBestPracticeDeployment` -- Generalized public deployment function. Looks up the
+  best practice by `Id`, displays the description and registry details, checks for existing GPO
+  coverage across all registry settings in the definition, prompts for application mode, and
+  dispatches to `Invoke-BestPracticeApplyToDDP` or `Invoke-BestPracticeCreateNewGpo`. Handles
+  any entry in `$script:GPOBestPractices` without modification.
+- `Invoke-BestPracticeApplyToDDP` (private) -- Applies all registry settings from any best-practice
+  definition to the Default Domain Policy via `Invoke-ADPAGPOModification`.
+- `Invoke-BestPracticeCreateNewGpo` (private) -- Creates a new GPO, applies all registry settings
+  from any best-practice definition, navigates the OU tree via `Get-AdOuSearch`, links, and
+  verifies the deployed state via `Test-ADPAGPO`.
+- `Select-GPOApplicationMode` (private) -- Prompts the user to choose DDP, new GPO, or cancel.
+
+**Removed:**
+- `Set-BestPracticeDisableLMHashStorage` -- Replaced by `Invoke-GPOBestPracticeDeployment` with
+  the `'DisableLMHash'` best practice ID. All functionality preserved; the LM hash setting is now
+  a data entry rather than a dedicated function.
+- `Get-LMHashGpoRegistrySetting` (private) -- Registry details are now stored directly in the
+  `$script:GPOBestPractices` array entry.
+- `Invoke-LMHashApplyToDDP` (private) -- Replaced by the generalized `Invoke-BestPracticeApplyToDDP`.
+- `Invoke-LMHashCreateNewGpo` (private) -- Replaced by the generalized `Invoke-BestPracticeCreateNewGpo`.
+
+**Why it was changed:** The original implementation hard-coded each setting as a dedicated public
+function and required changes in three places (function definition, `Initialize-Module`, and
+`FunctionsToExport`) to add a new best practice. The refactored design defines settings as data
+entries. Adding a new setting requires only one change: appending an entry to
+`$script:GPOBestPractices`. The deployment workflow, menu registration, and conflict detection
+are fully reused for every entry.
+
+**Impact:** Module version bumped to 1.1. `FunctionsToExport` updated: `Set-BestPracticeDisableLMHashStorage`
+replaced by `Invoke-GPOBestPracticeDeployment`. Existing LM hash functionality is preserved; the
+submenu item now calls `Invoke-GPOBestPracticeDeployment 'DisableLMHash'`.
+
+---
+
+### Modules/AD-PowerAdmin_GPOMgr.psm1 -- Backup/Restore and Modification Safety
+
+**Added:**
+- `Backup-ADPAGPO` -- Backs up a single named GPO to `$global:ReportsPath\GPOBackups\`. Returns a
+  structured result object with the backup ID, backup path, status, and any errors.
+- `Backup-AllADPAGPOs` -- Backs up every GPO in the domain to the same backup directory. Returns a
+  structured result with the GPO count and status.
+- `Get-ADPAGPOBackupList` -- Enumerates the backup directory, parses `bkupInfo.xml` from each
+  backup subfolder, and returns a sorted list of backup objects (GPO name, timestamp, ID, path).
+  Returns newest-first. Used by `Restore-ADPAGPOBackup` and by administrators auditing restore
+  points.
+- `Restore-ADPAGPOBackup` -- Presents an interactive numbered backup picker using `Show-Menu` and
+  restores the selected backup after explicit `YES` confirmation. Accepts `-BackupId` for
+  non-interactive use. Returns a structured result.
+- `Invoke-ADPAGPOModification` -- Safe wrapper for modifying existing GPOs. Always calls
+  `Backup-ADPAGPO` before any change. If the backup fails the function aborts immediately and
+  returns a failure result -- it never silently continues after a failed backup. Other modules
+  must use this function (not `Set-ADPAGPORegistrySetting` directly) when modifying an existing
+  GPO.
+- `Invoke-GPOMgrBackupSingleMenu` (private) -- Presents a numbered list of all domain GPOs via
+  `Show-Menu` and calls `Backup-ADPAGPO` on the selection. Used by the interactive submenu.
+
+**Changed:**
+- `Initialize-Module` -- Previously empty (library-only module). Now registers the "GPO Manager"
+  submenu in `$global:Menu` and `$global:SubMenus` with four interactive actions: Backup All
+  GPOs, Backup a GPO, List GPO Backups, and Restore a GPO.
+
+**Why it was changed:** The GPO Manager was a library-only module with no backup or restore
+capability and no interactive menu presence. Any module modifying an existing GPO had no
+framework-level safety mechanism to protect the prior state. Adding `Invoke-ADPAGPOModification`
+enforces backup-before-modify as a framework contract, and the new backup/restore functions give
+administrators a recovery path when a GPO change has unintended consequences.
+
+**Impact:** Module version bumped from 1.1 to 1.2. The GPO Manager now appears in the
+AD-PowerAdmin interactive menu. `Invoke-ADPAGPOModification` is the required API path for any
+existing-GPO modification in the framework. Backup files are stored under
+`$global:ReportsPath\GPOBackups\` and persist across sessions.
+
+---
+
+### Modules/AD-PowerAdmin_GPOMgr.psd1 -- Version 1.2
+
+**Changed:**
+- `ModuleVersion` bumped from `1.1` to `1.2`.
+- `FunctionsToExport` updated to include the five new public functions: `Backup-ADPAGPO`,
+  `Backup-AllADPAGPOs`, `Get-ADPAGPOBackupList`, `Restore-ADPAGPOBackup`,
+  `Invoke-ADPAGPOModification`.
+- `ReleaseNotes` updated to describe v1.2 additions.
+
+---
+
 ### Modules/AD-PowerAdmin_Honeypot.psm1 -- GPO-Based Scheduled Task Deployment
 
 **Added:**
@@ -23,8 +1105,15 @@
 **Changed:**
 - `Invoke-HoneypotDCDeploy` -- Removed `$RunAsUser`, `$RunAsPassword`, and `$AdminCred` parameters.
   Removed the `Invoke-Command` (PSRemoting) block that registered the scheduled task. The function
-  is now file-deployment only (UNC directory creation, file copy, settings file write). The scheduled
-  task is no longer registered per-DC; it is deployed domain-wide by the GPO after all file copies.
+  is now file-deployment only (UNC directory creation, ACL hardening, file copy, settings file write).
+  The scheduled task is no longer registered per-DC; it is deployed domain-wide by the GPO after all
+  file copies. Immediately after creating the root deployment directory, sets a restrictive NTFS ACL
+  via `System.Security.AccessControl.DirectorySecurity`: inheritance is disabled
+  (`SetAccessRuleProtection($true, $false)`), inherited ACEs are discarded, and only
+  `NT AUTHORITY\SYSTEM` and `BUILTIN\Administrators` are granted Full Control with
+  `ContainerInherit,ObjectInherit` propagation. Subdirectories and all copied files inherit this ACL
+  automatically. This prevents any non-administrative account from modifying the scripts that run
+  as SYSTEM, eliminating a privilege-escalation path via scheduled-task script replacement.
 - `Install-HoneypotDecentralized` -- Removed the "Scheduled task identity" run-as selection block
   and the `Get-Credential` admin credentials prompt (neither are required for UNC-only file copy or
   GPO-based task deployment). Updated the deployment summary to show "via GPO" instead of

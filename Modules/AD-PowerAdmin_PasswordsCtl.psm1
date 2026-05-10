@@ -470,22 +470,22 @@ Function Get-PasswordAuditAdminReport {
 
     # If the $EmailReport switch is used, then send the $ADPasswordTestDataString to the $global:PasswordQualityTestEmailTo email address.
     if ($EmailReport) {
-        # Confirm the $global:ReportAdminEmailTo is not empty. If it is, then output an error and exit the function.
-        if ($null -eq $global:ReportAdminEmailTo) {
-            Write-Host "Error: The '`$global:ReportAdminEmailTo' variable is empty. Please update your 'AD-PowerAdmin_settings.ps1' file with the details that match your environment." -ForegroundColor Red
+        # Confirm the $global:ADAdminEmail is not empty. If it is, then output an error and exit the function.
+        if ($null -eq $global:ADAdminEmail) {
+            Write-Host "Error: The '`$global:ADAdminEmail' variable is empty. Please update your 'AD-PowerAdmin_settings.ps1' file with the details that match your environment." -ForegroundColor Red
             return
         }
-        # Confirm the "$global:ReportsEmailFrom" is not empty. If it is, then output an error and exit the function.
-        if ($null -eq $global:ReportsEmailFrom) {
-            Write-Host "Error: The '`$global:ReportsEmailFrom' variable is empty. Please update your 'AD-PowerAdmin_settings.ps1' file with the details that match your environment." -ForegroundColor Red
+        # Confirm the "$global:FromEmail" is not empty. If it is, then output an error and exit the function.
+        if ($null -eq $global:FromEmail) {
+            Write-Host "Error: The '`$global:FromEmail' variable is empty. Please update your 'AD-PowerAdmin_settings.ps1' file with the details that match your environment." -ForegroundColor Red
             return
         }
-        #try to email the $global:AdminReportEmail with the Subject "ADPowerAdmin Password Audit Report" and the email Body will contains $AdPwTestData data.
+        #try to email the $global:ADAdminEmail with the Subject "ADPowerAdmin Password Audit Report" and the email Body will contains $AdPwTestData data.
         try {
-            Send-Email -ToEmail "$global:ReportAdminEmailTo" -FromEmail "$global:ReportsEmailFrom" -Subject "ADPowerAdmin Password Audit Report" -Body $ADPasswordTestDataString
+            Send-Email -ToEmail "$global:ADAdminEmail" -FromEmail "$global:FromEmail" -Subject "ADPowerAdmin Password Audit Report" -Body $ADPasswordTestDataString
         } catch {
             # If the email fails, then output an error and exit the function.
-            Write-Host "Error: The Admin Report email failed to send to $global:ReportAdminEmailTo." -ForegroundColor Red
+            Write-Host "Error: The Admin Report email failed to send to $global:ADAdminEmail." -ForegroundColor Red
             write-host "    Please check the 'AD-PowerAdmin_settings.ps1' file and make sure the email settings are correct." -ForegroundColor Red
             # if debug is enabled, then output the error.
             if ($global:Debug) {
@@ -495,58 +495,6 @@ Function Get-PasswordAuditAdminReport {
         }
     }
 # End of Get-PasswordAuditAdminReport function
-}
-
-Function New-RandomPassword {
-    <#
-    .SYNOPSIS
-    Function to create a random 64 character long password and return it.
-
-    .DESCRIPTION
-    Function to create a random 64 character long password and return it.
-
-    .EXAMPLE
-    $NewPassword = New-RandomPassword
-
-    .INPUTS
-    None
-
-    .OUTPUTS
-    System.String
-
-    .NOTES
-
-    #>
-
-    param(
-        [Parameter(Mandatory=$False,Position=1)]
-        [int]$PasswordNrChars = 64
-    )
-
-	Process {
-		$Iterations = 0
-        Do {
-			If ($Iterations -ge 20) {
-				EXIT
-			}
-			$Iterations++
-			$pwdBytes = @()
-			$rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
-			Do {
-				[byte[]]$byte = [byte]1
-				$rng.GetBytes($byte)
-				If ($byte[0] -lt 33 -or $byte[0] -gt 126) {
-					CONTINUE
-				}
-                $pwdBytes += $byte[0]
-			}
-			While ($pwdBytes.Count -lt $PasswordNrChars)
-				$NewPassword = ([char[]]$pwdBytes) -join ''
-			}
-        Until (Test-PasswordIsComplex $NewPassword)
-        Return $NewPassword
-	}
-# End of New-RandomPassword function
 }
 
 Function Update-KRBTGTPassword {
@@ -759,16 +707,16 @@ Function Invoke-WeakPwdProcess {
             $Message = "Hello $UserName,`r`n"
             $Message += $global:PwAuditAlertEmailMessage
 
-            # If the $global:PwAuditAlertEmailCCAdmins is true, then add the $global:ReportAdminEmailTo to the CC list.
+            # If the $global:PwAuditAlertEmailCCAdmins is true, then add the $global:ADAdminEmail to the CC list.
             if ($global:PwAuditAlertEmailCCAdmins) {
-                $CC = $global:ReportAdminEmailTo
+                $CC = $global:ADAdminEmail
             } else {
                 $CC = $null
             }
 
             #try to email the $User.
             try {
-                Send-Email -ToEmail "$UserEmail" -FromEmail "$global:ReportsEmailFrom" -CcEmail $CC -Subject "$Subject" -Body "$Message"
+                Send-Email -ToEmail "$UserEmail" -FromEmail "$global:FromEmail" -CcEmail $CC -Subject "$Subject" -Body "$Message"
             } catch {
                 # If the email fails, then output an error and exit the function.
                 Write-Host "Error: A breached user email failed to send to $UserEmail" -ForegroundColor Red
@@ -902,54 +850,6 @@ function Test-PwUserFollowup {
     # Unregister the scheduled task with the name "PwUserFollowup-$JobVar1
     Unregister-ScheduledTask -TaskName "PwFollowUp-$JobVar1" -Confirm:$false
 # End of the Test-PwUserFollowup function.
-}
-
-Function Test-PasswordIsComplex {
-    <#
-    .SYNOPSIS
-    FUNCTION: Confirm Generated Password Meets Complexity Requirements
-    Source: https://docs.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/password-must-meet-complexity-requirements
-
-    .DESCRIPTION
-    FUNCTION: Confirm Generated Password Meets Complexity Requirements
-    Source: https://docs.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/password-must-meet-complexity-requirements
-
-    .PARAMETER StringToTest
-    The string to test if it meets the complexity requirements.
-
-    .EXAMPLE
-    Test-PasswordIsComplex -StringToTest "Password123!"
-
-    .NOTES
-
-    #>
-
-    Param(
-        [Parameter(Mandatory=$True,Position=1)]
-        [String]$StringToTest
-    )
-
-	Process {
-		$criteriaMet = 0
-
-		# Upper Case Characters (A through Z, with diacritic marks, Greek and Cyrillic characters)
-		If ($StringToTest -cmatch '[A-Z]') {$criteriaMet++}
-
-		# Lower Case Characters (a through z, sharp-s, with diacritic marks, Greek and Cyrillic characters)
-		If ($StringToTest -cmatch '[a-z]') {$criteriaMet++}
-
-		# Numeric Characters (0 through 9)
-		If ($StringToTest -match '\d') {$criteriaMet++}
-
-		# Special Chracters (Non-alphanumeric characters, currency symbols such as the Euro or British Pound are not counted as special characters for this policy setting)
-		If ($StringToTest -match '[\^~!@#$%^&*_+=`|\\(){}\[\]:;"''<>,.?/]') {$criteriaMet++}
-
-		# Check If It Matches Default Windows Complexity Requirements
-		If ($criteriaMet -lt 3) {Return $false}
-		If ($StringToTest.Length -lt 8) {Return $false}
-		Return $true
-	}
-# End of Test-PasswordIsComplex function
 }
 
 function Start-MonthlyPasswordAudit {
@@ -1386,11 +1286,11 @@ Function Start-DailyPasswordNotRequiredAudit {
 
     [string]$Body += "`r`nFull report: $ReportFile`r`n"
 
-    if ($null -eq $global:ReportAdminEmailTo -or $global:ReportAdminEmailTo -eq '') { return }
+    if ($null -eq $global:ADAdminEmail -or $global:ADAdminEmail -eq '') { return }
 
     try {
-        Send-Email -ToEmail "$global:ReportAdminEmailTo" `
-            -FromEmail "$global:ReportsEmailFrom" `
+        Send-Email -ToEmail "$global:ADAdminEmail" `
+            -FromEmail "$global:FromEmail" `
             -Subject "AD-PowerAdmin: PasswordNotRequired Accounts Detected - ACTION REQUIRED" `
             -Body $Body
     } catch {
@@ -1733,11 +1633,11 @@ Function Start-DailyAsRepRoastingAudit {
 
     [string]$Body += "`r`nFull report: $ReportFile`r`n"
 
-    if ($null -eq $global:ReportAdminEmailTo -or $global:ReportAdminEmailTo -eq '') { return }
+    if ($null -eq $global:ADAdminEmail -or $global:ADAdminEmail -eq '') { return }
 
     try {
-        Send-Email -ToEmail "$global:ReportAdminEmailTo" `
-            -FromEmail "$global:ReportsEmailFrom" `
+        Send-Email -ToEmail "$global:ADAdminEmail" `
+            -FromEmail "$global:FromEmail" `
             -Subject "AD-PowerAdmin: AS-REP Roastable Accounts Detected - ACTION REQUIRED" `
             -Body $Body
     } catch {

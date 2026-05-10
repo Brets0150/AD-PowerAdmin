@@ -70,7 +70,7 @@
     # NestedModules = @()
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-    FunctionsToExport = @('Install-DSInternals', 'Install-ADPowerAdmin', 'Test-ADPowerAdminInstall', 'New-ADPowerAdminHomeFolder', 'Remove-ADPowerAdmin', 'Install-PowerShell7', 'Update-ADPowerAdminModules', 'Start-SettingsWizard', 'Update-ADPowerAdminSettingsFile')
+    FunctionsToExport = @('Install-DSInternals', 'Install-ADPowerAdmin', 'Test-ADPowerAdminInstall', 'New-ADPowerAdminHomeFolder', 'Remove-ADPowerAdmin', 'Install-PowerShell7', 'Update-ADPowerAdminModules', 'Start-SettingsWizard', 'Update-ADPowerAdminSettingsFile', 'Test-EmailConfiguration')
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
     CmdletsToExport = @()

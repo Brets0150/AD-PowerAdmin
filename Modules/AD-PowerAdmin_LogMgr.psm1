@@ -969,7 +969,7 @@ Function Start-DailyLockoutSummaryReport {
         [string]$EmailBody  = $Header
         $EmailBody         += "No account lockout events (ID 4740) were found in the past 24 hours.`r`n"
         Send-Email -ToEmail $global:ADAdminEmail `
-                   -FromEmail $global:ReportsEmailFrom `
+                   -FromEmail $global:FromEmail `
                    -Subject "ADPowerAdmin: Daily Lockout Report - No Lockouts Detected" `
                    -Body $EmailBody
         return
@@ -1012,7 +1012,7 @@ Function Start-DailyLockoutSummaryReport {
         -ReportName "DailyLockoutReport_$(Get-Date -Format 'yyyyMMdd')" -Force
 
     Send-Email -ToEmail $global:ADAdminEmail `
-               -FromEmail $global:ReportsEmailFrom `
+               -FromEmail $global:FromEmail `
                -Subject "ADPowerAdmin: Daily Lockout Report - $TotalLockouts Events, $UniqueUsers Accounts" `
                -Body $EmailBody
 }

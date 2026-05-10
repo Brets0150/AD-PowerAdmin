@@ -57,6 +57,11 @@ Function Initialize-Module {
                     Label   = "Download the latest default settings file from GitHub and append any new variables missing from the current AD-PowerAdmin_settings.ps1, preserving all existing configured values."
                     Command = "Update-ADPowerAdminSettingsFile"
                 }
+                'TestEmailConfig' = @{
+                    Title   = "Test Email Configuration"
+                    Label   = "Run a multi-stage diagnostic to verify SMTP settings: validates configuration values, tests DNS resolution of the SMTP server, tests TCP port connectivity, and attempts to send a test email to ADAdminEmail. Detailed pass/fail output at each stage aids troubleshooting."
+                    Command = "Test-EmailConfiguration"
+                }
             }
         }
     }
@@ -1460,66 +1465,6 @@ function Update-ADPowerAdminSettingsFile {
 # exception to the module read-only convention for $global:* settings.
 ##############################################################################################
 
-function Set-SettingsFileValue {
-    <#
-    .SYNOPSIS
-    Apply a targeted regex replacement for one variable in the settings file content string.
-
-    .DESCRIPTION
-    Takes the full raw content of AD-PowerAdmin_settings.ps1 and replaces the value of the
-    named variable. Supports six VarType modes covering every declaration style used in the
-    settings file. Returns the modified content string; the caller writes the file.
-
-    .PARAMETER Content
-    The full raw text of the settings file.
-
-    .PARAMETER VarName
-    The bare variable name without '$global:' (e.g. 'ADAdminEmail').
-
-    .PARAMETER NewValue
-    The replacement value. For bool types pass 'true' or 'false' (no dollar sign).
-    For array-ou-locations pass the pre-built inner block string.
-
-    .PARAMETER VarType
-    One of: bool | int | string-single | string-double | string-varref | array-ou-locations
-    #>
-    param(
-        [Parameter(Mandatory=$true)][string]$Content,
-        [Parameter(Mandatory=$true)][string]$VarName,
-        [Parameter(Mandatory=$true)][AllowEmptyString()][string]$NewValue,
-        [Parameter(Mandatory=$true)]
-        [ValidateSet('bool','int','string-single','string-double','string-varref','array-ou-locations')]
-        [string]$VarType
-    )
-
-    switch ($VarType) {
-        'bool' {
-            # \s* handles column-aligned declarations like KerberosKRBTGTAudit
-            $Content = $Content -replace "(\[bool\]\`$global:$VarName\s*=\s*\`\$)(true|false)", ('${1}' + $NewValue)
-        }
-        'int' {
-            # (?i)int handles both [int] and [Int]
-            $Content = $Content -replace "(\[(?i)int\]\`$global:$VarName\s*=\s*)\d+", ('${1}' + $NewValue)
-        }
-        'string-single' {
-            $Content = $Content -replace "(\[string\]\`$global:$VarName\s*=\s*')[^']*('|`$)", ('${1}' + $NewValue + '${2}')
-        }
-        'string-double' {
-            $Content = $Content -replace "(\[string\]\`$global:$VarName\s*=\s*`")[^`"]*(`"|\r?`n)", ('${1}' + $NewValue + '${2}')
-        }
-        'string-varref' {
-            # Replaces the entire value (which may be $global:OtherVar) with a literal string
-            $Content = $Content -replace "(\[string\]\`$global:$VarName\s*=\s*)[^\r\n]+", ('${1}' + "'" + $NewValue + "'")
-        }
-        'array-ou-locations' {
-            # (?sm) = dotall + multiline so . matches newlines and ^ anchors to line start
-            $EscapedName = [regex]::Escape($VarName)
-            $Content = $Content -replace "(?sm)(\[array\]\`$global:$EscapedName\s*=\s*@\().*?(^\))", ('${1}' + "`n" + $NewValue + "`n" + '${2}')
-        }
-    }
-    return $Content
-}
-
 function Read-SettingBool {
     <#
     .SYNOPSIS
@@ -2015,12 +1960,6 @@ function Start-SettingsWizard {
     $Changes['PasswordQualityTestSearchOUbase'] = @{ Value = $NewPwOU; VarType = 'string-single' }
 
     Write-Host ""
-    Write-Host "  ReportAdminEmailTo: email address that receives the password audit admin report." -ForegroundColor DarkGray
-    Write-Host "  Defaults to ADAdminEmail if not overridden." -ForegroundColor DarkGray
-    [string]$NewReportTo = Read-SettingString -Prompt "Report recipient email" -Default $global:ReportAdminEmailTo
-    $Changes['ReportAdminEmailTo'] = @{ Value = $NewReportTo; VarType = 'string-varref' }
-
-    Write-Host ""
     Write-Host "  PwAuditAlertEmailCCAdmins: when enabled, the admin also receives a copy of every" -ForegroundColor DarkGray
     Write-Host "  breach alert sent to end users." -ForegroundColor DarkGray
     [bool]$NewCcAdmins = Read-SettingBool -Prompt "CC admins on user breach alert emails" -Default $global:PwAuditAlertEmailCCAdmins
@@ -2050,19 +1989,14 @@ function Start-SettingsWizard {
     $Changes['SMTPServer'] = @{ Value = $NewSMTP; VarType = 'string-single' }
 
     Write-Host ""
-    Write-Host "  ReportsEmailFrom: the From address on outbound emails. Defaults to FromEmail." -ForegroundColor DarkGray
-    [string]$NewRptFrom = Read-SettingString -Prompt "Reports From email address" -Default $global:ReportsEmailFrom
-    $Changes['ReportsEmailFrom'] = @{ Value = $NewRptFrom; VarType = 'string-varref' }
-
-    Write-Host ""
     Write-Host "  SmtpEnableSSL: whether to require SSL/TLS when connecting to the SMTP server." -ForegroundColor DarkGray
     [bool]$NewSSL = Read-SettingBool -Prompt "Enable SMTP SSL/TLS" -Default $global:SmtpEnableSSL
     $Changes['SmtpEnableSSL'] = @{ Value = $NewSSL.ToString().ToLower(); VarType = 'bool' }
 
     Write-Host ""
     Write-Host "  SMTPPort: SMTP server port. Typical values: 587 (STARTTLS), 465 (SSL), 25 (plain)." -ForegroundColor DarkGray
-    [string]$NewSMTPPort = Read-SettingString -Prompt "SMTP Port" -Default $global:SMTPPort
-    $Changes['SMTPPort'] = @{ Value = $NewSMTPPort; VarType = 'string-single' }
+    [int]$NewSMTPPort = Read-SettingInt -Prompt "SMTP Port" -Default $global:SMTPPort
+    $Changes['SMTPPort'] = @{ Value = $NewSMTPPort.ToString(); VarType = 'int' }
 
     Write-Host ""
     Write-Host "  SMTPUsername: SMTP authentication username (leave empty if your relay does not require auth)." -ForegroundColor DarkGray
@@ -2171,5 +2105,262 @@ function Start-SettingsWizard {
     }
     Write-Host ""
     Write-Host "NOTE: Restart AD-PowerAdmin for the new settings to take effect." -ForegroundColor Yellow
+    Write-Host ""
+}
+
+Function Test-EmailConfiguration {
+    <#
+    .SYNOPSIS
+        Send a test email and run multi-stage SMTP diagnostics.
+
+    .DESCRIPTION
+        Performs four sequential diagnostic stages using the email settings from
+        AD-PowerAdmin_settings.ps1:
+          Stage 1 - Validates that required settings are present.
+          Stage 2 - Tests DNS resolution of the SMTP server hostname.
+          Stage 3 - Tests TCP connectivity to the SMTP server on the configured port.
+          Stage 4 - Attempts to send a test email and captures any SMTP-level errors.
+        Each stage prints [PASS], [FAIL], or [INFO] with contextual troubleshooting
+        guidance to help isolate whether a failure is a config, DNS, network, or
+        SMTP authentication problem.
+
+    .EXAMPLE
+        Test-EmailConfiguration
+    #>
+
+    Write-Host ""
+    Write-Host "==================================================================================" -ForegroundColor Cyan
+    Write-Host "  Email Configuration Diagnostic" -ForegroundColor Cyan
+    Write-Host "==================================================================================" -ForegroundColor Cyan
+    Write-Host ""
+
+    # --- Display current settings ---
+    Write-Host "  Current Email Settings:" -ForegroundColor Yellow
+    Write-Host ("    SMTP Server   : " + $(if ([string]::IsNullOrWhiteSpace($global:SMTPServer))  { "(not set)" } else { $global:SMTPServer }))
+    Write-Host ("    SMTP Port     : " + $(if ([string]::IsNullOrWhiteSpace($global:SMTPPort))    { "(not set - will default to 587)" } else { $global:SMTPPort }))
+    Write-Host ("    SSL Enabled   : " + $global:SmtpEnableSSL)
+    Write-Host ("    SMTP Username : " + $(if ([string]::IsNullOrWhiteSpace($global:SMTPUsername)) { "(not set)" } else { $global:SMTPUsername }))
+    Write-Host ("    SMTP Password : " + $(if ([string]::IsNullOrWhiteSpace($global:SMTPPassword)) { "(not set)" } else { "(configured)" }))
+    Write-Host ("    From Address  : " + $(if ([string]::IsNullOrWhiteSpace($global:FromEmail))   { "(not set)" } else { $global:FromEmail }))
+    Write-Host ("    To Address    : " + $(if ([string]::IsNullOrWhiteSpace($global:ADAdminEmail)) { "(not set)" } else { $global:ADAdminEmail }))
+    Write-Host ""
+
+    [bool]$AllPassed = $true
+
+    # -------------------------------------------------------------------------
+    # Stage 1: Settings Validation
+    # -------------------------------------------------------------------------
+    Write-Host "  --- Stage 1: Settings Validation ---" -ForegroundColor Yellow
+    [bool]$SettingsOk = $true
+
+    if ([string]::IsNullOrWhiteSpace($global:SMTPServer)) {
+        Write-Host "  [FAIL] SMTPServer is not configured." -ForegroundColor Red
+        Write-Host "         Set SMTPServer in AD-PowerAdmin_settings.ps1." -ForegroundColor Yellow
+        $SettingsOk = $false
+        $AllPassed  = $false
+    }
+    if ([string]::IsNullOrWhiteSpace($global:FromEmail)) {
+        Write-Host "  [FAIL] FromEmail is not configured." -ForegroundColor Red
+        Write-Host "         Set FromEmail in AD-PowerAdmin_settings.ps1." -ForegroundColor Yellow
+        $SettingsOk = $false
+        $AllPassed  = $false
+    }
+    if ([string]::IsNullOrWhiteSpace($global:ADAdminEmail)) {
+        Write-Host "  [FAIL] ADAdminEmail is not configured." -ForegroundColor Red
+        Write-Host "         Set ADAdminEmail in AD-PowerAdmin_settings.ps1." -ForegroundColor Yellow
+        $SettingsOk = $false
+        $AllPassed  = $false
+    }
+
+    if (-not $SettingsOk) {
+        Write-Host ""
+        Write-Host "  Cannot continue diagnostics -- fix the missing settings above, then re-run." -ForegroundColor Red
+        Write-Host "  Use 'Configure Settings Wizard' from this menu to update the settings file." -ForegroundColor Yellow
+        Write-Host ""
+        return
+    }
+    Write-Host "  [PASS] All required settings are present." -ForegroundColor Green
+    Write-Host ""
+
+    # Resolve effective port (default 587).
+    [int]$EffectivePort = 587
+    if (-not [string]::IsNullOrWhiteSpace($global:SMTPPort)) {
+        [int]$EffectivePort = [int]$global:SMTPPort
+    }
+
+    # -------------------------------------------------------------------------
+    # Stage 2: DNS Resolution
+    # -------------------------------------------------------------------------
+    Write-Host "  --- Stage 2: DNS Resolution ---" -ForegroundColor Yellow
+
+    [System.Net.IPAddress]$ParsedIp = $null
+    if ([System.Net.IPAddress]::TryParse($global:SMTPServer, [ref]$ParsedIp)) {
+        Write-Host "  [INFO] SMTP server is configured as an IP address: $global:SMTPServer" -ForegroundColor Cyan
+        Write-Host "  [INFO] DNS resolution skipped (direct IP, no hostname to resolve)." -ForegroundColor Cyan
+    } else {
+        Write-Host "  Resolving hostname: $global:SMTPServer" -ForegroundColor White
+        try {
+            [System.Net.IPHostEntry]$HostEntry = [System.Net.Dns]::GetHostEntry($global:SMTPServer)
+            if ($HostEntry.AddressList.Count -gt 0) {
+                [string]$PrimaryIp = $HostEntry.AddressList[0].ToString()
+                Write-Host "  [PASS] Resolved '$($global:SMTPServer)' -> $PrimaryIp" -ForegroundColor Green
+                if ($HostEntry.AddressList.Count -gt 1) {
+                    [string]$ExtraIps = ($HostEntry.AddressList[1..($HostEntry.AddressList.Count - 1)] | ForEach-Object { $_.ToString() }) -join ", "
+                    Write-Host "  [INFO] Additional addresses: $ExtraIps" -ForegroundColor Cyan
+                }
+            } else {
+                Write-Host "  [FAIL] DNS resolved '$($global:SMTPServer)' but returned no IP addresses." -ForegroundColor Red
+                $AllPassed = $false
+            }
+        } catch {
+            Write-Host "  [FAIL] DNS resolution failed for '$($global:SMTPServer)'." -ForegroundColor Red
+            Write-Host "         Error: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "         Possible causes:" -ForegroundColor Yellow
+            Write-Host "           - Hostname is misspelled in settings." -ForegroundColor Yellow
+            Write-Host "           - The DNS server used by this machine cannot reach the SMTP host." -ForegroundColor Yellow
+            Write-Host "           - The hostname does not exist in DNS." -ForegroundColor Yellow
+            $AllPassed = $false
+        }
+    }
+    Write-Host ""
+
+    # -------------------------------------------------------------------------
+    # Stage 3: TCP Port Connectivity
+    # -------------------------------------------------------------------------
+    Write-Host "  --- Stage 3: TCP Port Connectivity (port $EffectivePort) ---" -ForegroundColor Yellow
+    Write-Host "  Connecting to $($global:SMTPServer):$EffectivePort ..." -ForegroundColor White
+
+    try {
+        $TcpClient    = New-Object System.Net.Sockets.TcpClient
+        $ConnectAsync = $TcpClient.BeginConnect($global:SMTPServer, $EffectivePort, $null, $null)
+        [bool]$Connected = $ConnectAsync.AsyncWaitHandle.WaitOne(5000, $false)
+
+        if ($Connected -and $TcpClient.Connected) {
+            Write-Host "  [PASS] TCP connection to $($global:SMTPServer):$EffectivePort succeeded." -ForegroundColor Green
+        } else {
+            Write-Host "  [FAIL] TCP connection to $($global:SMTPServer):$EffectivePort timed out (5 s)." -ForegroundColor Red
+            Write-Host "         Possible causes:" -ForegroundColor Yellow
+            Write-Host "           - A firewall is blocking port $EffectivePort between this host and the SMTP server." -ForegroundColor Yellow
+            Write-Host "           - The SMTP server is not listening on port $EffectivePort." -ForegroundColor Yellow
+            Write-Host "           - The SMTP server is offline or unreachable." -ForegroundColor Yellow
+            Write-Host "           - SMTPPort in settings is incorrect (currently: $EffectivePort)." -ForegroundColor Yellow
+            $AllPassed = $false
+        }
+        try { $TcpClient.Close() } catch {}
+    } catch {
+        Write-Host "  [FAIL] TCP connection to $($global:SMTPServer):$EffectivePort failed." -ForegroundColor Red
+        Write-Host "         Error: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "         Possible causes:" -ForegroundColor Yellow
+        Write-Host "           - A firewall or routing issue is preventing the connection." -ForegroundColor Yellow
+        Write-Host "           - The SMTP server actively refused the connection (wrong port)." -ForegroundColor Yellow
+        Write-Host "           - DNS resolved to an address that is not routable from this host." -ForegroundColor Yellow
+        $AllPassed = $false
+    }
+    Write-Host ""
+
+    # -------------------------------------------------------------------------
+    # Stage 4: SMTP Send Test
+    # -------------------------------------------------------------------------
+    Write-Host "  --- Stage 4: SMTP Send Test ---" -ForegroundColor Yellow
+    Write-Host "  Sending test email to $($global:ADAdminEmail) ..." -ForegroundColor White
+
+    [string]$Hostname  = $env:COMPUTERNAME
+    [string]$Timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+    [string]$TestSubject = "ADPowerAdmin: Email Configuration Test"
+    [string]$TestBody = @"
+This is an automated email configuration test sent by AD-PowerAdmin.
+
+If you received this email, your SMTP configuration is working correctly.
+
+Test details:
+  Sent from  : $Hostname
+  Timestamp  : $Timestamp
+  SMTP Server: $($global:SMTPServer)
+  SMTP Port  : $EffectivePort
+  SSL Enabled: $($global:SmtpEnableSSL)
+  From       : $($global:FromEmail)
+  To         : $($global:ADAdminEmail)
+"@
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    $TestMessage        = New-Object Net.Mail.MailMessage
+    $TestMessage.From   = $global:FromEmail
+    $TestMessage.To.Add($global:ADAdminEmail)
+    $TestMessage.Subject = $TestSubject
+    $TestMessage.Body    = $TestBody
+
+    $TestSmtp           = New-Object Net.Mail.SmtpClient($global:SMTPServer, $EffectivePort)
+    $TestSmtp.EnableSSL = [bool]$global:SmtpEnableSSL
+
+    if ((-not [string]::IsNullOrWhiteSpace($global:SMTPUsername)) -and (-not [string]::IsNullOrWhiteSpace($global:SMTPPassword))) {
+        $TestSmtp.Credentials = New-Object System.Net.NetworkCredential($global:SMTPUsername, $global:SMTPPassword)
+    }
+
+    try {
+        $TestSmtp.Send($TestMessage)
+        Write-Host "  [PASS] Test email sent successfully." -ForegroundColor Green
+        Write-Host "  [INFO] Please verify the message arrived at: $($global:ADAdminEmail)" -ForegroundColor Cyan
+        Write-Host "  [INFO] Check spam/junk folders if it does not appear in the inbox." -ForegroundColor Cyan
+    } catch [System.Net.Mail.SmtpException] {
+        [string]$SmtpCode = $_.Exception.StatusCode
+        Write-Host "  [FAIL] SMTP protocol error (status: $SmtpCode)." -ForegroundColor Red
+        Write-Host "         Error: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "         Possible causes:" -ForegroundColor Yellow
+        switch ($SmtpCode) {
+            "MustIssueStartTlsFirst" {
+                Write-Host "           - Server requires STARTTLS. Set SmtpEnableSSL = true in settings." -ForegroundColor Yellow
+            }
+            "ClientNotPermitted" {
+                Write-Host "           - Server rejected the connection. Check IP allowlists on the SMTP relay." -ForegroundColor Yellow
+            }
+            "MailboxUnavailable" {
+                Write-Host "           - The From address was rejected. Verify FromEmail in settings." -ForegroundColor Yellow
+            }
+            "InsufficientStorage" {
+                Write-Host "           - Server-side storage or quota issue. Contact your mail admin." -ForegroundColor Yellow
+            }
+            default {
+                Write-Host "           - Authentication failure: verify SMTPUsername and SMTPPassword." -ForegroundColor Yellow
+                Write-Host "           - Relay denied: this host may not be permitted to relay through the SMTP server." -ForegroundColor Yellow
+                Write-Host "           - The From address may not be permitted by the SMTP server policy." -ForegroundColor Yellow
+            }
+        }
+        $AllPassed = $false
+    } catch [System.Security.Authentication.AuthenticationException] {
+        Write-Host "  [FAIL] TLS/SSL handshake failed." -ForegroundColor Red
+        Write-Host "         Error: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "         Possible causes:" -ForegroundColor Yellow
+        Write-Host "           - SmtpEnableSSL is set to true but the server does not support SSL on port $EffectivePort." -ForegroundColor Yellow
+        Write-Host "           - SmtpEnableSSL is set to false but the server requires SSL/TLS." -ForegroundColor Yellow
+        Write-Host "           - The server's TLS certificate is untrusted or expired." -ForegroundColor Yellow
+        Write-Host "           - Try toggling SmtpEnableSSL and/or switching ports (25, 465, 587)." -ForegroundColor Yellow
+        $AllPassed = $false
+    } catch [System.Net.Sockets.SocketException] {
+        Write-Host "  [FAIL] Network error during SMTP send (socket error $($_.Exception.SocketErrorCode))." -ForegroundColor Red
+        Write-Host "         Error: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "         The TCP test passed but the connection dropped during the SMTP handshake." -ForegroundColor Yellow
+        Write-Host "         The server may have closed the connection due to a policy or load issue." -ForegroundColor Yellow
+        $AllPassed = $false
+    } catch {
+        Write-Host "  [FAIL] Unexpected error while sending test email." -ForegroundColor Red
+        Write-Host "         Error: $($_.Exception.Message)" -ForegroundColor Red
+        $AllPassed = $false
+    } finally {
+        try { $TestMessage.Dispose() } catch {}
+        try { $TestSmtp.Dispose()    } catch {}
+    }
+    Write-Host ""
+
+    # -------------------------------------------------------------------------
+    # Summary
+    # -------------------------------------------------------------------------
+    Write-Host "  --- Diagnostic Summary ---" -ForegroundColor Yellow
+    if ($AllPassed) {
+        Write-Host "  [PASS] All stages passed. Email configuration appears correct." -ForegroundColor Green
+    } else {
+        Write-Host "  [FAIL] One or more stages failed. Review the details above." -ForegroundColor Red
+        Write-Host "         Use 'Configure Settings Wizard' from this menu to update settings." -ForegroundColor Yellow
+    }
     Write-Host ""
 }

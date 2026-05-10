@@ -147,48 +147,70 @@ Function Send-Email {
 
     #>
     # Parameters for this function.
+    # All parameters are Mandatory=$false so that missing or empty values produce a clean
+    # diagnostic message rather than an unhandled ParameterBindingValidationException.
     Param(
-        [Parameter(Mandatory=$true,Position=1)]
+        [Parameter(Mandatory=$false,Position=1)]
         [string]$ToEmail,
-        [Parameter(Mandatory=$true,Position=2)]
+        [Parameter(Mandatory=$false,Position=2)]
         [string]$FromEmail,
         [Parameter(Mandatory=$false,Position=3)]
         [string]$CcEmail,
-        [Parameter(Mandatory=$true,Position=3)]
+        [Parameter(Mandatory=$false,Position=4)]
         [string]$Subject,
-        [Parameter(Mandatory=$true,Position=4)]
-        [string]$Body,
         [Parameter(Mandatory=$false,Position=5)]
-        [string]$SmtpServer,
+        [string]$Body,
         [Parameter(Mandatory=$false,Position=6)]
-        [string]$SmtpPort,
+        [string]$SmtpServer,
         [Parameter(Mandatory=$false,Position=7)]
-        [string]$SmtpUser,
+        [string]$SmtpPort,
         [Parameter(Mandatory=$false,Position=8)]
-        [string]$SmtpPass,
+        [string]$SmtpUser,
         [Parameter(Mandatory=$false,Position=9)]
+        [string]$SmtpPass,
+        [Parameter(Mandatory=$false,Position=10)]
         [bool]$DebugEmail
     )
+
+    # Validate required fields before attempting anything. Callers may pass empty strings
+    # when global settings are unconfigured; a clean message is better than a binding error.
+    if ([string]::IsNullOrWhiteSpace($ToEmail)) {
+        Write-Host "Send-Email: ToEmail is not set. Configure ADAdminEmail in AD-PowerAdmin_settings.ps1." -ForegroundColor Red
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($FromEmail)) {
+        Write-Host "Send-Email: FromEmail is not set. Configure the from-address setting in AD-PowerAdmin_settings.ps1." -ForegroundColor Red
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($Subject)) {
+        Write-Host "Send-Email: Subject is not set." -ForegroundColor Red
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($Body)) {
+        Write-Host "Send-Email: Body is not set." -ForegroundColor Red
+        return
+    }
+
     # Set the email Security Protocol to TLS 1.2.
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
     # Build the email sending variables.
     $EmailServerParam = @{}
 
-    # If $SMTPServer is not empty, then use the $global:SmtpServer variable. If the $global:SmtpServer is empty, then display an error and exit the function.
-    if ($SmtpServer -ne '') {
+    # Resolve SMTP server: parameter takes precedence over global setting.
+    if (-not [string]::IsNullOrWhiteSpace($SmtpServer)) {
         $EmailServerParam.SmtpServer = $SmtpServer
-    } elseif ($global:SmtpServer -ne '') {
+    } elseif (-not [string]::IsNullOrWhiteSpace($global:SMTPServer)) {
         $EmailServerParam.SmtpServer = $global:SMTPServer
     } else {
-        Write-Host "Error: The SMTP Server is not set. Please set the SMTP Server in the 'AD-PowerAdmin_settings.ps1' file." -ForegroundColor Red
+        Write-Host "Send-Email: SMTPServer is not set. Configure SMTPServer in AD-PowerAdmin_settings.ps1." -ForegroundColor Red
         return
     }
 
-    # If $SMTPPort is not empty, then use the $global:SmtpPort variable. If the $global:SmtpPort is empty, then display an warning and continue.
-    if ($SmtpPort -ne '') {
+    # Resolve SMTP port: parameter takes precedence over global setting; default to 587.
+    if (-not [string]::IsNullOrWhiteSpace($SmtpPort)) {
         $EmailServerParam.Port = $SmtpPort
-    } elseif ($global:SmtpPort -ne '') {
+    } elseif (-not [string]::IsNullOrWhiteSpace($global:SMTPPort)) {
         $EmailServerParam.Port = $global:SMTPPort
     } else {
         $EmailServerParam.Port = "587"
@@ -200,22 +222,18 @@ Function Send-Email {
     $Message.Subject = "$Subject";
     $Message.Body = "$Body";
 
-    # If $CcEmail is not empty or null, then add the $CcEmail to the email.
-    if ($CcEmail -ne '' -and $CcEmail -ne $null) {
+    if (-not [string]::IsNullOrWhiteSpace($CcEmail)) {
         $Message.CC.Add($CcEmail);
     }
 
     $Smtp = New-Object Net.Mail.SmtpClient($EmailServerParam.SmtpServer, $EmailServerParam.Port);
-    # SSL is always used.
     $Smtp.EnableSSL = [bool]$global:SmtpEnableSSL;
 
-    # If $SMTPUser and $SMTPPass is not empty or null, then use the $global:SMTPUser and $global:SMTPPassword variables. If the $global:SMTPUser or $global:SMTPPassword is empty, then display an warning and continue.
-    # If either is not empty, then use the $global:SMTPUser and $global:SMTPPassword to build $Smtp.Credentials object variable.
-    if (($SmtpUser -ne '') -and ($SmtpPass -ne '')) {
+    # Resolve credentials: explicit parameters take precedence over global settings.
+    if ((-not [string]::IsNullOrWhiteSpace($SmtpUser)) -and (-not [string]::IsNullOrWhiteSpace($SmtpPass))) {
         $Smtp.Credentials = New-Object System.Net.NetworkCredential($SmtpUser, $SmtpPass);
-    }
-    if (($global:SMTPUser -ne '') -and ($global:SMTPPassword -ne '')) {
-        $Smtp.Credentials = New-Object System.Net.NetworkCredential($global:SMTPUser, $global:SMTPPassword);
+    } elseif ((-not [string]::IsNullOrWhiteSpace($global:SMTPUsername)) -and (-not [string]::IsNullOrWhiteSpace($global:SMTPPassword))) {
+        $Smtp.Credentials = New-Object System.Net.NetworkCredential($global:SMTPUsername, $global:SMTPPassword);
     }
 
     # Try to send the email.
@@ -237,107 +255,6 @@ Function Send-Email {
     # Start a sleep timer for 1 second.
     Start-Sleep -Seconds 1
 # End of the Send-Email function.
-}
-
-Function Send-EmailTest {
-    <#
-    .SYNOPSIS
-        Function to send a test email.
-
-    .DESCRIPTION
-        A To ask a user for the variable for the Send-Email function. With the gathered information, the function will send an email to the user.
-    #>
-    [string]$Subject = "ADPowerAdmin: Test Email"
-    [string]$Body = "This is a test email from the ADPowerAdmin script. If you are reading this, then the email was sent successfully."
-    Write-Host "You can leave any of the following fields blank and the script will use the default settings from the 'AD-PowerAdmin_settings.ps1' file." -ForegroundColor Yellow
-    # Ask the user for the email address to send the test email to.
-    [string]$ToEmail = Read-Host "Enter the email address to send the test email to"
-    # Ask the user for the email address to send the test email from.
-    [string]$FromEmail = Read-Host "Enter the email address to send the test email from"
-    # Ask the user for the SMTP Server to send the test email from.
-    [string]$SmtpServer = Read-Host "Enter the SMTP Server to send the test email"
-    # Ask the user for the SMTP Port to send the test email from.
-    [string]$SmtpPort = Read-Host "Enter the SMTP Port to send the test email"
-    # Ask the user for the SMTP User to send the test email from.
-    [string]$SmtpUser = Read-Host "Enter the SMTP User to send the test email"
-    # Ask the user for the SMTP Password to send the test email from.
-    [string]$SmtpPass = Read-Host "Enter the SMTP Password to send the test email"
-
-    $SendTestEmailParam = @{}
-
-    # If $SMTPServer is not empty, then use the $global:SmtpServer variable for $SMTPServer. If the $global:SmtpServer is empty, then display an error and exit the function.
-    # If $SMTPServer is not empty add it to the $SendTestEmailParam variable.
-    if ($SmtpServer -ne '') {
-        $SendTestEmailParam.SmtpServer = "$SmtpServer"
-    } elseif ($global:SmtpServer -ne '') {
-        $SendTestEmailParam.SmtpServer = "$global:SMTPServer"
-    } else {
-        Write-Host "Error: The SMTP Server is not set. Please set the SMTP Server in the 'AD-PowerAdmin_settings.ps1' file." -ForegroundColor Red
-        return
-    }
-
-    # If $SMTPPort is not empty, then use the $global:SmtpPort variable for $SMTPPort. If the $global:SmtpServer is empty, then display a warning and continue.
-    # If $SMTPPort is not empty add it to the $SendTestEmailParam variable.
-    if ($SmtpPort -ne '') {
-        $SendTestEmailParam.SmtpPort = "$SmtpPort"
-    } elseif ($global:SmtpPort -ne '') {
-        $SendTestEmailParam.SmtpPort = "$global:SMTPPort"
-    } else {
-        Write-Host "Warning: The SMTP Port is not set. Please Check the 'AD-PowerAdmin_settings.ps1' file." -ForegroundColor Yellow
-        Write-Host "Trying to send email with default SMTP Port." -ForegroundColor Yellow
-    }
-
-    # If $SmtpUser is not empty, then use the $global:SmtpPort variable for $SmtpUser. If the $global:SmtpServer is empty, then display a warning and continue.
-    # If $SmtpUser is not empty add it to the $SendTestEmailParam variable.
-    if ($SmtpUser -ne '') {
-        $SendTestEmailParam.SmtpUser = "$SmtpUser"
-    } elseif ($global:SMTPUsername -ne '') {
-        $SendTestEmailParam.SmtpUser = "$global:SMTPUsername"
-    } else {
-        Write-Host "Warning: The SMTP User is not set. Please Check the 'AD-PowerAdmin_settings.ps1' file." -ForegroundColor Yellow
-        Write-Host "Trying to send email without SMTP User." -ForegroundColor Yellow
-    }
-
-    # If $SmtpPass is not empty, then use the $global:SmtpPort variable for $SmtpPass. If the $global:SmtpServer is empty, then display a warning and continue.
-    # If $SmtpPass is not empty add it to the $SendTestEmailParam variable.
-    if ($SmtpPass -ne '') {
-        $SendTestEmailParam.SmtpPass = "$SmtpPass"
-    } elseif ($global:SMTPPassword -ne '') {
-        $SendTestEmailParam.SmtpPass = "$global:SMTPPassword"
-    } else {
-        Write-Host "Warning: The SMTP Password is not set. Please Check the 'AD-PowerAdmin_settings.ps1' file." -ForegroundColor Yellow
-        Write-Host "Trying to send email without SMTP Password." -ForegroundColor Yellow
-    }
-
-    # If $ToEmail is not empty, then use the $global:ToEmail variable for $ToEmail. If the $global:ToEmail is empty, then display an error and exit the function.
-    # If $ToEmail is not empty add it to the $SendTestEmailParam variable.
-    if ($ToEmail -ne '') {
-        [string]$ToEmail = "$ToEmail"
-    } elseif ($global:ADAdminEmail -ne '') {
-        [string]$ToEmail = "$global:ADAdminEmail"
-    } else {
-        Write-Host "Error: The To Email is not set. Please set the To Email in the 'AD-PowerAdmin_settings.ps1' file." -ForegroundColor Red
-        return
-    }
-
-    # If $FromEmail is not empty, then use the $global:FromEmail variable for $FromEmail. If the $global:FromEmail is empty, then display an error and exit the function.
-    # If $FromEmail is not empty add it to the $SendTestEmailParam variable.
-    if ($FromEmail -ne '') {
-        [string]$FromEmail = "$FromEmail"
-    } elseif ($global:FromEmail -ne '') {
-        [string]$FromEmail = "$global:FromEmail"
-    } else {
-        Write-Host "Error: The From Email is not set. Please set the From Email in the 'AD-PowerAdmin_settings.ps1' file." -ForegroundColor Red
-        return
-    }
-
-    # Enabele debugging.
-    $SendTestEmailParam.DebugEmail = $true
-
-    # Try to send the email.
-    Send-Email -ToEmail "$ToEmail" -FromEmail "$FromEmail" -Subject "$Subject" -Body "$Body" @SendTestEmailParam
-    return
-# End of the Send-EmailTest function.
 }
 
 function Get-DateFromCalendar {
@@ -773,6 +690,105 @@ Function Get-WordWrap {
     return $Lines
 }
 
+Function Get-SystemRole {
+    <#
+    .SYNOPSIS
+        Returns the Windows system role of the local computer.
+
+    .DESCRIPTION
+        Queries Win32_OperatingSystem.ProductType via CIM and returns one of three
+        role strings: 'DomainController', 'MemberServer', or 'Workstation'. On any
+        CIM query error the function defaults to 'Workstation'.
+
+    .OUTPUTS
+        [string] 'DomainController', 'MemberServer', or 'Workstation'.
+
+    .EXAMPLE
+        $Role = Get-SystemRole
+        if ($Role -eq 'DomainController') { Write-Host "This is a DC." }
+    #>
+    try {
+        $ProductType = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).ProductType
+        switch ($ProductType) {
+            2 { return 'DomainController' }
+            3 { return 'MemberServer' }
+            default { return 'Workstation' }
+        }
+    } catch {
+        return 'Workstation'
+    }
+}
+
+Function Write-WrappedText {
+    <#
+    .SYNOPSIS
+        Writes a labeled text block to the console with word-wrapping.
+
+    .DESCRIPTION
+        Writes a console line in the form "Indent + Label + text". When the text
+        exceeds the available width it wraps to continuation lines indented to align
+        the text under the end of the label. Useful for formatted help pages and
+        diagnostic output where labels and body text must stay visually aligned.
+
+    .PARAMETER Label
+        Text prepended to the first line. Continuation lines are indented by this
+        many spaces to keep the body text aligned under the label.
+
+    .PARAMETER Text
+        The text to wrap and write. Leading and trailing whitespace is stripped.
+
+    .PARAMETER Indent
+        String prepended to every line before the label. Defaults to nine spaces.
+
+    .PARAMETER ForegroundColor
+        Console foreground color for all output. Defaults to 'Gray'.
+
+    .PARAMETER MaxWidth
+        Maximum total line width in characters. Defaults to 100.
+
+    .EXAMPLE
+        Write-WrappedText -Label 'Expected: ' -Text 'Success and Failure' -ForegroundColor Gray
+    .EXAMPLE
+        Write-WrappedText -Label 'Note: ' -Text $LongDescription -Indent '    ' -MaxWidth 80
+    #>
+    Param(
+        [string]$Label,
+        [string]$Text,
+        [string]$Indent          = '         ',
+        [string]$ForegroundColor = 'Gray',
+        [int]$MaxWidth           = 100
+    )
+    if ([string]::IsNullOrWhiteSpace($Text)) { return }
+
+    $ContIndent = $Indent + (' ' * $Label.Length)
+    $FirstMax   = $MaxWidth - $Indent.Length - $Label.Length
+    $ContMax    = $MaxWidth - $ContIndent.Length
+    if ($FirstMax -lt 20) { $FirstMax = 20 }
+    if ($ContMax  -lt 20) { $ContMax  = 20 }
+
+    $Words   = ($Text.Trim()) -split '\s+'
+    $Line    = ''
+    $IsFirst = $true
+
+    foreach ($Word in $Words) {
+        $Max = if ($IsFirst) { $FirstMax } else { $ContMax }
+        if ($Line -eq '') {
+            $Line = $Word
+        } elseif (($Line.Length + 1 + $Word.Length) -le $Max) {
+            $Line = "$Line $Word"
+        } else {
+            $Prefix = if ($IsFirst) { "$Indent$Label" } else { $ContIndent }
+            Write-Host "$Prefix$Line" -ForegroundColor $ForegroundColor
+            $IsFirst = $false
+            $Line    = $Word
+        }
+    }
+    if ($Line -ne '') {
+        $Prefix = if ($IsFirst) { "$Indent$Label" } else { $ContIndent }
+        Write-Host "$Prefix$Line" -ForegroundColor $ForegroundColor
+    }
+}
+
 Function Show-AuditReport {
     <#
     .SYNOPSIS
@@ -1103,4 +1119,215 @@ function Get-AdOuSearch {
             }
         }
     }
+}
+
+Function Test-PasswordIsComplex {
+    <#
+    .SYNOPSIS
+    Tests whether a string meets Windows default password complexity requirements.
+
+    .DESCRIPTION
+    Returns $true when the string contains characters from at least three of the four
+    categories (upper, lower, digit, symbol) and is at least eight characters long.
+    Matches the Windows built-in complexity policy documented at:
+    https://docs.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/password-must-meet-complexity-requirements
+
+    .PARAMETER StringToTest
+    The password string to evaluate.
+
+    .EXAMPLE
+    Test-PasswordIsComplex -StringToTest "Password123!"
+    #>
+    Param(
+        [Parameter(Mandatory=$True,Position=1)]
+        [String]$StringToTest
+    )
+    Process {
+        $criteriaMet = 0
+        If ($StringToTest -cmatch '[A-Z]') {$criteriaMet++}
+        If ($StringToTest -cmatch '[a-z]') {$criteriaMet++}
+        If ($StringToTest -match '\d') {$criteriaMet++}
+        If ($StringToTest -match '[\^~!@#$%^&*_+=`|\\(){}\[\]:;"''<>,.?/]') {$criteriaMet++}
+        If ($criteriaMet -lt 3) {Return $false}
+        If ($StringToTest.Length -lt 8) {Return $false}
+        Return $true
+    }
+}
+
+Function New-RandomPassword {
+    <#
+    .SYNOPSIS
+    Generates a cryptographically random password that meets Windows complexity requirements.
+
+    .DESCRIPTION
+    Uses RNGCryptoServiceProvider with byte-rejection sampling (no modulo bias) to build a
+    password from printable ASCII characters (33-126). Retries until Test-PasswordIsComplex
+    passes; exits after 20 failed attempts. Returns a plain string by default or a SecureString
+    when -AsSecureString is specified.
+
+    .PARAMETER Length
+    Number of characters in the generated password. Default is 64.
+
+    .PARAMETER AsSecureString
+    When set, the password is returned as a SecureString instead of a plain string.
+
+    .EXAMPLE
+    $plain  = New-RandomPassword
+    $plain  = New-RandomPassword -Length 32
+    $secure = New-RandomPassword -Length 32 -AsSecureString
+    #>
+    param(
+        [Parameter(Mandatory=$false)][int]$Length = 64,
+        [switch]$AsSecureString
+    )
+    Process {
+        $Iterations = 0
+        Do {
+            If ($Iterations -ge 20) { EXIT }
+            $Iterations++
+            $pwdBytes = @()
+            $rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::new()
+            Do {
+                [byte[]]$byte = [byte]1
+                $rng.GetBytes($byte)
+                If ($byte[0] -lt 33 -or $byte[0] -gt 126) { CONTINUE }
+                $pwdBytes += $byte[0]
+            } While ($pwdBytes.Count -lt $Length)
+            $rng.Dispose()
+            $NewPassword = ([char[]]$pwdBytes) -join ''
+        } Until (Test-PasswordIsComplex $NewPassword)
+
+        if ($AsSecureString) {
+            return ConvertTo-SecureString $NewPassword -AsPlainText -Force
+        }
+        return $NewPassword
+    }
+}
+
+Function Set-SettingsFileValue {
+    <#
+    .SYNOPSIS
+    Applies a targeted regex replacement for one variable in the settings file content string.
+
+    .DESCRIPTION
+    Takes the full raw content of AD-PowerAdmin_settings.ps1 and replaces the value of the
+    named variable. Supports six VarType modes covering every declaration style used in the
+    settings file. Returns the modified content string; the caller is responsible for writing
+    the file back to disk.
+
+    .PARAMETER Content
+    The full raw text of the settings file.
+
+    .PARAMETER VarName
+    The bare variable name without '$global:' (e.g. 'ADAdminEmail').
+
+    .PARAMETER NewValue
+    The replacement value. For bool types pass 'true' or 'false' (no dollar sign).
+    For array-ou-locations pass the pre-built inner block string.
+
+    .PARAMETER VarType
+    One of: bool | int | string-single | string-double | string-varref | array-ou-locations
+    #>
+    param(
+        [Parameter(Mandatory=$true)][string]$Content,
+        [Parameter(Mandatory=$true)][string]$VarName,
+        [Parameter(Mandatory=$true)][AllowEmptyString()][string]$NewValue,
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('bool','int','string-single','string-double','string-varref','array-ou-locations')]
+        [string]$VarType
+    )
+    switch ($VarType) {
+        'bool' {
+            # \s* handles column-aligned declarations like KerberosKRBTGTAudit
+            $Content = $Content -replace "(\[bool\]\`$global:$VarName\s*=\s*\`\$)(true|false)", ('${1}' + $NewValue)
+        }
+        'int' {
+            # (?i)int handles both [int] and [Int]
+            $Content = $Content -replace "(\[(?i)int\]\`$global:$VarName\s*=\s*)\d+", ('${1}' + $NewValue)
+        }
+        'string-single' {
+            $Content = $Content -replace "(\[string\]\`$global:$VarName\s*=\s*')[^']*('|`$)", ('${1}' + $NewValue + '${2}')
+        }
+        'string-double' {
+            $Content = $Content -replace "(\[string\]\`$global:$VarName\s*=\s*`")[^`"]*(`"|\r?`n)", ('${1}' + $NewValue + '${2}')
+        }
+        'string-varref' {
+            # Replaces the entire value (which may be $global:OtherVar) with a literal string
+            $Content = $Content -replace "(\[string\]\`$global:$VarName\s*=\s*)[^\r\n]+", ('${1}' + "'" + $NewValue + "'")
+        }
+        'array-ou-locations' {
+            # (?sm) = dotall + multiline so . matches newlines and ^ anchors to line start
+            $EscapedName = [regex]::Escape($VarName)
+            $Content = $Content -replace "(?sm)(\[array\]\`$global:$EscapedName\s*=\s*@\().*?(^\))", ('${1}' + "`n" + $NewValue + "`n" + '${2}')
+        }
+    }
+    return $Content
+}
+
+Function Get-ResolvedDomain {
+    <#
+    .SYNOPSIS
+        Returns an AD domain name for use in GroupPolicy and ActiveDirectory cmdlets.
+
+    .DESCRIPTION
+        Returns the caller-supplied domain string if provided and non-empty; otherwise falls
+        back to the current user's DNS domain ($env:USERDNSDOMAIN). Used by modules that
+        accept an optional -Domain parameter so they do not need to duplicate this fallback.
+
+    .PARAMETER Domain
+        Optional. The domain FQDN to use. If empty or omitted, the current user's DNS domain
+        is returned.
+
+    .OUTPUTS
+        [string] The resolved domain name.
+    #>
+    param(
+        [Parameter(Mandatory=$false)]
+        [string]$Domain = ''
+    )
+    if (-not [string]::IsNullOrWhiteSpace($Domain)) {
+        return $Domain
+    }
+    return $env:USERDNSDOMAIN
+}
+
+Function Assert-ADPAModuleDependency {
+    <#
+    .SYNOPSIS
+        Verifies required AD-PowerAdmin modules are loaded; imports them if not.
+
+    .DESCRIPTION
+        Called from Initialize-Module of any dependent module. For each required module name:
+        1. If already loaded (Get-Module), pass immediately.
+        2. If not loaded, attempt Import-Module from $global:ModulesPath.
+        3. If still not loaded after the import attempt, write a [FAIL] message and set the
+           return value to $false.
+        Returns $true only when all named modules are confirmed available.
+
+    .PARAMETER RequiredModules
+        One or more AD-PowerAdmin module names (e.g. 'AD-PowerAdmin_GPOMgr').
+
+    .OUTPUTS
+        [bool] $true if all dependencies are met; $false if any module could not be loaded.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory=$true)][string[]]$RequiredModules
+    )
+    $AllMet = $true
+    foreach ($Mod in $RequiredModules) {
+        if (Get-Module -Name $Mod) { continue }
+        $PsdPath = Join-Path $global:ModulesPath "$Mod.psd1"
+        if (Test-Path $PsdPath) {
+            try { Import-Module $PsdPath -Force -ErrorAction Stop } catch { }
+        }
+        if (-not (Get-Module -Name $Mod)) {
+            Write-Host "[FAIL] Module '$Mod' is required but could not be loaded." -ForegroundColor Red
+            Write-Host "       Verify the module files exist in: $global:ModulesPath" -ForegroundColor Red
+            Write-Host "       If '$Mod' requires RSAT, install Group Policy Management Tools first." -ForegroundColor Red
+            $AllMet = $false
+        }
+    }
+    return $AllMet
 }

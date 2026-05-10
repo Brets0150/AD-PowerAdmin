@@ -124,12 +124,13 @@ function Initialize-Debug {
     #>
 
     # Check if a transcript is already running.
+    # Get-Transcript is absent from some Server 2016 PS 5.1 builds, so wrap it. When
+    # present it returns $null (PS 5.1) or empty string (PS 7) when no transcript is
+    # active -- it does NOT throw, so IsNullOrWhiteSpace is the correct test.
+    $TranscriptRunning = $false
     try {
-        Get-Transcript | Out-Null
-        $TranscriptRunning = $true
-    } catch {
-        $TranscriptRunning = $false
-    }
+        $TranscriptRunning = -not [string]::IsNullOrWhiteSpace((Get-Transcript -ErrorAction Stop))
+    } catch { }
 
     # If the transcript is not running, check if it should be running, if so, start it.
     if (!$TranscriptRunning) {
@@ -141,6 +142,38 @@ function Initialize-Debug {
 
     return
 # End of Initialize-Debug function.
+}
+
+function Initialize-UnattendedLog {
+    <#
+    .SYNOPSIS
+    Ensures the dedicated unattended-task log transcript is running.
+    Idempotent: if the unattended log is already the active transcript, does nothing.
+    If a different transcript is running (e.g., the debug log), stops it quietly and
+    starts the unattended log. If no transcript is running, starts the unattended log.
+    No-op when $global:UnattendedLog is $false.
+    #>
+    if (-not $global:UnattendedLog) { return }
+
+    $currentTranscript = $null
+    try {
+        $currentTranscript = Get-Transcript
+    } catch { }
+
+    # If the unattended log is already the active transcript, nothing to do.
+    if ($currentTranscript -and ($currentTranscript -like "*AD-PowerAdmin_Unattended.log")) {
+        return
+    }
+
+    # Stop any other running transcript (e.g., the debug log). Suppress the
+    # return-value string so it is not buffered into the new transcript.
+    if ($currentTranscript) {
+        Stop-AllTranscripts | Out-Null
+    }
+
+    # Start the dedicated unattended log.
+    Start-Transcript -Path "$global:ReportsPath\AD-PowerAdmin_Unattended.log" -Append -Force | Out-Null
+# End of Initialize-UnattendedLog function.
 }
 
 Function Get-ADPAVersion {
@@ -242,6 +275,70 @@ Function Show-Diagnostics {
     Write-Host "----------------------------------------" -ForegroundColor Cyan
     Write-Host "Loaded Modules:" -ForegroundColor Cyan
     Get-ADPAVersion -Detailed
+
+    return
+}
+
+Function Show-Credits {
+    <#
+    .SYNOPSIS
+    Display third-party tool and code attribution for AD-PowerAdmin.
+
+    .DESCRIPTION
+    Lists every external tool, module, or code extract that AD-PowerAdmin depends on
+    or embeds, along with the author's name and project URL.
+
+    .EXAMPLE
+    Show-Credits
+    #>
+
+    Write-Host ""
+    Write-Host "AD-PowerAdmin -- Third-Party Credits" -ForegroundColor Cyan
+    Write-Host "==================================================================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "AD-PowerAdmin is made possible in part by the following third-party works." -ForegroundColor White
+    Write-Host "Thank you to the authors for their contributions to the community." -ForegroundColor White
+    Write-Host ""
+
+    Write-Host "DSInternals" -ForegroundColor Green
+    Write-Host "  Author : Michal Grafnetter" -ForegroundColor White
+    Write-Host "  Purpose: Password quality auditing, KRBTGT key rotation, and AD replication" -ForegroundColor White
+    Write-Host "           data extraction used by the Password Management module." -ForegroundColor White
+    Write-Host "  URL    : https://github.com/MichaelGrafnetter/DSInternals" -ForegroundColor White
+    Write-Host ""
+
+    Write-Host "Have I Been Pwned (HIBP) Pwned Passwords API" -ForegroundColor Green
+    Write-Host "  Author : Troy Hunt" -ForegroundColor White
+    Write-Host "  Purpose: Breach password detection via NTLM hash range lookups." -ForegroundColor White
+    Write-Host "           Used by the HIBP Password Manager module to flag compromised" -ForegroundColor White
+    Write-Host "           AD passwords against the HIBP breach database." -ForegroundColor White
+    Write-Host "  URL    : https://haveibeenpwned.com" -ForegroundColor White
+    Write-Host ""
+
+    Write-Host "Weak Passwords List" -ForegroundColor Green
+    Write-Host "  Source : weakpasswords.net" -ForegroundColor White
+    Write-Host "  Purpose: Plain-text dictionary of commonly used weak passwords." -ForegroundColor White
+    Write-Host "           Used alongside HIBP data to identify trivially guessable" -ForegroundColor White
+    Write-Host "           AD account passwords during password audits." -ForegroundColor White
+    Write-Host "  URL    : https://weakpasswords.net" -ForegroundColor White
+    Write-Host ""
+
+    Write-Host "Calendar GUI Widget (Calendar v1.0.0)" -ForegroundColor Green
+    Write-Host "  Source : PowerShell Gallery" -ForegroundColor White
+    Write-Host "  Purpose: Interactive date-picker widget embedded in the Utils module" -ForegroundColor White
+    Write-Host "           and used for scheduling and date-input functions." -ForegroundColor White
+    Write-Host "  URL    : https://www.powershellgallery.com/packages/Calendar/1.0.0" -ForegroundColor White
+    Write-Host ""
+
+    Write-Host "PoShEvents (v0.2.1)" -ForegroundColor Green
+    Write-Host "  Author : Jason Walker" -ForegroundColor White
+    Write-Host "  Purpose: Logon failure reason mapping for Windows Security Event ID 4625." -ForegroundColor White
+    Write-Host "           Code extracted and adapted for use in the Log Manager module." -ForegroundColor White
+    Write-Host "  URL    : https://www.powershellgallery.com/packages/PoShEvents/0.2.1" -ForegroundColor White
+    Write-Host ""
+
+    Write-Host "==================================================================================" -ForegroundColor Cyan
+    Write-Host ""
 
     return
 }
@@ -471,14 +568,19 @@ function Start-Automation {
         Exit 1
     }
 
-    # Ensure the debug transcript is running. A module job may have called Stop-Transcript
-    # internally; this guard mirrors the same pattern used in Enter-MainMenu.
+    # Task Scheduler passes -File script arguments as raw Windows command-line tokens.
+    # Single quotes are NOT stripped by Windows argument parsing (only double quotes are),
+    # so a task configured with -JobName 'HoneypotHourlyMonitor' will deliver the value
+    # with literal single-quote characters. Strip any surrounding quotes before matching.
+    $JobName = $JobName.Trim("'").Trim('"')
+
+    # Start the dedicated unattended log (always on when $global:UnattendedLog is $true).
+    # Falls back to the debug transcript when $global:UnattendedLog is $false.
+    Initialize-UnattendedLog
     Initialize-Debug
 
     # Write a timestamped boundary marker so individual runs are identifiable in the log.
-    if ($global:Debug) {
-        Write-Host "=== Unattended Run Start: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
-    }
+    Write-Host "=== Unattended Run Start: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
 
     # Foreach value in the $global:UnattendedJobs variable, build a new PowerShell object and add the value to the object.
     # The $global:UnattendedJobs variable is populated by the Initialize-Module function in each module.
@@ -507,10 +609,10 @@ function Start-Automation {
                 Invoke-Expression $_.Command
             }
         }
-        if ($global:Debug) {
-            Initialize-Debug
-            Write-Host "=== Unattended Run End: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
-        }
+        Initialize-UnattendedLog
+        Initialize-Debug
+        Write-Host "=== Unattended Run End: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
+        Stop-AllTranscripts | Out-Null
         return
     }
 
@@ -524,14 +626,14 @@ function Start-Automation {
                 $_.Command = "$($_.Command) -JobVar1 `"$JobVar1`""
             }
             # Run the function that is associated with the $MenuObjects.MenuIndex; $MenuObjects.FunctionName.
-            Invoke-Expression $_.Command -ErrorAction:SilentlyContinue
+            Invoke-Expression $_.Command
         }
     }
 
-    if ($global:Debug) {
-        Initialize-Debug
-        Write-Host "=== Unattended Run End: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
-    }
+    Initialize-UnattendedLog
+    Initialize-Debug
+    Write-Host "=== Unattended Run End: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
+    Stop-AllTranscripts | Out-Null
 # End of Start-Automation function.
 }
 
@@ -643,8 +745,8 @@ function Enter-MainMenu {
     Write-Host ""
     Write-Host "=================================================================================="
     Write-Host "h. Help"
+    Write-Host "c. Credits"
     Write-Host "q. Quit"
-    Write-Host "qq. Quit Application"
     Write-Host "=================================================================================="
     Write-Host ""
 
@@ -695,6 +797,11 @@ function Enter-MainMenu {
         # If the user inputs 'd' then run the Show-Diagnostics function.
     if ($MenuChoice -eq "d") {
         Show-Diagnostics
+    }
+
+    # If the user inputs 'c' then display the credits screen.
+    if ($MenuChoice -eq "c") {
+        Show-Credits
     }
 
     Pause
@@ -790,6 +897,7 @@ function Enter-SubMenu {
 
         Write-Host ""
         Write-Host "=================================================================================="
+        if ($null -ne $SubMenuDef.HelpCommand) { Write-Host "h. Help / Deployment Guide" }
         Write-Host "q. Back to Main Menu"
         Write-Host "qq. Quit Application"
         Write-Host "=================================================================================="
@@ -801,7 +909,15 @@ function Enter-SubMenu {
         if ($Choice -eq 'qq' -or $Choice -eq 'QQ') { Stop-ADPowerAdmin }
 
         [Int32]$OutNum = 0
-        if ([Int32]::TryParse($Choice, [ref]$OutNum)) {
+        if ($Choice -eq 'h' -or $Choice -eq 'H') {
+            if ($null -ne $SubMenuDef.HelpCommand) {
+                Write-Host "==================================================================================" -ForegroundColor Green
+                Invoke-Expression $SubMenuDef.HelpCommand
+                Write-Host "==================================================================================" -ForegroundColor Green
+            } else {
+                Write-Host "No help is available for this menu." -ForegroundColor Yellow
+            }
+        } elseif ([Int32]::TryParse($Choice, [ref]$OutNum)) {
             $Selected = $SubMenuObjects | Where-Object { $_.Index -eq $OutNum }
             if ($Selected) {
                 Write-Host "==================================================================================" -ForegroundColor Green
@@ -811,7 +927,7 @@ function Enter-SubMenu {
                 Write-Host "Error: Invalid selection. Please select a number from the menu." -ForegroundColor Red
             }
         } else {
-            Write-Host "Error: Invalid input. Please enter a number or Q." -ForegroundColor Red
+            Write-Host "Error: Invalid input. Please enter a number, H, or Q." -ForegroundColor Red
         }
 
         Pause

@@ -12,7 +12,7 @@
     RootModule = 'AD-PowerAdmin_Utils.psm1'
 
     # Version number of this module.
-    ModuleVersion = '1.1'
+    ModuleVersion = '1.4'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -70,7 +70,26 @@
     # NestedModules = @()
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-    FunctionsToExport = @("*")
+    FunctionsToExport = @(
+        'Get-DownloadFile',
+        'New-ScheduledTask',
+        'Send-Email',
+        'Send-EmailTest',
+        'Get-DateFromCalendar',
+        'Export-AdPowerAdminData',
+        'Search-SingleAdObject',
+        'Show-Menu',
+        'Get-WordWrap',
+        'Get-AdOuSearch',
+        'Write-WrappedText',
+        'Show-AuditReport',
+        'Get-SystemRole',
+        'Test-PasswordIsComplex',
+        'New-RandomPassword',
+        'Set-SettingsFileValue',
+        'Get-ResolvedDomain',
+        'Assert-ADPAModuleDependency'
+    )
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
     CmdletsToExport = @()
@@ -125,6 +144,31 @@
             - Updated the Search-SingleUser function to include flags for User, Computer, and Any.
             - Added Show-Menu function to display a menu of options.
             - Cleaned up the code and added comments.
+
+            v1.2:
+            - Promoted Get-SystemRole from AD-PowerAdmin_AuditPolicy (was private Get-ADPSystemRole).
+              Returns DomainController, MemberServer, or Workstation via WMI ProductType query.
+            - Promoted Write-WrappedText from AD-PowerAdmin_AuditPolicy (was private Write-ADPWrappedText).
+              Writes a labeled, word-wrapped text block to the console; complements Get-WordWrap.
+
+            v1.3:
+            - Promoted Test-PasswordIsComplex from AD-PowerAdmin_PasswordsCtl (was private).
+              Validates Windows default password complexity: upper, lower, digit, symbol, min 8 chars.
+            - Promoted New-RandomPassword from AD-PowerAdmin_PasswordsCtl (was exported there).
+              Added -AsSecureString switch; uses unbiased byte-rejection sampling via RNGCryptoServiceProvider.
+            - Promoted Set-SettingsFileValue from AD-PowerAdmin_Installer (was private there).
+              Generic settings-file variable patcher; supports bool, int, string-single, string-double,
+              string-varref, and array-ou-locations variable types.
+
+            v1.4:
+            - Added Assert-ADPAModuleDependency -- framework-wide helper for inter-module dependency
+              checking. Called from Initialize-Module of any module that depends on another ADPA module.
+              Checks Get-Module, attempts import from ModulesPath, and returns $false with a [FAIL]
+              message if the dependency cannot be satisfied.
+            - Added Get-ResolvedDomain -- resolves the current AD domain name from an optional parameter
+              or the session default ($env:USERDNSDOMAIN). Migrated from AD-PowerAdmin_GPOMgr (was private
+              there) to make domain resolution available framework-wide.
+            - Replaced wildcard FunctionsToExport with explicit list for performance and predictability.
 '@
 
         } # End of PSData hashtable

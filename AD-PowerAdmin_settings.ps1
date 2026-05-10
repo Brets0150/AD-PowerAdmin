@@ -23,6 +23,12 @@
 [bool]$global:Debug = $true
 
 ##############################################################################################
+# Unattended Task Logging
+# When $true, all output from unattended jobs is captured to a dedicated log file
+# (Reports\AD-PowerAdmin_Unattended.log) regardless of the $global:Debug setting.
+[bool]$global:UnattendedLog = $true
+
+##############################################################################################
 # -------------------[Mandatory]------------------- #
 # Set the email address of the AD Administrator, or the a admin email distribution list.
 # This is used for the email notifications.
@@ -220,12 +226,6 @@
 # Example: [string]$global:PasswordQualityTestSearchOUbase = ''
 [string]$global:PasswordQualityTestSearchOUbase = ''
 
-# The email address that the email will be sent to.
-# The default is to is to use the main admin email address at the top of the script, but if you want to send the reports to a different email address, you can set it here.
-# EXAMPLE: [string]$global:ReportAdminEmailTo = ''
-# EXAMPLE: [string]$global:ReportAdminEmailTo = ''
-[string]$global:ReportAdminEmailTo = ''
-
 # Enable CC the AD Admins on the password audit alert email. When a user is found with a breached or weak password, the user will receive an email with the message above. The AD Admins will also receive a copy of the email.
 # EXAMPLE: [bool]$global:PwAuditAlertEmailCCAdmins = $true
 [bool]$global:PwAuditAlertEmailCCAdmins = $false
@@ -250,16 +250,15 @@
 
 ##############################################################################################
 # Email Settings.
-# Configure the variable that are used for sending emails.
-# You need to configure at a minimum the following variables to send emails. The rest of the variables are optional, but it really depends on your SMTP server settings.
+# Configure the variables that are used for sending emails.
+# You need to configure at a minimum the following variables to send emails. The rest are optional, depending on your SMTP server settings.
 # 1 - $global:SMTPServer = The SMTP server address.
-# 2 - $global:ReportEmailFrom = The email address that the email will be sent from.
-# 3 - $global:ReportAdminEmailTo = The email address that the email will be sent to.
+# 2 - $global:FromEmail   = The email address that emails will be sent from.
+# 3 - $global:ADAdminEmail = The email address that reports and alerts will be sent to.
 
 # -------------------[Mandatory]------------------- #
 # The SMTP server address.
-# EXAMPLE: [string]$global:SMTPServer = ''
-# EXAMPLE: [string]$global:SMTPServer = ''
+# EXAMPLE: [string]$global:SMTPServer = 'smtp.example.com'
 [string]$global:SMTPServer = ''
 
 # ------------
@@ -267,11 +266,6 @@
 # If you do need a Username and Password, you will need to create a new user account in AD and give it the permission to send emails ONLY!!
 # You are hard coding the password in the script. So you will need to encrypt the password using the ConvertTo-SecureString cmdlet.
 # Consider the security implications of hard coding the password in the script.
-# NOTE: SSL always enabled. It is hardcode in the script.
-
-# The email address that the email will be sent from.
-# EXAMPLE: [string]$global:ReportEmailFrom = 'AdPowerAdmin@example.com'
-[string]$global:ReportsEmailFrom = ''
 
 # Use SSL to connect to the SMTP server.
 # EXAMPLE: [bool]$global:SmtpEnableSSL = $true
@@ -279,7 +273,7 @@
 
 # The SMTP server port. The default port is 587.
 # EXAMPLE: [int]$global:SMTPServerPort = 587
-[string]$global:SMTPPort = ''
+[int]$global:SMTPPort = 25
 
 # The SMTP server username.
 # EXAMPLE: [string]$global:SMTPServerUsername = 'AdPowerAdmin'
@@ -322,7 +316,7 @@
 # Enable the unattended honeytoken authentication event monitor.
 # Set to $true automatically when the honeypot install wizard completes.
 # Set to $false to disable monitoring without removing the account.
-[bool]$global:HoneypotAudit = $true
+[bool]$global:HoneypotAudit = $false
 
 # -------------------[Optional]------------------- #
 # How often (in minutes) the honeytoken monitor scheduled task runs.
@@ -340,11 +334,16 @@
 
 # The name of the deny-logon security group that blocks the honeytoken account from all logon types.
 # Updated by the honeypot install wizard if a custom name is chosen during provisioning.
-[string]$global:HoneypotDenyGroup = ''
+[string]$global:HoneypotDenyGroup = 'GG_Honeytoken_DenyLogon'
 
 # The DistinguishedName of the OU where the honeytoken user account was created.
 # Set automatically by the honeypot install wizard. Do not edit manually.
 [string]$global:HoneypotOU = ''
+
+# The Service Principal Name (SPN) set on the honeytoken account as a Kerberoasting bait.
+# Any Kerberos service ticket request (Event 4769) against this SPN is a high-confidence
+# attack indicator. Set automatically by the install wizard. Leave empty if no SPN was configured.
+[string]$global:HoneypotSPN = ''
 
 # Monitor mode for the honeytoken scheduled task.
 # 'Centralized'   - One central AD-PowerAdmin remotely queries every DC's Security log over RPC.
@@ -362,6 +361,16 @@
 # daily and exports findings to the Reports directory.
 # Default is $false. Review the first manual audit run before enabling daily automation.
 [bool]$global:SmbAdminShareAudit = $false
+
+##############################################################################################
+# Audit Policy Management Settings
+# -------------------[Optional]------------------- #
+# Enable the daily unattended audit policy compliance check.
+# When set to $true and AD-PowerAdmin is installed as a scheduled task, the module compares
+# effective audit policy settings against the recommended baseline for the local system role
+# and writes findings to the Reports directory if any non-compliant settings are found.
+# Default is $false. Run the interactive check from the menu before enabling daily automation.
+[bool]$global:AuditPolicyDailyCheck = $false
 
 # -------------------[Optional]------------------- #
 # Host names or IP addresses approved to access SMB admin shares.
