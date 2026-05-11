@@ -267,6 +267,7 @@ Function Show-Diagnostics {
 
     Write-Host "AD-PowerAdmin Diagnostics" -ForegroundColor Cyan
     Write-Host "----------------------------------------" -ForegroundColor Cyan
+    Write-Host "AD-PowerAdmin Script Version: $($global:Version)" -ForegroundColor White
     Write-Host "PowerShell Version: $($PSVersionTable.PSVersion)" -ForegroundColor White
     Write-Host "Operating System: $([System.Environment]::OSVersion.VersionString)" -ForegroundColor White
     Write-Host "Current User: $($env:USERNAME)" -ForegroundColor White
