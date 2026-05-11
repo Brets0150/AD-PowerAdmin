@@ -1,10 +1,10 @@
-﻿#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
 	Only variables and configurations for AD-PowerAdmin.
 
 .VERSION
-    1.0.3
+    1.0.4
 
 .DESCRIPTION
     Only variables and configurations for AD-PowerAdmin.
@@ -64,16 +64,21 @@
 [string]$global:UpdateChannel = 'Release'
 
 ##############################################################################################
+# Daily Task Enable / Disable
+# Set each flag to $true to include that task in the scheduled daily run, $false to skip it.
 # -------------------[Optional]------------------- #
-# Enable or disable the Daily tasks that will be run.
-[bool]$global:KerberosKRBTGTAudit           = $true
-[bool]$global:InactiveComputerAudit         = $true
-[bool]$global:InactiveUserAudit             = $true
-[bool]$global:WeakPasswordAudit             = $true
-[bool]$global:LockoutDailyReport            = $true
-[bool]$global:NTLMAuthDailyReport           = $false
-[bool]$global:PasswordNotRequiredAudit      = $true
-[bool]$global:AsRepRoastingAudit            = $true
+[bool]$global:KerberosKRBTGTAudit           = $true   # KRBTGT password age check
+[bool]$global:InactiveComputerAudit         = $true   # Stale computer accounts
+[bool]$global:InactiveUserAudit             = $true   # Stale user accounts
+[bool]$global:WeakPasswordAudit             = $true   # HIBP / weak-password scan
+[bool]$global:LockoutDailyReport            = $true   # Account lockout summary email
+[bool]$global:NTLMAuthDailyReport           = $true   # NTLMv1/v2 authentication report
+[bool]$global:PasswordNotRequiredAudit      = $true   # Accounts with PASSWD_NOTREQD flag
+[bool]$global:AsRepRoastingAudit            = $true   # AS-REP roastable accounts
+[bool]$global:SysvolGppCpasswordAudit       = $false  # GPP cpassword scan in SYSVOL
+[bool]$global:ExchangeADSecurityAudit       = $false  # Exchange AD ACL audit (Exchange envs only)
+[bool]$global:SmbAdminShareAudit            = $false  # SMB administrative share audit
+[bool]$global:AuditPolicyDailyCheck         = $false  # Audit policy compliance check
 
 ##############################################################################################
 # -------------------[Mandatory]------------------- #
@@ -229,7 +234,7 @@
 
 # Enable CC the AD Admins on the password audit alert email. When a user is found with a breached or weak password, the user will receive an email with the message above. The AD Admins will also receive a copy of the email.
 # EXAMPLE: [bool]$global:PwAuditAlertEmailCCAdmins = $true
-[bool]$global:PwAuditAlertEmailCCAdmins = $false
+[bool]$global:PwAuditAlertEmailCCAdmins = $true
 
 # -------------------[Mandatory]------------------- #
 # The number of DAYS before the user is forced to update there password.
@@ -285,25 +290,11 @@
 [string]$global:SMTPPassword = ''
 
 ##############################################################################################
-# SYSVOL Security Audit Settings
-# -------------------[Optional]------------------- #
-# Enable the daily unattended GPP cpassword check. When enabled, AD-PowerAdmin will scan
-# SYSVOL Group Policy Preference XML files daily for cpassword values and email the
-# administrator immediately if any are found. Set to $false to disable this daily check.
-# The manual GPP cpassword scan and full SYSVOL audit are always available from the menu.
-[bool]$global:SysvolGppCpasswordAudit = $false
-
-##############################################################################################
 # Exchange AD Security Audit Settings
-# -------------------[Optional]------------------- #
-# Enable the daily unattended Exchange AD security audit and email report.
-# Set to $true only in environments where Exchange is installed.
-# Default is $false because the Exchange module is a no-op in environments without Exchange.
-[bool]$global:ExchangeADSecurityAudit = $false
-
 # -------------------[Optional]------------------- #
 # Exchange security groups checked for dangerous domain-root ACEs.
 # Modify only if your environment uses non-standard Exchange group names.
+# Note: Enable/disable the daily Exchange audit via $global:ExchangeADSecurityAudit above.
 [array]$global:ExchangeGroupsToAudit = @(
     "Exchange Windows Permissions",
     "Exchange Trusted Subsystem",
@@ -317,6 +308,7 @@
 # Enable the unattended honeytoken authentication event monitor.
 # Set to $true automatically when the honeypot install wizard completes.
 # Set to $false to disable monitoring without removing the account.
+# Note: This task runs on its own dedicated scheduled task, not the daily job.
 [bool]$global:HoneypotAudit = $false
 
 # -------------------[Optional]------------------- #
@@ -357,23 +349,8 @@
 ##############################################################################################
 # SMB Admin Share Audit Settings
 # -------------------[Optional]------------------- #
-# Enable the daily unattended SMB administrative share audit.
-# When set to $true and AD-PowerAdmin is installed as a scheduled task, the full audit runs
-# daily and exports findings to the Reports directory.
-# Default is $false. Review the first manual audit run before enabling daily automation.
-[bool]$global:SmbAdminShareAudit = $false
+# Note: Enable/disable the daily SMB audit via $global:SmbAdminShareAudit above.
 
-##############################################################################################
-# Audit Policy Management Settings
-# -------------------[Optional]------------------- #
-# Enable the daily unattended audit policy compliance check.
-# When set to $true and AD-PowerAdmin is installed as a scheduled task, the module compares
-# effective audit policy settings against the recommended baseline for the local system role
-# and writes findings to the Reports directory if any non-compliant settings are found.
-# Default is $false. Run the interactive check from the menu before enabling daily automation.
-[bool]$global:AuditPolicyDailyCheck = $false
-
-# -------------------[Optional]------------------- #
 # Host names or IP addresses approved to access SMB admin shares.
 # Used by Test-ADSMBFirewallExposure and Search-ADAdminShareAccessEvents to suppress expected
 # administrative traffic from management stations, backup servers, and monitoring systems.

@@ -4,6 +4,39 @@
 
 ---
 
+### [AD-PowerAdmin_settings.ps1]
+
+**Changed:**
+- Settings file reorganized for clarity. All daily-task enable/disable booleans
+  (`SysvolGppCpasswordAudit`, `ExchangeADSecurityAudit`, `SmbAdminShareAudit`,
+  `AuditPolicyDailyCheck`) are now consolidated into the existing "Daily Task Enable / Disable"
+  block alongside the original eight flags, giving administrators a single location to toggle
+  scheduled jobs. The standalone SYSVOL and Audit Policy sections, which contained only their
+  respective boolean, were removed. SMB admin share settings (`ApprovedSmbAdminHosts`,
+  `SmbLapsExpiredDays`) are now fully contiguous; the Audit Policy section no longer interrupts
+  them. `HoneypotAudit` was intentionally left in the Honeytoken section because the honeytoken
+  monitor runs on its own dedicated scheduled task, not the daily job. No variable names, default
+  values, or runtime behavior changed.
+
+---
+
+### AD-PowerAdmin_GPOBestPracticesDeployer (v1.4) -- Promoted to Production
+
+**Changed:**
+- `Channel` promoted from `Beta` to `Production`. Module has completed Beta validation and
+  passed pre-production review (reusability audit, ADPA naming review, verb-group ordering
+  compliance).
+- Function order refactored for verb-group compliance. `Resolve-ConfigurableSettings` moved
+  from before `Show-BPCoverageReport` to after all `Select-*` functions, placing it correctly
+  within the retrieval group (Show -> Select -> Resolve). All `Invoke-*` functions are now
+  together in the modification group (private helpers before public dispatcher). Section
+  comments updated to reflect verb-group organization (`Retrieval Functions`,
+  `Modification Functions`); the `Private Helpers` / `Public Exported Functions` split
+  removed -- public vs private distinction is tracked in the manifest `FunctionsToExport`.
+  No logic changes.
+
+---
+
 ### AD-PowerAdmin_GPOBestPracticesDeployer (v1.3) + AD-PowerAdmin_LogMgr (v1.2) -- NTLM Audit and Remediation
 
 **Added to GPOBestPracticesDeployer (v1.3):**

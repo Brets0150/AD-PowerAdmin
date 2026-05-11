@@ -1,16 +1,7 @@
-junk.ps1
-AD-PowerAdmin_Debug.log
 Reports
-.gitignore
 temp*
-*/run-win-test.ps1
-hibp-ntlm-hashes*/*
-pwned-passwords-ntlm-ordered-by-hash-v8.txt
 AD-PowerAdmin.wiki*/*
 AD-PowerAdmin.wiki
-Research*/*
+hibp-ntlm-hashes*/*
+pwned-passwords-ntlm-ordered-by-hash-v8.txt
 weak-passwords.txt
-# Not Ready for release.
-AD-PowerAdmin_Azure*
-AD-PowerAdmin_SmbAdminShareAudit*
-AD-PowerAdmin_GPOBestPracticesDeployer*
