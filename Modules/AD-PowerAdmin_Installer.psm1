@@ -47,9 +47,14 @@ Function Initialize-Module {
                     Label   = "Download and apply the latest module files from GitHub. Channel (Release or Development) is set by UpdateChannel in settings."
                     Command = "Update-ADPowerAdminModules"
                 }
+                'UpdateMainScript' = @{
+                    Title   = "Update Main Script"
+                    Label   = "Download and apply the latest AD-PowerAdmin.ps1 from GitHub. Displays current vs. available version, prompts for confirmation, and creates a read-only backup before replacing the file. Channel (Release or Development) is set by UpdateChannel in settings."
+                    Command = "Update-ADPowerAdminMainScript"
+                }
                 'SettingsWizard' = @{
                     Title   = "Configure Settings Wizard"
-                    Label   = "Interactive wizard to configure all AD-PowerAdmin settings in AD-PowerAdmin_settings.ps1, section by section. Prompts for each value with the current default shown, supports AD OU search, and creates a .bak backup before writing."
+                    Label   = "Interactive wizard to configure all AD-PowerAdmin settings in AD-PowerAdmin_settings.ps1, section by section. Prompts for each value with the current default shown, supports AD OU search, and creates a read-only backup before writing."
                     Command = "Start-SettingsWizard"
                 }
                 'UpdateSettings' = @{
@@ -1059,6 +1064,32 @@ function Get-ADPowerAdminLatestReleaseTag {
 # End of the Get-ADPowerAdminLatestReleaseTag function.
 }
 
+function Set-BackupFileProtection {
+    <#
+    .SYNOPSIS
+    Marks a backup file read-only.
+
+    .DESCRIPTION
+    Applies the IsReadOnly attribute to the file at the given path. Called after every
+    backup write to prevent accidental modification or re-execution of an archived file.
+    The primary execution guard is the .txt extension applied at path construction time;
+    this adds a second layer.
+
+    .PARAMETER Path
+    Full path to the backup file.
+
+    .NOTES
+    Private helper. Not exported.
+    #>
+    param([string]$Path)
+    try {
+        Set-ItemProperty -Path $Path -Name IsReadOnly -Value $true -ErrorAction Stop
+    } catch {
+        Write-Host "WARNING: Could not set read-only on backup '$Path': $_" -ForegroundColor Yellow
+    }
+# End of the Set-BackupFileProtection function.
+}
+
 function Update-ADPowerAdminModules {
     <#
     .SYNOPSIS
@@ -1158,8 +1189,11 @@ function Update-ADPowerAdminModules {
                     New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
                     $BackupCreated = $true
                 }
-                # Back up the existing local file.
-                Copy-Item -Path $LocalFile.FullName -Destination (Join-Path $BackupDir $FileName) -Force
+                # Back up the existing local file. Append .txt so the archived copy cannot
+                # be imported or executed; mark it read-only as a second layer of protection.
+                [string]$BackupFilePath = Join-Path $BackupDir "$FileName.txt"
+                Copy-Item -Path $LocalFile.FullName -Destination $BackupFilePath -Force
+                Set-BackupFileProtection -Path $BackupFilePath
                 # Overwrite local file with downloaded content.
                 Copy-Item -Path $TempFile -Destination $LocalFile.FullName -Force
                 Write-Host "  [UPDATED]     $FileName" -ForegroundColor Yellow
@@ -1195,6 +1229,127 @@ function Update-ADPowerAdminModules {
 
     $ProgressPreference = $OriginalProgressPreference
 # End of the Update-ADPowerAdminModules function.
+}
+
+function Update-ADPowerAdminMainScript {
+    <#
+    .SYNOPSIS
+    Downloads the latest AD-PowerAdmin.ps1 from GitHub and applies it locally.
+
+    .DESCRIPTION
+    Fetches AD-PowerAdmin.ps1 from the GitHub repository. The source is determined by
+    $global:UpdateChannel:
+      'Development' -- pulls from the main branch (latest uncommitted work).
+      'Release'     -- pulls from the most recent GitHub Release tag (default).
+
+    If the remote file differs from the local copy, the current version is backed up to a
+    timestamped folder under $global:ReportsPath\MainScriptBackups\ (as AD-PowerAdmin.ps1.txt,
+    read-only) before the local file is replaced.
+
+    The running session is not affected; restart AD-PowerAdmin to use the updated script.
+
+    .EXAMPLE
+    Update-ADPowerAdminMainScript
+
+    .NOTES
+    Requires internet access to raw.githubusercontent.com and, for the Release channel,
+    to api.github.com.
+    #>
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    [string]$OriginalProgressPreference = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+
+    # Determine the Git ref to pull from.
+    [string]$Channel = if ($global:UpdateChannel) { $global:UpdateChannel } else { 'Release' }
+
+    if ($Channel -eq 'Development') {
+        [string]$GitRef = 'main'
+        Write-Host "Update channel: Development (main branch)" -ForegroundColor Cyan
+    } else {
+        Write-Host "Update channel: Release -- querying GitHub for latest release tag..." -ForegroundColor Cyan
+        [string]$GitRef = Get-ADPowerAdminLatestReleaseTag
+        if (-not $GitRef) {
+            Write-Host "ERROR: Could not determine the latest release tag. Aborting update." -ForegroundColor Red
+            $ProgressPreference = $OriginalProgressPreference
+            return
+        }
+        Write-Host "Latest release tag: $GitRef" -ForegroundColor Cyan
+    }
+
+    [string]$RemoteUrl = "https://raw.githubusercontent.com/Brets0150/AD-PowerAdmin/$GitRef/AD-PowerAdmin.ps1"
+    [string]$LocalPath = $global:ThisScript
+    [string]$TempFile  = Join-Path $env:TEMP 'AD-PowerAdmin.ps1.update'
+
+    Write-Host ""
+    Write-Host "Checking AD-PowerAdmin.ps1 against $GitRef ..." -ForegroundColor Cyan
+
+    try {
+        # Download the remote file to a temp location.
+        Invoke-WebRequest -Uri $RemoteUrl -OutFile $TempFile -UseBasicParsing -ErrorAction Stop
+
+        # Normalise EOL for comparison.
+        [string]$RemoteContent = (Get-Content -Path $TempFile -Raw) -replace "`r`n", "`n"
+        [string]$LocalContent  = (Get-Content -Path $LocalPath -Raw) -replace "`r`n", "`n"
+
+        if ($RemoteContent -eq $LocalContent) {
+            Write-Host ""
+            Write-Host "  [UP TO DATE]  AD-PowerAdmin.ps1" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "The main script is already up to date." -ForegroundColor Green
+            return
+        }
+
+        # Extract version strings for display.
+        [string]$RemoteVersion = 'unknown'
+        if ($RemoteContent -match '\[System\.Version\]\$global:Version\s*=\s*"([\d.]+)"') {
+            $RemoteVersion = $Matches[1]
+        }
+        [string]$LocalVersion = $global:Version.ToString()
+
+        Write-Host ""
+        Write-Host "  An update is available:" -ForegroundColor Yellow
+        Write-Host "    Current version  : $LocalVersion" -ForegroundColor White
+        Write-Host "    Available version: $RemoteVersion" -ForegroundColor Cyan
+        Write-Host ""
+
+        # Confirm before applying.
+        [string]$Confirm = Read-Host "Apply update? (y/N)"
+        if ($Confirm -notmatch '^[Yy]') {
+            Write-Host "Update cancelled." -ForegroundColor Gray
+            return
+        }
+
+        # Create a timestamped backup directory.
+        [string]$Timestamp  = (Get-Date -Format 'yyyyMMdd_HHmmss')
+        [string]$BackupRoot = Join-Path $global:ReportsPath 'MainScriptBackups'
+        [string]$BackupDir  = Join-Path $BackupRoot $Timestamp
+        New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
+
+        # Back up the current file. Append .txt so the archived copy cannot be executed;
+        # mark it read-only as a second layer of protection.
+        [string]$BackupFile = Join-Path $BackupDir 'AD-PowerAdmin.ps1.txt'
+        Copy-Item -Path $LocalPath -Destination $BackupFile -Force -ErrorAction Stop
+        Set-BackupFileProtection -Path $BackupFile
+        Write-Host "  Backup saved to: $BackupFile" -ForegroundColor Cyan
+
+        # Write the updated content. Use UTF-8 (no BOM) to match project encoding.
+        [System.IO.File]::WriteAllText($LocalPath, $RemoteContent, [System.Text.Encoding]::UTF8)
+
+        Write-Host ""
+        Write-Host "  [UPDATED]  AD-PowerAdmin.ps1  ($LocalVersion --> $RemoteVersion)" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "NOTE: Restart AD-PowerAdmin for the updated script to take effect." -ForegroundColor Yellow
+
+    } catch {
+        Write-Host ""
+        Write-Host "ERROR: Update failed -- $_" -ForegroundColor Red
+    } finally {
+        if (Test-Path $TempFile) { Remove-Item $TempFile -Force -ErrorAction SilentlyContinue }
+        $ProgressPreference = $OriginalProgressPreference
+    }
+# End of the Update-ADPowerAdminMainScript function.
 }
 
 ##############################################################################################
@@ -1330,8 +1485,8 @@ function Update-ADPowerAdminSettingsFile {
     Compares $global:* variable names in the current AD-PowerAdmin_settings.ps1 against the
     canonical version on GitHub (Release or Development channel). Variables present in the
     remote file but absent locally are appended with their default values and original
-    comments. All existing configured values are preserved. A .bak backup is created before
-    any write occurs.
+    comments. All existing configured values are preserved. A read-only backup (.txt) is
+    created before any write occurs.
 
     .EXAMPLE
     Update-ADPowerAdminSettingsFile
@@ -1424,10 +1579,12 @@ function Update-ADPowerAdminSettingsFile {
             return
         }
 
-        # Back up the current settings file.
-        [string]$BackupPath = $SettingsFile + '.bak'
+        # Back up the current settings file. Append .txt so the archived copy cannot be
+        # executed; mark it read-only as a second layer of protection.
+        [string]$BackupPath = $SettingsFile + '.txt'
         try {
             Copy-Item -Path $SettingsFile -Destination $BackupPath -Force -ErrorAction Stop
+            Set-BackupFileProtection -Path $BackupPath
         } catch {
             Write-Host "WARNING: Could not create backup at '$BackupPath': $_" -ForegroundColor Red
             [string]$ContinueAnyway = Read-Host "Continue without backup? (y/N)"
@@ -1781,7 +1938,7 @@ function Start-SettingsWizard {
     .DESCRIPTION
     Reads the current settings file, prompts for each configurable variable section by section
     (displaying the current value as the default), then writes the updated file after confirmation.
-    A .bak backup is created before any write occurs.
+    A read-only backup (.txt) is created before any write occurs.
 
     NOTE: This function writes directly to AD-PowerAdmin_settings.ps1. It is the deliberate
     exception to the module read-only convention for $global:* settings.
@@ -2077,10 +2234,12 @@ function Start-SettingsWizard {
         return
     }
 
-    # Back up the settings file before writing.
-    [string]$BackupPath = $SettingsFile + '.bak'
+    # Back up the settings file before writing. Append .txt so the archived copy cannot
+    # be executed; mark it read-only as a second layer of protection.
+    [string]$BackupPath = $SettingsFile + '.txt'
     try {
         Copy-Item -Path $SettingsFile -Destination $BackupPath -Force -ErrorAction Stop
+        Set-BackupFileProtection -Path $BackupPath
     } catch {
         Write-Host "WARNING: Could not create backup at '$BackupPath': $_" -ForegroundColor Red
         [string]$ContinueAnyway = Read-Host "Continue without backup? (y/N)"

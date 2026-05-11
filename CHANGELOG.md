@@ -4,6 +4,29 @@
 
 ---
 
+### [AD-PowerAdmin_Installer Module]
+
+**Added:**
+- `Update-ADPowerAdminMainScript` -- downloads and applies the latest AD-PowerAdmin.ps1 from
+  GitHub. Supports Release and Development update channels. Displays current vs. available
+  version before prompting for confirmation. Creates a timestamped, read-only backup under
+  `Reports\MainScriptBackups\` before replacing the local file. Closes the gap where the main
+  script was the only component without an automated update path.
+- `Set-BackupFileProtection` (private) -- marks a backup file read-only after creation.
+  Called by all backup-creation sites to prevent accidental modification or re-execution of
+  an archived file.
+
+**Changed:**
+- `Update-ADPowerAdminModules` -- backup files are now stored with a `.txt` extension appended
+  (e.g. `AD-PowerAdmin_Installer.psm1.txt`) and marked read-only via `Set-BackupFileProtection`.
+  Prevents execution or re-import of a backed-up file that may contain a known-vulnerable version.
+- `Update-ADPowerAdminSettingsFile` -- backup now stored as `AD-PowerAdmin_settings.ps1.txt`
+  (read-only) instead of `.bak`. Consistent with the new backup security model.
+- `Start-SettingsWizard` -- backup now stored as `AD-PowerAdmin_settings.ps1.txt` (read-only)
+  instead of `.bak`. Consistent with the new backup security model.
+
+---
+
 ### [AD-PowerAdmin_settings.ps1]
 
 **Changed:**
