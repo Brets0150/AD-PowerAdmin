@@ -40,6 +40,11 @@ Function Initialize-Module {
                     Label   = "Search a specific computer, Domain Controller, or the localhost for failed logon events (ID: 4625)."
                     Command = "Show-AdUserFailedLoginEvents"
                 }
+                'SearchNTLMAuthEvents' = @{
+                    Title   = "Search NTLM Auth Events"
+                    Label   = "Query all domain controllers for NTLM v1 and v2 authentication events. Identifies source systems, users, and NTLM versions still in use. Requires the NTLM audit GPO to be applied to domain controllers first."
+                    Command = "Show-NTLMAuthEvents"
+                }
             }
         }
     }
@@ -48,7 +53,7 @@ Function Initialize-Module {
     $global:Menu += @{
         'LogMgrMenu' = @{
             Title    = "Event Log Manager"
-            Label    = "Search Event Logs for account lockouts, currently locked out users, and failed logon events."
+            Label    = "Search Event Logs for account lockouts, currently locked out users, failed logon events, and NTLM authentication activity."
             Module   = "AD-PowerAdmin_LogMgr"
             Function = "Enter-SubMenu"
             Command  = "Enter-SubMenu 'LogMgrMenu'"
@@ -64,6 +69,14 @@ Function Initialize-Module {
             Function = 'Start-DailyLockoutSummaryReport'
             Daily    = $true
             Command  = 'Start-DailyLockoutSummaryReport'
+        }
+        'NTLMAuthDailySummary' = @{
+            Title    = 'Daily NTLM Auth Summary Report'
+            Label    = 'Email a 24-hour NTLM v1/v2 authentication summary report to the administrator.'
+            Module   = 'AD-PowerAdmin_LogMgr'
+            Function = 'Start-DailyNTLMAuthReport'
+            Daily    = $true
+            Command  = 'Start-DailyNTLMAuthReport'
         }
     }
 }
@@ -1014,5 +1027,328 @@ Function Start-DailyLockoutSummaryReport {
     Send-Email -ToEmail $global:ADAdminEmail `
                -FromEmail $global:FromEmail `
                -Subject "ADPowerAdmin: Daily Lockout Report - $TotalLockouts Events, $UniqueUsers Accounts" `
+               -Body $EmailBody
+}
+
+Function Get-NTLMAuthEvents {
+    <#
+    .SYNOPSIS
+        Queries the NTLM Operational event log on all domain controllers for NTLM authentication events.
+
+    .DESCRIPTION
+        Enumerates all domain controllers, queries the Microsoft-Windows-NTLM/Operational log on each,
+        parses event XML to extract source system, user, domain, NTLM version, and target server fields,
+        and returns a normalized array of PSCustomObjects. Returns an empty array if no events are found.
+
+        The NTLM Operational log is only populated after the NTLM audit GPO has been applied to domain
+        controllers (AuditNTLMInDomain and AuditReceivingNTLMTraffic registry values). If the log is
+        inaccessible on a DC, a warning is written and that DC is skipped.
+
+    .PARAMETER StartTime
+        Start of the collection window.
+
+    .PARAMETER EndTime
+        End of the collection window.
+
+    .OUTPUTS
+        Array of PSCustomObjects with fields: DomainController, TimeCreated, EventId, UserName,
+        DomainName, SourceComputer, SourceIpAddress, TargetServer, NTLMVersion, LogonType, ProcessName.
+
+    .EXAMPLE
+        $Events = Get-NTLMAuthEvents -StartTime (Get-Date).AddDays(-1) -EndTime (Get-Date)
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [datetime]$StartTime,
+
+        [Parameter(Mandatory=$true)]
+        [datetime]$EndTime
+    )
+
+    [System.Collections.Generic.List[PSCustomObject]]$Results = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    [string[]]$DCNames = @()
+    try {
+        $DCNames = Get-ADDomainController -Filter * | Select-Object -ExpandProperty HostName
+    } catch {
+        Write-Host "  [FAIL] Could not enumerate domain controllers: $_" -ForegroundColor Red
+        return $Results.ToArray()
+    }
+
+    foreach ($DC in $DCNames) {
+        [array]$RawEvents = @()
+        try {
+            $RawEvents = Get-WinEvent -ComputerName $DC -FilterHashtable @{
+                LogName   = 'Microsoft-Windows-NTLM/Operational'
+                StartTime = $StartTime
+                EndTime   = $EndTime
+            } -ErrorAction Stop
+        } catch [System.Exception] {
+            if ($_.Exception.Message -match 'No events were found') {
+                continue
+            }
+            Write-Host "  [WARN] Could not query NTLM Operational log on $DC -- $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "         Verify the NTLM Audit Policy GPO has been applied to domain controllers." -ForegroundColor Yellow
+            continue
+        }
+
+        foreach ($Event in $RawEvents) {
+            [xml]$EventXml = $Event.ToXml()
+            $DataNodes = $EventXml.Event.EventData.Data
+
+            [string]$UserName      = ''
+            [string]$DomainName    = ''
+            [string]$SourceComputer = ''
+            [string]$SourceIpAddr  = ''
+            [string]$TargetServer  = ''
+            [string]$NTLMVersion   = ''
+            [string]$LogonType     = ''
+            [string]$ProcessName   = ''
+
+            foreach ($Node in $DataNodes) {
+                switch ($Node.Name) {
+                    'UserName'              { $UserName       = $Node.'#text' }
+                    'DomainName'            { $DomainName     = $Node.'#text' }
+                    'Workstation'           { $SourceComputer = $Node.'#text' }
+                    'WorkstationName'       { if ([string]::IsNullOrEmpty($SourceComputer)) { $SourceComputer = $Node.'#text' } }
+                    'CallerComputer'        { if ([string]::IsNullOrEmpty($SourceComputer)) { $SourceComputer = $Node.'#text' } }
+                    'ClientIPAddress'       { $SourceIpAddr   = $Node.'#text' }
+                    'TargetServer'          { $TargetServer   = $Node.'#text' }
+                    'ServerName'            { if ([string]::IsNullOrEmpty($TargetServer)) { $TargetServer = $Node.'#text' } }
+                    'NTLMClientVersion'     { $NTLMVersion    = $Node.'#text' }
+                    'NTLMVersion'           { if ([string]::IsNullOrEmpty($NTLMVersion)) { $NTLMVersion = $Node.'#text' } }
+                    'LogonType'             { $LogonType      = $Node.'#text' }
+                    'ProcessName'           { $ProcessName    = $Node.'#text' }
+                }
+            }
+
+            # Normalize NTLMVersion to a plain '1' or '2' label where possible.
+            if ($NTLMVersion -match '1') { $NTLMVersion = 'NTLMv1' }
+            elseif ($NTLMVersion -match '2') { $NTLMVersion = 'NTLMv2' }
+            elseif ([string]::IsNullOrEmpty($NTLMVersion)) { $NTLMVersion = 'Unknown' }
+
+            $Results.Add([PSCustomObject]@{
+                DomainController = $DC
+                TimeCreated      = $Event.TimeCreated
+                EventId          = $Event.Id
+                UserName         = $UserName
+                DomainName       = $DomainName
+                SourceComputer   = $SourceComputer
+                SourceIpAddress  = $SourceIpAddr
+                TargetServer     = $TargetServer
+                NTLMVersion      = $NTLMVersion
+                LogonType        = $LogonType
+                ProcessName      = $ProcessName
+            })
+        }
+    }
+
+    return $Results.ToArray()
+}
+
+Function Show-NTLMAuthEvents {
+    <#
+    .SYNOPSIS
+        Interactive search of NTLM v1 and v2 authentication events across all domain controllers.
+
+    .DESCRIPTION
+        Prompts for a date range, queries the NTLM Operational log on every domain controller,
+        displays a summary of NTLMv1 and NTLMv2 activity, and offers CSV export. Requires the
+        Enable NTLM Audit Policy GPO to be applied to domain controllers before events appear.
+
+    .EXAMPLE
+        Show-NTLMAuthEvents
+    #>
+    [CmdletBinding()]
+    param()
+
+    Write-Host ""
+    Write-Host "  NTLM Authentication Event Search" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  NOTE: Events only appear after the Enable NTLM Audit Policy GPO has been" -ForegroundColor Yellow
+    Write-Host "        applied to domain controllers and at least one NTLM authentication" -ForegroundColor Yellow
+    Write-Host "        has occurred within the selected time window." -ForegroundColor Yellow
+    Write-Host ""
+
+    # Prompt for date range using the same picker as lockout search.
+    [datetime]$StartTime = (Get-Date).AddDays(-1)
+    [datetime]$EndTime   = Get-Date
+    try {
+        $StartTime = Get-DatePickerGui -Title "Select Start Date/Time" -DefaultDate (Get-Date).AddDays(-1)
+        $EndTime   = Get-DatePickerGui -Title "Select End Date/Time"   -DefaultDate (Get-Date)
+    } catch {
+        Write-Host "  [INFO] Using default 24-hour window." -ForegroundColor Cyan
+    }
+
+    Write-Host ""
+    Write-Host "  Querying NTLM Operational log on all domain controllers..." -ForegroundColor Cyan
+    Write-Host "  Window: $StartTime  to  $EndTime" -ForegroundColor White
+    Write-Host ""
+
+    [array]$Events = Get-NTLMAuthEvents -StartTime $StartTime -EndTime $EndTime
+
+    if ($Events.Count -eq 0) {
+        Write-Host "  [INFO] No NTLM authentication events found in the selected time range." -ForegroundColor Green
+        Write-Host "         Verify the NTLM Audit Policy GPO is applied and allow time for events to accumulate." -ForegroundColor Yellow
+        Write-Host ""
+        return
+    }
+
+    [int]$V1Count    = ($Events | Where-Object { $_.NTLMVersion -eq 'NTLMv1' }).Count
+    [int]$V2Count    = ($Events | Where-Object { $_.NTLMVersion -eq 'NTLMv2' }).Count
+    [int]$OtherCount = ($Events | Where-Object { $_.NTLMVersion -notin @('NTLMv1','NTLMv2') }).Count
+    [int]$UniqueSrc  = ($Events | Select-Object -ExpandProperty SourceComputer -Unique | Where-Object { -not [string]::IsNullOrEmpty($_) }).Count
+    [int]$UniqueUsers = ($Events | Select-Object -ExpandProperty UserName -Unique | Where-Object { -not [string]::IsNullOrEmpty($_) }).Count
+
+    Write-Host "  ============================================================" -ForegroundColor Cyan
+    Write-Host "  Summary" -ForegroundColor Cyan
+    Write-Host "  ============================================================" -ForegroundColor Cyan
+    Write-Host "  Total events   : $($Events.Count)"
+    Write-Host "  NTLMv1 events  : $V1Count" -ForegroundColor $(if ($V1Count -gt 0) { 'Red' } else { 'Green' })
+    Write-Host "  NTLMv2 events  : $V2Count" -ForegroundColor $(if ($V2Count -gt 0) { 'Yellow' } else { 'Green' })
+    if ($OtherCount -gt 0) {
+        Write-Host "  Other/Unknown  : $OtherCount" -ForegroundColor DarkYellow
+    }
+    Write-Host "  Unique sources : $UniqueSrc"
+    Write-Host "  Unique users   : $UniqueUsers"
+    Write-Host ""
+
+    # Display NTLMv1 events first (highest risk), then NTLMv2.
+    foreach ($Version in @('NTLMv1', 'NTLMv2', 'Unknown')) {
+        [array]$Group = $Events | Where-Object { $_.NTLMVersion -eq $Version }
+        if ($Group.Count -eq 0) { continue }
+
+        [string]$HeaderColor = switch ($Version) {
+            'NTLMv1'  { 'Red' }
+            'NTLMv2'  { 'Yellow' }
+            default   { 'DarkYellow' }
+        }
+
+        Write-Host "  ---- $Version ($($Group.Count) events) ----" -ForegroundColor $HeaderColor
+        Write-Host ""
+
+        foreach ($E in ($Group | Sort-Object TimeCreated)) {
+            Write-Host ("  {0,-22}  {1,-28}  {2,-18}  {3,-18}  {4}" -f `
+                $E.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'), `
+                $E.UserName, `
+                $E.SourceComputer, `
+                $E.SourceIpAddress, `
+                $E.TargetServer) -ForegroundColor $HeaderColor
+        }
+        Write-Host ""
+    }
+
+    Write-Host "  Columns: TimeCreated | UserName | SourceComputer | SourceIpAddress | TargetServer" -ForegroundColor DarkGray
+    Write-Host ""
+
+    [string]$ExportChoice = Read-Host "  Export full results to CSV? (Y/N)"
+    if ($ExportChoice.ToUpper() -eq 'Y') {
+        Export-AdPowerAdminData -Data $Events -ReportName 'NTLMAuthEvents'
+    }
+}
+
+Function Start-DailyNTLMAuthReport {
+    <#
+    .SYNOPSIS
+        Automated daily NTLM authentication summary report.
+
+    .DESCRIPTION
+        Queries the NTLM Operational log on all domain controllers for the past 24 hours,
+        builds a grouped summary of NTLMv1 and NTLMv2 activity, exports a full CSV, and
+        emails the summary to the AD administrator. Controlled by $global:NTLMAuthDailyReport.
+        Set that value to $true in AD-PowerAdmin_settings.ps1 to enable this report.
+
+    .EXAMPLE
+        Start-DailyNTLMAuthReport
+    #>
+    [CmdletBinding()]
+    param()
+
+    if ($global:NTLMAuthDailyReport -ne $true) { return }
+
+    [datetime]$EndTime   = Get-Date
+    [datetime]$StartTime = $EndTime.AddDays(-1)
+
+    [array]$Events = Get-NTLMAuthEvents -StartTime $StartTime -EndTime $EndTime
+
+    [string]$DateLabel = $EndTime.ToString('yyyy-MM-dd')
+    [string]$Subject   = "[AD-PowerAdmin] Daily NTLM Auth Summary - $DateLabel"
+
+    if ($Events.Count -eq 0) {
+        Send-Email -ToEmail $global:ADAdminEmail `
+                   -FromEmail $global:FromEmail `
+                   -Subject $Subject `
+                   -Body "AD-PowerAdmin Daily NTLM Auth Summary - $DateLabel`r`n`r`nNo NTLM authentication events were recorded in the past 24 hours.`r`n`r`nThis may indicate that NTLM auditing is not yet enabled on domain controllers.`r`nApply the Enable NTLM Audit Policy GPO via the Best Practices GPO Deployer and allow time for events to accumulate.`r`n"
+        return
+    }
+
+    [int]$V1Count     = ($Events | Where-Object { $_.NTLMVersion -eq 'NTLMv1' }).Count
+    [int]$V2Count     = ($Events | Where-Object { $_.NTLMVersion -eq 'NTLMv2' }).Count
+    [int]$TotalEvents = $Events.Count
+
+    [string]$Divider = "------------------------------------------------------------`r`n"
+
+    [string]$EmailBody  = "AD-PowerAdmin Daily NTLM Auth Summary`r`n"
+    $EmailBody         += "Report Date  : $DateLabel`r`n"
+    $EmailBody         += "Window       : $StartTime to $EndTime`r`n"
+    $EmailBody         += $Divider
+    $EmailBody         += "Total Events : $TotalEvents`r`n"
+    $EmailBody         += "NTLMv1       : $V1Count"
+    if ($V1Count -gt 0) { $EmailBody += "  ** NTLMv1 DETECTED -- HIGH RISK **" }
+    $EmailBody         += "`r`n"
+    $EmailBody         += "NTLMv2       : $V2Count`r`n"
+    $EmailBody         += $Divider
+
+    # NTLMv1 section (highest risk -- list first).
+    if ($V1Count -gt 0) {
+        $EmailBody += "NTLMv1 EVENTS (HIGH RISK)`r`n"
+        $EmailBody += $Divider
+
+        $V1Groups = $Events | Where-Object { $_.NTLMVersion -eq 'NTLMv1' } |
+            Group-Object UserName, SourceComputer | Sort-Object Count -Descending
+
+        foreach ($G in $V1Groups) {
+            [PSCustomObject]$First = $G.Group | Sort-Object TimeCreated | Select-Object -First 1
+            [PSCustomObject]$Last  = $G.Group | Sort-Object TimeCreated | Select-Object -Last 1
+            $EmailBody += "User           : $($First.UserName)  ($($First.DomainName))`r`n"
+            $EmailBody += "Source         : $($First.SourceComputer)  [$($First.SourceIpAddress)]`r`n"
+            $EmailBody += "Target         : $($First.TargetServer)`r`n"
+            $EmailBody += "Count          : $($G.Count)`r`n"
+            $EmailBody += "First Seen     : $($First.TimeCreated)`r`n"
+            $EmailBody += "Last Seen      : $($Last.TimeCreated)`r`n"
+            $EmailBody += $Divider
+        }
+    }
+
+    # NTLMv2 section.
+    if ($V2Count -gt 0) {
+        $EmailBody += "NTLMv2 EVENTS (MEDIUM RISK)`r`n"
+        $EmailBody += $Divider
+
+        $V2Groups = $Events | Where-Object { $_.NTLMVersion -eq 'NTLMv2' } |
+            Group-Object UserName, SourceComputer | Sort-Object Count -Descending
+
+        foreach ($G in $V2Groups) {
+            [PSCustomObject]$First = $G.Group | Sort-Object TimeCreated | Select-Object -First 1
+            [PSCustomObject]$Last  = $G.Group | Sort-Object TimeCreated | Select-Object -Last 1
+            $EmailBody += "User           : $($First.UserName)  ($($First.DomainName))`r`n"
+            $EmailBody += "Source         : $($First.SourceComputer)  [$($First.SourceIpAddress)]`r`n"
+            $EmailBody += "Target         : $($First.TargetServer)`r`n"
+            $EmailBody += "Count          : $($G.Count)`r`n"
+            $EmailBody += "First Seen     : $($First.TimeCreated)`r`n"
+            $EmailBody += "Last Seen      : $($Last.TimeCreated)`r`n"
+            $EmailBody += $Divider
+        }
+    }
+
+    $EmailBody += "`r`nFull event details exported to: $global:ReportsPath`r`n"
+
+    Export-AdPowerAdminData -Data $Events `
+        -ReportName "NTLMAuthDailySummary_$(Get-Date -Format 'yyyyMMdd')" -Force
+
+    Send-Email -ToEmail $global:ADAdminEmail `
+               -FromEmail $global:FromEmail `
+               -Subject $Subject `
                -Body $EmailBody
 }

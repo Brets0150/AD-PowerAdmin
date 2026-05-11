@@ -12,7 +12,7 @@
     RootModule = 'AD-PowerAdmin_LogMgr.psm1'
 
     # Version number of this module.
-    ModuleVersion = '1.1'
+    ModuleVersion = '1.2'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -74,7 +74,7 @@
     # NestedModules = @()
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-    FunctionsToExport = @('Show-ADUserLockouts', 'Get-CurrentLockedoutUsers','Show-AdUserFailedLoginEvents','Get-FailedLoginEvents','Start-DailyLockoutSummaryReport')
+    FunctionsToExport = @('Show-ADUserLockouts', 'Get-CurrentLockedoutUsers','Show-AdUserFailedLoginEvents','Get-FailedLoginEvents','Start-DailyLockoutSummaryReport','Show-NTLMAuthEvents','Start-DailyNTLMAuthReport')
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
     CmdletsToExport = @()
@@ -119,6 +119,12 @@
 
             # ReleaseNotes of this module
             ReleaseNotes = @'
+            v1.2:
+            - Added Show-NTLMAuthEvents: interactive search of NTLM v1 and v2 authentication events across all domain controllers. Queries Microsoft-Windows-NTLM/Operational log, normalizes event XML into structured records, displays NTLMv1/v2 summary and per-event details, and offers CSV export.
+            - Added Start-DailyNTLMAuthReport: automated daily scheduled report. Queries all DCs for 24-hour NTLM events, groups by version and source, exports CSV, and emails summary to admin. Controlled by $global:NTLMAuthDailyReport in settings.
+            - Added Get-NTLMAuthEvents private helper: enumerates all DCs, queries NTLM Operational log with date range, parses event XML, and returns normalized PSCustomObject array.
+            - Updated Initialize-Module: added SearchNTLMAuthEvents submenu item and NTLMAuthDailySummary scheduled job registration.
+
             v1.1:
             - Promoted to Production channel. All functions stable with no known issues.
 

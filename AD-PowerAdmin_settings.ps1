@@ -71,6 +71,7 @@
 [bool]$global:InactiveUserAudit             = $true
 [bool]$global:WeakPasswordAudit             = $true
 [bool]$global:LockoutDailyReport            = $true
+[bool]$global:NTLMAuthDailyReport           = $false
 [bool]$global:PasswordNotRequiredAudit      = $true
 [bool]$global:AsRepRoastingAudit            = $true
 

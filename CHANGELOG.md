@@ -4,6 +4,61 @@
 
 ---
 
+### AD-PowerAdmin_GPOBestPracticesDeployer (v1.3) + AD-PowerAdmin_LogMgr (v1.2) -- NTLM Audit and Remediation
+
+**Added to GPOBestPracticesDeployer (v1.3):**
+- `EnableNTLMAuditPolicy` best practice entry -- enables NTLM authentication auditing on domain
+  controllers by configuring `AuditNTLMInDomain` (Netlogon\Parameters) and
+  `AuditReceivingNTLMTraffic` (Lsa\MSV1_0). Populates the Microsoft-Windows-NTLM/Operational
+  log with per-authentication records needed to identify legacy NTLM consumers before enforcing
+  blocks. `AuditNTLMInDomain` is configurable (default 7 = Enable all).
+  Addresses: credential capture and relay risk from undetected NTLM usage.
+- `DisableNTLMProtocols` best practice entry -- consolidated NTLM disable policy with three
+  variants selected at deployment time: (1) Disable LM and NTLMv1 only (LmCompatibilityLevel=5,
+  clients send NTLMv2 only, DCs refuse LM and NTLM); (2) Restrict all domain NTLM authentication
+  (RestrictNTLMInDomain, configurable level 1-7); (3) Both controls combined.
+  Addresses: NTLMv1 offline cracking, pass-the-hash, and domain NTLM relay attack paths.
+- `Variants` field support for `$script:GPOBestPractices` entries -- when a best practice defines
+  a `Variants` array, `Invoke-GPOBestPracticeDeployment` presents a numbered choice list, then
+  merges the selected variant's `RegistrySettings`, `DefaultGpoName`, and `GpoDescription` into
+  the deployment path before running coverage checks and the DDP/New GPO flow. All existing
+  entries without `Variants` are unchanged.
+- `Select-BestPracticeVariant` private helper -- presents the variant list and returns the
+  selected hashtable or null on cancel. Used exclusively by the Variants code path in
+  `Invoke-GPOBestPracticeDeployment`.
+
+**Added to LogMgr (v1.2):**
+- `Show-NTLMAuthEvents` -- interactive search of NTLM v1 and v2 authentication events across all
+  domain controllers. Queries the Microsoft-Windows-NTLM/Operational log, parses event XML into
+  structured records (DomainController, TimeCreated, EventId, UserName, DomainName, SourceComputer,
+  SourceIpAddress, TargetServer, NTLMVersion, LogonType, ProcessName), displays a summary and
+  per-event list grouped by version (NTLMv1 first as higher risk), and offers CSV export.
+  Requires the NTLM Audit Policy GPO applied to DCs before events appear.
+- `Start-DailyNTLMAuthReport` -- automated daily scheduled report. Queries all DCs for 24-hour
+  NTLM events, groups by NTLMv1/v2 with per-user/source counts and first/last seen, exports CSV,
+  and emails summary to `$global:ADAdminEmail`. NTLMv1 is flagged explicitly in subject and body.
+  Controlled by `$global:NTLMAuthDailyReport = $true` in settings.
+- `Get-NTLMAuthEvents` private helper -- enumerates all DCs via `Get-ADDomainController`,
+  queries the NTLM Operational log with a StartTime/EndTime window, parses event XML data nodes
+  into normalized PSCustomObjects, and returns the full array. Warns per DC if the log is
+  inaccessible (audit policy not yet applied).
+- `NTLMAuthDailySummary` scheduled job registration in `Initialize-Module` (Daily = $true).
+- `SearchNTLMAuthEvents` submenu item registration in `Initialize-Module` under `LogMgrMenu`.
+
+**Changed in settings (AD-PowerAdmin_settings.ps1):**
+- Added `$global:NTLMAuthDailyReport = $false` feature flag. Set to `$true` to enable the daily
+  NTLM authentication summary email report.
+
+**Documentation:**
+- Created `AD-PowerAdmin.wiki/Vulnerabilities/NTLMv1_NTLMv2_Authentication_Risks.md` -- generalized
+  vulnerability dossier covering NTLM credential capture, offline cracking, pass-the-hash, relay
+  attacks, downgrade risk, audit event log guidance, and remediation controls.
+- Created `AD-PowerAdmin.wiki/LogMgr-NTLM-Authentication-Audit.md` -- module wiki page covering
+  feature description, prerequisite GPO requirement, daily report configuration, recommended
+  workflow (audit -> remediate -> restrict), and framework integration details.
+
+---
+
 ### Modules/AD-PowerAdmin_GPOMgr.psd1 -- Promoted to Production
 
 **Changed:**

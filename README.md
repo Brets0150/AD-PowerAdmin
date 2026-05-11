@@ -4,46 +4,59 @@
     </div>
 </div>
 
-#  AD-PowerAdmin Overview
-AD-PowerAdmin is a tool to help Active Directory administrators secure and manage their AD. Automating security checks ranging from User and Computer cleanup, password audits, security misconfiguration audits, and much more. The core philosophy is to automate daily testing of AD security and email when there is an issue. This tool focuses on common weaknesses, and attack-vectors adversaries use and defends against them.
+## AD-PowerAdmin Overview
+AD-PowerAdmin is a tool to help Active Directory administrators secure and manage their AD environment. It automates daily security checks -- user and computer lifecycle management, password auditing, misconfiguration detection, and more -- and emails alerts when issues are found. The core philosophy is to encode best practices directly into scripts so that security checks run consistently, every time, without manual intervention. This tool focuses on the common weaknesses and attack vectors adversaries exploit and defends against them.
 
-# Features
-Here is a quick list of features
-- Install, test, or remove AD-PowerAdmin as a Windows scheduled task with a standalone Managed Service Account (sMSA) for unattended daily execution. Includes a setup helper to install PowerShell 7 if not already present.
-- Interactive settings configuration wizard: guides administrators through every configurable variable in the settings file section by section, with AD OU search, live DN validation, and automatic backup before writing.
-- Disable and decommission user accounts manually or automatically when they have not been active within a configurable number of days.
-- Disable and decommission computer accounts manually or automatically when they have not been active within a configurable number of days.
-- User account decommissioning workflow: strips all group memberships, rotates the password to a random value, disables the account, and moves it to a designated disabled OU.
-- Audit accounts within high-privilege groups. Produces a complete view of users with, or able to escalate to, Domain Admin and other high-privilege group rights.
-- Breached and weak password audit. Cross-references user password hashes against the Have I Been Pwned NTLM hash database and a configurable weak-password dictionary. Users with breached or weak passwords are automatically emailed with a grace period to change; accounts that do not comply have "User must change password at next logon" set.
-- Monthly email report of breached and weak passwords. Also available on demand.
-- KRBTGT password rotation: automated age-check-and-rotate or forced rotation as a defense against Golden Ticket attacks.
-- Active Directory security best-practice audit: checks for common misconfigurations and weak settings across the domain.
-- Active Directory ACL audit: identifies high-risk Access Control Entries and accounts configured with DCSync delegation rights.
-- Active Directory object search: interactive lookup of users, computers, and other AD objects.
-- Download and manage the Have I Been Pwned NTLM password hash database used for breach detection. The downloader is embedded pure PowerShell 5.1 with no external tools or runtimes required. Supports both single-file and incremental directory modes; directory mode uses ETag-based comparison to only re-download changed hash ranges, making weekly updates far more efficient than the full 70 GB dataset.
-- Machine Account Quota audit: checks ms-DS-MachineAccountQuota, finds computer accounts created by non-admin users via ms-DS-CreatorSID, and flags computers with Resource-Based Constrained Delegation configured (msDS-AllowedToActOnBehalfOfOtherIdentity).
-- Machine Account Quota remediation: sets ms-DS-MachineAccountQuota to 0 to eliminate the attack surface for non-admin computer account creation.
-- PasswordNotRequired (PASSWD_NOTREQD) audit: identifies user and computer accounts with the PasswordNotRequired flag set, which allows accounts to bypass domain password policy and may permit authentication without a credential. Findings are risk-rated as Critical, High, Medium, Low, or Review based on account state and privilege level. Includes interactive remediation with confirmation and a daily unattended monitoring job that emails the administrator when high-risk accounts are detected.
-- AS-REP Roasting audit: detects Active Directory user accounts with Kerberos preauthentication disabled (DoesNotRequirePreAuth), assigns risk severity (Critical through Low) based on account privilege and state, enables safe interactive remediation with explicit confirmation, and runs a daily unattended monitoring job that emails the administrator when high-risk accounts are detected.
-- Event log analysis: search for account lockout events (4740), view currently locked-out users with an unlock option, and search for failed logon events (4625).
-- Daily account lockout summary report emailed to the administrator, covering all lockout events from the past 24 hours with a per-account breakdown and a full CSV export.
-- Exchange AD permission escalation audit: detects dangerous permissions (WriteDACL, GenericAll, WriteOwner) held by Exchange security groups on the domain root, audits Exchange group membership for unexpected principals, checks who can control Exchange Windows Permissions, correlates with DCSync rights, and provides guided removal of dangerous ACEs.
-- SYSVOL and NETLOGON script inventory: enumerate all scripts, logon/startup scripts, and configuration files stored in the domain's SYSVOL and NETLOGON shares.
-- SYSVOL credential and secret scanning: scan SYSVOL and NETLOGON scripts for embedded credentials, plaintext passwords, API tokens, and dangerous execution patterns such as ExecutionPolicy Bypass, encoded commands, and unauthenticated downloads.
-- GPP cpassword detection: identify legacy Group Policy Preferences XML files in SYSVOL containing cpassword values whose AES-256 encryption key was publicly disclosed (MS14-025).
-- SYSVOL permission auditing: audit SYSVOL file and folder ACLs for write or modify rights granted to broad or non-administrative principals such as Everyone, Domain Users, or Authenticated Users.
-- GPO delegation risk assessment: identify Group Policy Objects with edit rights assigned to non-Tier-0 identities, stale accounts, or broad security groups.
-- GPO external script path analysis: identify GPO script references pointing to UNC paths outside SYSVOL and NETLOGON that may reside on servers with weaker access controls.
-- Honeytoken account deployment and monitoring: provision a hardened, realistic-looking Active Directory account that should never authenticate; any authentication attempt generates a high-confidence alert for password spray, brute-force, credential stuffing, or attacker reconnaissance activity. Automatically creates and configures the deny-logon Group Policy Object linked to the domain root, eliminating manual GPO setup. Supports two monitor modes: centralized (one installation remotely queries all DCs) and decentralized (a lightweight copy deployed locally on each DC queries only its own Security log, eliminating RPC overhead for resource-constrained environments). Includes automated log monitoring across all domain controllers, structured email alerts with recommended response actions, interactive log review, safety validation, and a fully automated reversible removal workflow.
-- Group Policy Object management: shared GPO infrastructure used by other AD-PowerAdmin modules to create, configure, link, audit, and remove Group Policy Objects programmatically. Includes a configuration-level search that identifies which existing GPOs already enforce a given registry setting, preventing duplicate or conflicting policies across the domain. Supports manual and automatic backup of individual GPOs or all domain GPOs, with an interactive restore picker and a backup-before-modify safety contract enforced for all existing-GPO modifications.
-- GPO security best-practice enforcement: applies recommended Group Policy security baselines through a dedicated submenu. Includes conflict detection to identify existing GPO coverage, automatic pre-change backup for any modification to an existing GPO, and a choice to apply each setting to the Default Domain Policy or to a new GPO linked to a selected OU or domain root. Initial setting: disable storage of LAN Manager password hashes (NoLMHash), eliminating a primary target for offline credential cracking and pass-the-hash attacks.
-- SMB administrative share abuse audit: inventories hidden admin shares (ADMIN$, C$, IPC$) on all domain computers, audits inbound SMB firewall exposure, checks Windows LAPS coverage, enumerates local Administrators for excessive domain principals, inspects AutoShare registry policy, and searches event logs for admin share access from unapproved sources. Provides a staged, confirmation-gated remediation workflow with JSON backup and full rollback capability.
-- Audit policy compliance check: compares effective audit policy settings against hardened baselines for domain controllers and standard computers, reports gaps by severity, flags under-sized event logs, and checks domain controllers for missing SACL auditing and NTLM audit settings.
-- Audit policy GPO deployment: creates and links Group Policy Objects enforcing recommended audit policy subcategory settings, event log sizing, and NTLM auditing for domain controllers and standard domain-joined computers.
+---
 
-[See the wiki for more details of each feature](https://github.com/Brets0150/AD-PowerAdmin/wiki)
+## Signature Features
 
-# Installation
+> ### Breached and Weak Password Auditing
+>
+> Cross-references every domain account's NTLM password hash against the Have I Been Pwned breach database and a configurable weak-password dictionary. Users with compromised or weak passwords receive an automated email with a grace period to remediate; accounts that do not comply within the grace period have "User must change password at next logon" enforced automatically. The HIBP database manager is a pure-PowerShell 5.1 downloader with no external runtime dependencies. It supports both full and incremental ETag-based updates so the 70 GB hash dataset can be kept current without re-downloading unchanged ranges.
+>
+> [Full documentation](https://github.com/Brets0150/AD-PowerAdmin/wiki/AD-UserPasswordAudit)
+
+> ### Honeytoken Decoy Account
+>
+> Provisions a hardened, realistic-looking Active Directory account that should never authenticate under any legitimate circumstances. Any authentication attempt against it -- whether from a password spray, credential stuffing attack, brute force, or attacker reconnaissance -- triggers a high-confidence intrusion alert with a structured email and recommended response actions. Supports centralized monitoring (one installation queries all domain controllers remotely) and decentralized monitoring (a lightweight copy deployed on each DC queries only its local Security log). GPO-based deny-logon enforcement is created and linked to the domain root automatically -- no manual Group Policy configuration required.
+>
+> [Full documentation](https://github.com/Brets0150/AD-PowerAdmin/wiki/Honeytoken-Module)
+
+> ### Active Directory ACL Auditing
+>
+> Audits Active Directory Access Control Lists to identify high-risk Access Control Entries and accounts configured with DCSync delegation rights. Includes a dedicated Exchange AD permission escalation audit that detects dangerous permissions (WriteDACL, GenericAll, WriteOwner) held by Exchange security groups on the domain root, audits Exchange group membership for unexpected principals, correlates findings with DCSync rights, and provides guided interactive removal of dangerous ACEs.
+>
+> [Full documentation](https://github.com/Brets0150/AD-PowerAdmin/wiki/AD-AccessControlRights)
+
+---
+
+## Features
+
+### Password and Credential Security
+Rotates the KRBTGT account password on a configurable schedule as a defense against Golden Ticket attacks, with age checking and forced-rotation options. Generates on-demand and monthly email reports of breached and weak password findings across the domain. The HIBP hash database downloader keeps the local breach dataset up to date using incremental range comparisons, making recurring updates efficient regardless of dataset size.
+
+### Security Auditing
+Detects accounts configured with Kerberos preauthentication disabled (AS-REP Roasting), assigns risk severity based on account privilege and state, and enables interactive remediation with daily automated alerting. Identifies accounts with the PasswordNotRequired flag set and flags Machine Account Quota misconfigurations, non-admin computer account creation, and Resource-Based Constrained Delegation exposure. Evaluates domain-wide Active Directory security settings against known best practices and reports misconfigurations. Compares effective audit policy settings on domain controllers and member computers against hardened baselines, reports gaps by severity, and flags undersized event logs and missing SACL or NTLM audit settings.
+
+### Group Policy Management
+Creates, backs up, restores, links, and removes Group Policy Objects to support policy-driven security enforcement across the domain. Includes conflict detection to identify existing GPO coverage before deploying new settings and a backup-before-modify safety contract for any change to an existing GPO. Applies recommended Group Policy security baselines including LAN Manager hash storage elimination, SMB signing enforcement, domain password and account lockout policy, NTLM audit enabling on domain controllers, and consolidated NTLM protocol restriction policies. Identifies GPOs with edit rights assigned to non-Tier-0 identities or broad security groups, flags GPO script references pointing to UNC paths outside SYSVOL, and deploys GPOs enforcing recommended audit policy subcategory settings and event log sizing.
+
+### SYSVOL and Infrastructure Security
+Inventories all scripts, logon and startup scripts, and configuration files stored in the domain's SYSVOL and NETLOGON shares. Scans those files for embedded credentials, plaintext passwords, API tokens, ExecutionPolicy Bypass patterns, encoded commands, and unauthenticated download calls. Detects legacy Group Policy Preferences XML files containing cpassword values (MS14-025). Audits SYSVOL file and folder ACLs for write or modify rights granted to broad or non-administrative principals. Audits hidden administrative shares (ADMIN$, C$, IPC$) on all domain computers, checks SMB firewall exposure, reviews Windows LAPS coverage, inspects local Administrator group membership for excessive domain principals, and provides confirmation-gated remediation with full rollback capability.
+
+### Account Lifecycle Management
+Detects user and computer accounts that have not been active within a configurable number of days and disables or decommissions them manually or automatically. The decommissioning workflow strips all group memberships, rotates the password to a random value, disables the account, and moves it to a designated OU -- in the same order, with the same checks, every time. Audits membership of high-privilege groups including Domain Admins, Enterprise Admins, Schema Admins, Backup Operators, and others, producing a complete view of accounts with or capable of escalating to domain-level rights. Provides interactive Active Directory object search for users, computers, and other AD objects.
+
+### Event Log Analysis and Monitoring
+Searches domain controller Security event logs for account lockout events (4740) and failed logon events (4625), with filtering by account and time range, and displays currently locked-out users with an in-tool unlock option. Emails the administrator a daily lockout summary covering all lockout events from the past 24 hours with a per-account breakdown and a full CSV export. Queries the NTLM Operational log across all domain controllers to identify which systems, users, and service accounts are still authenticating over NTLMv1 or NTLMv2, with grouped summary output and CSV export for remediation planning. A daily NTLM authentication summary report provides continuous visibility as legacy NTLM dependencies are phased out.
+
+### Installation and Configuration
+Installs, tests, and removes AD-PowerAdmin as a Windows scheduled task running under a standalone Managed Service Account (sMSA) for unattended daily execution. Includes a helper to install PowerShell 7 if not already present. An interactive settings configuration wizard guides administrators through every configurable variable section by section, with Active Directory OU search, live DN validation, and automatic settings backup before any change is written.
+
+[Full feature documentation in the wiki](https://github.com/Brets0150/AD-PowerAdmin/wiki)
+
+---
+
+## Installation
 [See the Wiki for installation instructions.](https://github.com/Brets0150/AD-PowerAdmin/wiki/Install)
-#

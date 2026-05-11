@@ -48,6 +48,11 @@ Function Initialize-Module {
                     Label   = "Select an available backup and restore it to the domain, overwriting the current GPO settings."
                     Command = "Restore-GPOBackup"
                 }
+                'Help' = @{
+                    Title   = "Help"
+                    Label   = "Display a plain-language guide explaining what GPO backups are, where they are stored, how to create and list backups, and how to restore a GPO."
+                    Command = "Show-GPOMgrHelp"
+                }
             }
         }
     }
@@ -2312,5 +2317,76 @@ Function Remove-GPOBaseline {
     return Remove-ADPAGPO -Name $GpoDefinition['Name'] -RemoveLinks:$RemoveLinks -Domain $Domain
 }
 
+Function Show-GPOMgrHelp {
+    <#
+    .SYNOPSIS
+        Displays a plain-language guide to GPO backup and restore in this module.
+
+    .DESCRIPTION
+        Prints a formatted help screen explaining what GPO backups are, where they
+        are stored, how to create and list them, how to restore, and how the
+        automatic pre-modification backup safety contract works.
+
+    .EXAMPLE
+        Show-GPOMgrHelp
+    #>
+    [CmdletBinding()]
+    Param()
+
+    $Sep = '=' * 82
+
+    Write-Host ""
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host "  GPO MANAGER -- BACKUP AND RESTORE GUIDE" -ForegroundColor Cyan
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host ""
+
+    Write-Host "WHAT IS A GPO BACKUP?" -ForegroundColor Yellow
+    Write-Host "  A GPO backup is a complete copy of a Group Policy Object saved to disk."
+    Write-Host "  It captures all settings at the time of the backup so the GPO can be"
+    Write-Host "  restored exactly as it was if settings are accidentally changed or deleted."
+    Write-Host ""
+
+    Write-Host "WHERE ARE BACKUPS STORED?" -ForegroundColor Yellow
+    Write-Host "  All backups are saved in the AD-PowerAdmin Reports directory:"
+    Write-Host "    $($global:ReportsPath)\GPOBackups\" -ForegroundColor Cyan
+    Write-Host "  Each backup is a GUID-named subfolder containing the full GPO content."
+    Write-Host ""
+
+    Write-Host "HOW TO BACK UP" -ForegroundColor Yellow
+    Write-Host "  Backup All GPOs  -- Creates a backup of every GPO in the domain at once."
+    Write-Host "                      Use this before making any domain-wide policy changes."
+    Write-Host ""
+    Write-Host "  Backup a GPO     -- Prompts you to select a single GPO by name and backs"
+    Write-Host "                      up only that one. Use this before editing a specific GPO."
+    Write-Host ""
+
+    Write-Host "HOW TO LIST AVAILABLE BACKUPS" -ForegroundColor Yellow
+    Write-Host "  List GPO Backups -- Reads the backup directory and shows a table with:"
+    Write-Host "    GpoName    - The display name of the backed-up GPO."
+    Write-Host "    BackupDate - When the backup was taken."
+    Write-Host "    BackupId   - The unique ID of this specific backup copy."
+    Write-Host ""
+
+    Write-Host "HOW TO RESTORE" -ForegroundColor Yellow
+    Write-Host "  Restore a GPO    -- Shows a numbered list of all available backups."
+    Write-Host "                      Select the one you want, then type YES to confirm."
+    Write-Host "                      The selected backup overwrites the current GPO settings."
+    Write-Host ""
+    Write-Host "  IMPORTANT: Restore overwrites the current live GPO. The domain will apply"
+    Write-Host "  the restored settings to all affected computers on the next Group Policy"
+    Write-Host "  refresh (typically within 90 minutes, or immediately via gpupdate)."
+    Write-Host ""
+
+    Write-Host "AUTOMATIC BACKUPS" -ForegroundColor Yellow
+    Write-Host "  When AD-PowerAdmin modules modify an existing GPO, a backup is created"
+    Write-Host "  automatically before any change is applied. If the backup fails, the"
+    Write-Host "  modification is cancelled -- your GPO is never changed without a restore"
+    Write-Host "  point first."
+    Write-Host ""
+
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host ""
+}
 
 Initialize-Module

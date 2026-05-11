@@ -30,7 +30,8 @@
         'Remove-GPORegistrySetting',
         'Remove-GPOLink',
         'Remove-ADPAGPO',
-        'Remove-GPOBaseline'
+        'Remove-GPOBaseline',
+        'Show-GPOMgrHelp'
     )
     CmdletsToExport   = @()
     VariablesToExport = '*'
