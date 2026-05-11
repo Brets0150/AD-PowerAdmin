@@ -16,6 +16,14 @@
   Called by all backup-creation sites to prevent accidental modification or re-execution of
   an archived file.
 
+**Fixed:**
+- `Get-SettingsMigrationContent` -- added `[AllowEmptyString()]` to the `$Lines` parameter.
+  PowerShell 5.1 mandatory validation for `[string[]]` rejects the array if any element is an
+  empty string, which is always the case when a text file ending with a newline is split on
+  `\r?\n` (the last element is `""`). The function's internal logic already handled empty lines
+  correctly; the fix prevents the parameter binding from blocking execution before the function
+  body runs.
+
 **Changed:**
 - `Update-ADPowerAdminModules` -- backup files are now stored with a `.txt` extension appended
   (e.g. `AD-PowerAdmin_Installer.psm1.txt`) and marked read-only via `Set-BackupFileProtection`.

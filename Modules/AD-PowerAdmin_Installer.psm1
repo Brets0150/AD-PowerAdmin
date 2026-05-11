@@ -1400,7 +1400,11 @@ function Get-SettingsMigrationContent {
     #>
     [OutputType([string])]
     param(
-        [Parameter(Mandatory=$true)][string[]]$Lines,
+        # [AllowEmptyString()] is required: splitting a file on newlines produces a trailing
+        # empty string when the file ends with a newline. PS5.1 mandatory validation rejects
+        # the array the moment it sees that empty element, even though the function handles
+        # empty lines correctly internally.
+        [Parameter(Mandatory=$true)][AllowEmptyString()][string[]]$Lines,
         [Parameter(Mandatory=$true)][System.Collections.Generic.HashSet[string]]$NewVarNames
     )
 
