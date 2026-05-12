@@ -118,20 +118,19 @@ Function New-ScheduledTask {
         $UserId          = "$DomainNameShort`\$global:MsaAccountName`$"
         $Principal       = New-ScheduledTaskPrincipal -UserID "$UserId" -LogonType Password -RunLevel Highest
 
-        Register-ScheduledTask -TaskName "$TaskName" -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Description "$TaskDiscription" | Out-Null
+        Register-ScheduledTask -TaskName "$TaskName" -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Description "$TaskDiscription" -ErrorAction Stop | Out-Null
 
         # Confirm the task was created
-        if (Get-ScheduledTask -TaskName "$TaskName") {
+        if (Get-ScheduledTask -TaskName "$TaskName" -ErrorAction SilentlyContinue) {
             Write-Host "Task created successfully." -ForegroundColor Green
         }
         else {
-            throw "Task creation failed."
+            throw "Task was not found after registration."
         }
     }
     catch {
-        Write-Host "Unable to create schedule task."
-        Write-Output $_
-        break
+        Write-Host "Unable to create schedule task: $($_.Exception.Message)" -ForegroundColor Red
+        throw
     }
 
     #End of New-ScheduledTask function
@@ -1239,7 +1238,7 @@ Function Set-SettingsFileValue {
     switch ($VarType) {
         'bool' {
             # \s* handles column-aligned declarations like KerberosKRBTGTAudit
-            $Content = $Content -replace "(\[bool\]\`$global:$VarName\s*=\s*\`\$)(true|false)", ('${1}' + $NewValue)
+            $Content = $Content -replace "(\[bool\]\`$global:$VarName\s*=\s*\`$)(true|false)", ('${1}' + $NewValue)
         }
         'int' {
             # (?i)int handles both [int] and [Int]

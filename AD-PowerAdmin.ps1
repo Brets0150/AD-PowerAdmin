@@ -256,7 +256,8 @@ Function Show-Diagnostics {
 
     .DESCRIPTION
     This function will gather and display information about the script's environment, including
-    the PowerShell version, the operating system, and any relevant environment variables.
+    the PowerShell version, the operating system, any relevant environment variables, and the
+    current values of all global configuration settings loaded from AD-PowerAdmin_settings.ps1.
 
     .EXAMPLE
     Show-Diagnostics
@@ -265,17 +266,194 @@ Function Show-Diagnostics {
 
     #>
 
-    Write-Host "AD-PowerAdmin Diagnostics" -ForegroundColor Cyan
-    Write-Host "----------------------------------------" -ForegroundColor Cyan
-    Write-Host "AD-PowerAdmin Script Version: $($global:Version)" -ForegroundColor White
-    Write-Host "PowerShell Version: $($PSVersionTable.PSVersion)" -ForegroundColor White
-    Write-Host "Operating System: $([System.Environment]::OSVersion.VersionString)" -ForegroundColor White
-    Write-Host "Current User: $($env:USERNAME)" -ForegroundColor White
-    Write-Host "Script Directory: $($PSScriptRoot)" -ForegroundColor White
-    Write-Host "Modules Path: $($global:ModulesPath)" -ForegroundColor White
-    Write-Host "----------------------------------------" -ForegroundColor Cyan
-    Write-Host "Loaded Modules:" -ForegroundColor Cyan
+    [string]$Sep = ('=' * $global:OptionsMaxTextLength)
+    [string]$Dash = ('-' * $global:OptionsMaxTextLength)
+
+    # -------------------------------------------------------------------------
+    # Environment
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host "  AD-PowerAdmin Diagnostics -- Environment" -ForegroundColor Cyan
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host ("  {0,-35} : {1}" -f "Script Version",   $global:Version)           -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "PowerShell Version", $PSVersionTable.PSVersion) -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "Operating System",  [System.Environment]::OSVersion.VersionString) -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "Current User",      $env:USERNAME)             -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "Script Directory",  $PSScriptRoot)             -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "Modules Path",      $global:ModulesPath)       -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "Reports Path",      $global:ReportsPath)       -ForegroundColor White
+
+    # -------------------------------------------------------------------------
+    # Loaded modules
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host "  Loaded Modules" -ForegroundColor Cyan
+    Write-Host $Dash -ForegroundColor Cyan
     Get-ADPAVersion -Detailed
+
+    # -------------------------------------------------------------------------
+    # Helper: display "(not set)" for empty strings, value otherwise
+    # -------------------------------------------------------------------------
+    function fmtStr([string]$v) { if ([string]::IsNullOrWhiteSpace($v)) { "(not set)" } else { $v } }
+
+    # -------------------------------------------------------------------------
+    # Core settings
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host "  Core Settings" -ForegroundColor Cyan
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host ("  {0,-35} : {1}" -f "Debug",             $global:Debug)             -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "UnattendedLog",     $global:UnattendedLog)     -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "ADAdminEmail",      (fmtStr $global:ADAdminEmail)) -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "FromEmail",         (fmtStr $global:FromEmail))    -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "MsaAccountName",    (fmtStr $global:MsaAccountName)) -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "InstallDirectory",  (fmtStr $global:InstallDirectory)) -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "UpdateChannel",     (fmtStr $global:UpdateChannel))    -ForegroundColor White
+
+    # -------------------------------------------------------------------------
+    # Daily audit task flags
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host "  Daily Audit Task Flags" -ForegroundColor Cyan
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host ("  {0,-35} : {1}" -f "KerberosKRBTGTAudit",        $global:KerberosKRBTGTAudit)        -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "InactiveComputerAudit",      $global:InactiveComputerAudit)      -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "InactiveUserAudit",          $global:InactiveUserAudit)          -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "WeakPasswordAudit",          $global:WeakPasswordAudit)          -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "LockoutDailyReport",         $global:LockoutDailyReport)         -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "NTLMAuthDailyReport",        $global:NTLMAuthDailyReport)        -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "PasswordNotRequiredAudit",   $global:PasswordNotRequiredAudit)   -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "AsRepRoastingAudit",         $global:AsRepRoastingAudit)         -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "SysvolGppCpasswordAudit",    $global:SysvolGppCpasswordAudit)    -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "ExchangeADSecurityAudit",    $global:ExchangeADSecurityAudit)    -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "SmbAdminShareAudit",         $global:SmbAdminShareAudit)         -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "AuditPolicyDailyCheck",      $global:AuditPolicyDailyCheck)      -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "HoneypotAudit",              $global:HoneypotAudit)              -ForegroundColor White
+
+    # -------------------------------------------------------------------------
+    # KRBTGT settings
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host "  KRBTGT Settings" -ForegroundColor Cyan
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host ("  {0,-35} : {1}" -f "krbtgtPwUpdateInterval (days)", $global:krbtgtPwUpdateInterval) -ForegroundColor White
+
+    # -------------------------------------------------------------------------
+    # Inactive account settings
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host "  Inactive Account Settings" -ForegroundColor Cyan
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host ("  {0,-35} : {1}" -f "InactiveDays", $global:InactiveDays) -ForegroundColor White
+
+    Write-Host "  InactiveComputersLocations :" -ForegroundColor White
+    if ($global:InactiveComputersLocations -and $global:InactiveComputersLocations.Count -gt 0) {
+        [int]$i = 1
+        foreach ($Entry in $global:InactiveComputersLocations) {
+            Write-Host ("    [{0}] SearchOUbase    : {1}" -f $i, (fmtStr $Entry.SearchOUbase))    -ForegroundColor Gray
+            Write-Host ("    [{0}] DisabledOULocal : {1}" -f $i, (fmtStr $Entry.DisabledOULocal)) -ForegroundColor Gray
+            $i++
+        }
+    } else {
+        Write-Host "    (not configured)" -ForegroundColor Gray
+    }
+
+    Write-Host "  InactiveUsersLocations :" -ForegroundColor White
+    if ($global:InactiveUsersLocations -and $global:InactiveUsersLocations.Count -gt 0) {
+        [int]$j = 1
+        foreach ($Entry in $global:InactiveUsersLocations) {
+            Write-Host ("    [{0}] SearchOUbase    : {1}" -f $j, (fmtStr $Entry.SearchOUbase))    -ForegroundColor Gray
+            Write-Host ("    [{0}] DisabledOULocal : {1}" -f $j, (fmtStr $Entry.DisabledOULocal)) -ForegroundColor Gray
+            $j++
+        }
+    } else {
+        Write-Host "    (not configured)" -ForegroundColor Gray
+    }
+
+    # -------------------------------------------------------------------------
+    # Password quality settings
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host "  Password Quality Settings" -ForegroundColor Cyan
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host ("  {0,-35} : {1}" -f "NtlmHashDataFile",              (fmtStr $global:NtlmHashDataFile))              -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "NtlmHashDataDir",               (fmtStr $global:NtlmHashDataDir))               -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "WeakPassDictFile",              (fmtStr $global:WeakPassDictFile))              -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "PasswordQualityTestSearchOU",   (fmtStr $global:PasswordQualityTestSearchOUbase)) -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "PwAuditAlertEmailCCAdmins",     $global:PwAuditAlertEmailCCAdmins)              -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "PwAuditPwChangeGracePeriod",    $global:PwAuditPwChangeGracePeriod)             -ForegroundColor White
+
+    # -------------------------------------------------------------------------
+    # Email / SMTP settings
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host "  Email / SMTP Settings" -ForegroundColor Cyan
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host ("  {0,-35} : {1}" -f "SMTPServer",   (fmtStr $global:SMTPServer))  -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "SMTPPort",     $global:SMTPPort)              -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "SmtpEnableSSL",$global:SmtpEnableSSL)         -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "SMTPUsername", (fmtStr $global:SMTPUsername)) -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "SMTPPassword", $(if ([string]::IsNullOrWhiteSpace($global:SMTPPassword)) { "(not set)" } else { "(configured)" })) -ForegroundColor White
+
+    # -------------------------------------------------------------------------
+    # Honeytoken settings
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host "  Honeytoken Settings" -ForegroundColor Cyan
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host ("  {0,-35} : {1}" -f "HoneypotAudit",                 $global:HoneypotAudit)                  -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "HoneypotMonitorIntervalMinutes",$global:HoneypotMonitorIntervalMinutes)  -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "HoneypotUsername",              (fmtStr $global:HoneypotUsername))       -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "HoneypotDenyGroup",             (fmtStr $global:HoneypotDenyGroup))      -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "HoneypotOU",                    (fmtStr $global:HoneypotOU))             -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "HoneypotSPN",                   (fmtStr $global:HoneypotSPN))            -ForegroundColor White
+    Write-Host ("  {0,-35} : {1}" -f "HoneypotMonitorMode",           (fmtStr $global:HoneypotMonitorMode))    -ForegroundColor White
+
+    # -------------------------------------------------------------------------
+    # Exchange audit settings
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host "  Exchange Audit Settings" -ForegroundColor Cyan
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host "  ExchangeGroupsToAudit :" -ForegroundColor White
+    if ($global:ExchangeGroupsToAudit -and $global:ExchangeGroupsToAudit.Count -gt 0) {
+        foreach ($Group in $global:ExchangeGroupsToAudit) {
+            Write-Host ("    - {0}" -f $Group) -ForegroundColor Gray
+        }
+    } else {
+        Write-Host "    (not configured)" -ForegroundColor Gray
+    }
+
+    # -------------------------------------------------------------------------
+    # SMB audit settings
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host "  SMB Audit Settings" -ForegroundColor Cyan
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host ("  {0,-35} : {1}" -f "SmbLapsExpiredDays", $global:SmbLapsExpiredDays) -ForegroundColor White
+    Write-Host "  ApprovedSmbAdminHosts :" -ForegroundColor White
+    if ($global:ApprovedSmbAdminHosts -and $global:ApprovedSmbAdminHosts.Count -gt 0) {
+        foreach ($Host_ in $global:ApprovedSmbAdminHosts) {
+            Write-Host ("    - {0}" -f $Host_) -ForegroundColor Gray
+        }
+    } else {
+        Write-Host "    (none configured)" -ForegroundColor Gray
+    }
+
+    Write-Host ""
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host ""
 
     return
 }

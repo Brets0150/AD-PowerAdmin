@@ -4,9 +4,81 @@
 
 ---
 
+### [Modules/standalone_scripts/New-ReleasePackage.ps1]
+
+**Added:**
+- `New-ReleasePackage.ps1` -- standalone script that calculates the current AD-PowerAdmin
+  version using the same algorithm as `Get-ADPAVersion` (summing module `.psd1` versions,
+  applying the Alpha/Beta/Production channel hierarchy) and packages a release zip named
+  `ADPowerAdmin_V<version>.zip` into a `Releases\` folder at the project root. The zip
+  contains `AD-PowerAdmin.ps1`, `AD-PowerAdmin_settings.ps1`, `README.md`, and all direct
+  files in `Modules\` (no subdirectories). A `MANIFEST.txt` of SHA256 hashes for every
+  included file is generated and added to the zip, enabling post-download integrity
+  verification via `sha256sum -c` on Linux/macOS. The script prompts before overwriting an
+  existing zip of the same version. Purpose: replace the manual release packaging process
+  with a deterministic, repeatable script that produces a consistent artifact for GitHub
+  distribution.
+
+---
+
+### [AD-PowerAdmin.ps1 -- Main Script]
+
+**Changed:**
+- `Show-Diagnostics` -- expanded the debug diagnostics screen (main menu option `D`) to include a
+  full readout of every global configuration variable loaded from `AD-PowerAdmin_settings.ps1`.
+  Settings are grouped into labeled sections (Core, Daily Audit Flags, KRBTGT, Inactive Accounts,
+  Password Quality, Email/SMTP, Honeytoken, Exchange, SMB) and formatted with aligned columns
+  matching the style used in the installer's settings confirmation wizard. Sensitive values such
+  as `SMTPPassword` are shown as `(configured)` rather than the raw value. Array settings
+  (`InactiveComputersLocations`, `InactiveUsersLocations`, `ExchangeGroupsToAudit`,
+  `ApprovedSmbAdminHosts`) are expanded entry by entry. Aids rapid on-screen verification of
+  loaded settings without opening the settings file.
+
+---
+
+### [AD-PowerAdmin_Utils Module]
+
+**Fixed:**
+- `Set-SettingsFileValue` -- the `bool` VarType regex never matched any settings file line.
+  The pattern contained a spurious `\` before the second `` `$ `` (`` \`\$ `` instead of `` \`$ ``).
+  In a PowerShell double-quoted string, `` \`$ `` produces `\$` in the pattern string — the
+  correct regex escape for a literal dollar sign. The extra `\` produced either `\\$` (two
+  backslashes + end-of-string anchor) or a literal-backtick match depending on PS 5.1 string
+  processing, neither of which matched the `$true`/`$false` in the settings file. Result: every
+  call to `Set-SettingsFileValue -VarType 'bool'` was silently a no-op. Only settings where the
+  new value happened to equal the old value (user pressed Enter keeping the default) were
+  unaffected in practice; any intentional change from `$true` to `$false` or vice versa was lost.
+- `New-ScheduledTask` -- removed erroneous `-Password ""` from `Register-ScheduledTask`.
+  PowerShell validates that the Password parameter cannot be an empty string, causing immediate
+  failure. For sMSA/gMSA accounts the parameter must be omitted entirely; the OS retrieves the
+  account password from Active Directory automatically when it recognizes the trailing `$` in
+  the account name.
+- `New-ScheduledTask` -- replaced `Write-Output $_` with `Write-Host` and `break` with `throw`
+  in the catch block. `Write-Output $_` sent error details to the success stream where they were
+  discarded; `break` outside a loop has undefined propagation and swallowed the exception before
+  the caller's catch could see it. The fix surfaces the actual error message and re-throws so
+  callers can handle it.
+
+---
+
 ### [AD-PowerAdmin_Installer Module]
 
 **Added:**
+- `Show-InstallHelp` -- prints a section-by-section guide to every action performed by
+  `Install-ADPowerAdmin`. Covers all seven installation steps in order: install directory
+  confirmation, directory creation and ACL/audit hardening, production file deployment, sMSA
+  account creation and local installation, Default Domain Controllers Policy GPO modification
+  (SeServiceLogonRight), scheduled task registration, and DSInternals module installation.
+  Each section identifies what is created vs. modified, explains why the step exists, and
+  includes post-install verification details. Available as "Installation Guide" in the
+  AD-PowerAdmin Management submenu.
+- `Confirm-InstallDirectory` (private) -- prompts the administrator to confirm or change the
+  install directory before `Install-ADPowerAdmin` makes any system changes. Displays the current
+  `InstallDirectory` setting, asks for confirmation, and if a new path is entered validates that
+  it is an absolute path, writes it back to `AD-PowerAdmin_settings.ps1` via
+  `Set-SettingsFileValue`, and updates `$global:InstallDirectory` in memory. Returns `$false`
+  and aborts the install if the user cancels. Prevents silent installs to a misconfigured or
+  unintended directory.
 - `Update-ADPowerAdminMainScript` -- downloads and applies the latest AD-PowerAdmin.ps1 from
   GitHub. Supports Release and Development update channels. Displays current vs. available
   version before prompting for confirmation. Creates a timestamped, read-only backup under
@@ -15,6 +87,34 @@
 - `Set-BackupFileProtection` (private) -- marks a backup file read-only after creation.
   Called by all backup-creation sites to prevent accidental modification or re-execution of
   an archived file.
+- `Write-FileUtf8Crlf` (private) -- centralizes every settings and script file write in the
+  installer. Clears the read-only attribute on the target file if set, normalizes all line
+  endings to CRLF, then writes UTF-8 without BOM. Replaces direct
+  `[System.IO.File]::WriteAllText()` calls at all four write sites. Required because
+  `WriteAllText` fails with "Access denied" when the target carries the read-only attribute
+  applied by `Set-BackupFileProtection`, and because files downloaded from GitHub use LF
+  endings which Windows Notepad renders as a single continuous line.
+
+**Added:**
+- `Get-SettingsFileValues` (private) -- extracts every typed `$global:*` variable value from a
+  settings file content string. Returns a list of `{Name, Value, VarType}` objects compatible
+  with `Set-SettingsFileValue`. Handles bool, int, single-quoted string, double-quoted string,
+  and multi-line array declarations. Bare `$global:` reference values are skipped so the new
+  file's formula is preserved for those variables.
+
+**Changed:**
+- `Update-ADPowerAdminSettingsFile` -- completely redesigned. Previous behavior appended missing
+  variables from the new file to the old file, resulting in a hybrid document. New behavior
+  downloads the latest settings file, extracts all configured values from the old file, and
+  transplants those values into the new file's structure. The result is a clean adoption of the
+  new file layout with all user settings preserved. Variables removed from the new version are
+  dropped; new variables keep their defaults. The migration plan (counts of migrated, new-default,
+  and removed variables) is displayed before the user confirms.
+
+**Removed:**
+- `Get-SettingsMigrationContent` -- no longer needed. The new migration approach operates on
+  extracted values (via `Get-SettingsFileValues`) applied to the new file's content directly,
+  rather than building an append block from the remote file's text.
 
 **Fixed:**
 - `Get-SettingsMigrationContent` -- added `[AllowEmptyString()]` to the `$Lines` parameter.
@@ -32,6 +132,44 @@
   (read-only) instead of `.bak`. Consistent with the new backup security model.
 - `Start-SettingsWizard` -- backup now stored as `AD-PowerAdmin_settings.ps1.txt` (read-only)
   instead of `.bak`. Consistent with the new backup security model.
+- `New-ADPowerAdminScheduledTask` -- the catch block now prints the underlying exception message
+  alongside the generic failure notice. Previously only "The AD-PowerAdmin schedule task failed
+  to be created." was shown, hiding the root cause.
+- `New-ADPowerAdminSmsaAccount` -- the "account already exists" branch now calls
+  `Test-ADServiceAccount` to check whether the sMSA is installed on the local computer. If not
+  installed (re-install or new server where the account pre-exists in AD), it calls
+  `Add-ADComputerServiceAccount` and `Install-ADServiceAccount` before continuing. Previously
+  the branch returned immediately without installing, so `Register-ScheduledTask` could not
+  verify the account credentials and failed.
+- `New-ADPowerAdminHomeFolder` -- ACL on the install directory did not propagate to files or
+  subdirectories. The previous code used the 3-parameter `FileSystemAccessRule` constructor
+  which defaults `InheritanceFlags` to `None`, making the Domain Admins FullControl ACE apply
+  only to the directory container itself. Files copied into the directory by `Copy-AdPowerAdmin`
+  received no inherited ACE and were accessible only to their original creator. Any administrator
+  who opened the tool in a new session received "Access denied" when writing the settings file.
+  Fixed by using the 5-parameter constructor with `ContainerInherit | ObjectInherit` so the ACE
+  propagates to all child files and subdirectories. Added BUILTIN\Administrators and
+  NT AUTHORITY\SYSTEM as explicit FullControl entries with the same inheritance so local
+  administrators and Windows system processes have the access they require.
+- `Start-SettingsWizard` -- the file-write call had no error handling. When the target settings
+  file carried the read-only attribute (set by the backup step), the `[System.IO.File]::WriteAllText()`
+  .NET call threw a non-terminating exception that was invisible to the caller, so execution
+  continued past the failure and printed "Settings written to:" success messages despite nothing
+  being written. Replaced with `Write-FileUtf8Crlf` inside a `try/catch` that prints an error
+  and returns on failure, preventing false success feedback.
+- `Confirm-InstallDirectory`, `Update-ADPowerAdminMainScript`, `Update-ADPowerAdminSettingsFile`
+  -- all file-write calls now route through `Write-FileUtf8Crlf`. Files written with direct
+  `[System.IO.File]::WriteAllText()` calls used whatever line endings were in the source string
+  (LF from GitHub downloads), which Windows Notepad rendered as a single unbroken line. The new
+  helper normalizes to CRLF before writing.
+- `Copy-AdPowerAdmin` -- redesigned from a destructive `Move-Item` of the entire source directory
+  to a selective `Copy-Item` of exactly four production items: `AD-PowerAdmin.ps1`, 
+  `AD-PowerAdmin_settings.ps1`, `Modules\`, and `README.md`. Development artefacts (.git,
+  Reports, temp, test scripts, hash lists, etc.) are intentionally excluded. After copying,
+  the function verifies that the three critical items (main script, settings file, Modules
+  directory) are present in the install directory and reports per-item `[OK]`, `[SKIP]`, or
+  `[FAIL]` status. Eliminates the risk of deploying development-only content into a scheduled-
+  task installation directory.
 
 ---
 

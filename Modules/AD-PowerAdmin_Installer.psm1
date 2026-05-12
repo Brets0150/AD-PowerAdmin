@@ -20,7 +20,8 @@ Function Initialize-Module {
     # Register the sub-menu items.
     $global:SubMenus += @{
         'InstallerMenu' = @{
-            Title = "AD-PowerAdmin Management"
+            Title       = "AD-PowerAdmin Management"
+            HelpCommand = "Show-InstallHelp"
             Items = @{
                 'InstallADPowerAdmin' = @{
                     Title   = "Install AD-PowerAdmin"
@@ -58,8 +59,8 @@ Function Initialize-Module {
                     Command = "Start-SettingsWizard"
                 }
                 'UpdateSettings' = @{
-                    Title   = "Upgrade Settings File"
-                    Label   = "Download the latest default settings file from GitHub and append any new variables missing from the current AD-PowerAdmin_settings.ps1, preserving all existing configured values."
+                    Title   = "Migrate Settings File"
+                    Label   = "Download the latest settings file from GitHub and transplant all user-configured values into the new structure. Adopts the new file layout and variable ordering while preserving every setting you have configured."
                     Command = "Update-ADPowerAdminSettingsFile"
                 }
                 'TestEmailConfig' = @{
@@ -85,6 +86,405 @@ Function Initialize-Module {
 
 Initialize-Module
 
+function Show-InstallHelp {
+    <#
+    .SYNOPSIS
+    Displays a detailed guide covering installation, updates, and settings management.
+
+    .DESCRIPTION
+    Prints a section-by-section guide covering every system change made during installation,
+    every action performed by the three update functions, and the update channel system.
+    Accessible from the AD-PowerAdmin Management submenu by pressing h.
+
+    .EXAMPLE
+    Show-InstallHelp
+
+    .NOTES
+    Menu path: AD-PowerAdmin Management -> h (Help / Deployment Guide)
+    #>
+
+    [string]$Bar  = '=' * $global:OptionsMaxTextLength
+    [string]$Bar2 = '-' * $global:OptionsMaxTextLength
+
+    function Write-HelpHeader([string]$Title) {
+        Write-Host ""
+        Write-Host $Bar  -ForegroundColor Cyan
+        Write-Host "  $Title" -ForegroundColor Cyan
+        Write-Host $Bar  -ForegroundColor Cyan
+    }
+
+    function Write-HelpStep([string]$StepNum, [string]$Title) {
+        Write-Host ""
+        Write-Host "  Step $StepNum -- $Title" -ForegroundColor Yellow
+        Write-Host $Bar2 -ForegroundColor DarkGray
+    }
+
+    function Write-HelpSection([string]$Title) {
+        Write-Host ""
+        Write-Host "  $Title" -ForegroundColor Yellow
+        Write-Host $Bar2 -ForegroundColor DarkGray
+    }
+
+    function Write-HelpLine([string]$Text) {
+        Write-Host "  $Text" -ForegroundColor White
+    }
+
+    function Write-HelpDetail([string]$Text) {
+        Write-Host "      $Text" -ForegroundColor Gray
+    }
+
+    function Write-HelpNote([string]$Text) {
+        Write-Host "  NOTE: $Text" -ForegroundColor DarkYellow
+    }
+
+    function Write-HelpCreate([string]$Text) {
+        Write-Host "  [CREATES]  $Text" -ForegroundColor Green
+    }
+
+    function Write-HelpModify([string]$Text) {
+        Write-Host "  [MODIFIES] $Text" -ForegroundColor Magenta
+    }
+
+    function Write-HelpRead([string]$Text) {
+        Write-Host "  [READS]    $Text" -ForegroundColor Cyan
+    }
+
+    # =========================================================================
+    Write-HelpHeader "AD-PowerAdmin Management -- Help / Deployment Guide"
+    Write-Host ""
+    Write-HelpLine "This guide covers three topics:"
+    Write-HelpLine "  Part 1 -- Installation  (what Install AD-PowerAdmin does)"
+    Write-HelpLine "  Part 2 -- Updates       (Update Modules, Update Main Script)"
+    Write-HelpLine "  Part 3 -- Settings      (Migrate Settings File)"
+
+    # #########################################################################
+    Write-HelpHeader "Part 1: Installation"
+    Write-Host ""
+    Write-HelpLine "The installer is IDEMPOTENT -- it checks each component before acting."
+    Write-HelpLine "It is safe to run multiple times. Steps already complete are skipped"
+    Write-HelpLine "or confirmed rather than duplicated."
+    Write-Host ""
+    Write-HelpLine "Seven steps are performed in this order:"
+
+    # =========================================================================
+    Write-HelpStep "1" "Confirm Installation Directory"
+    Write-HelpLine "Before making any system change, the installer shows the current value"
+    Write-HelpLine "of InstallDirectory from settings and asks you to confirm or change it."
+    Write-Host ""
+    Write-HelpRead   "AD-PowerAdmin_settings.ps1  (`$global:InstallDirectory)"
+    Write-HelpModify "AD-PowerAdmin_settings.ps1  (only if you enter a new path)"
+    Write-HelpModify "`$global:InstallDirectory    (updated in memory for this session)"
+    Write-Host ""
+    Write-HelpNote "A changed path is written back to the settings file immediately so it"
+    Write-HelpNote "persists after a restart."
+
+    # =========================================================================
+    Write-HelpStep "2" "Create and Harden the Install Directory"
+    Write-HelpLine "Creates the install directory if it does not already exist, then locks"
+    Write-HelpLine "it down and enables auditing so all access is recorded."
+    Write-Host ""
+    Write-HelpCreate "Install directory folder  (path from `$global:InstallDirectory)"
+    Write-Host ""
+    Write-HelpLine "ACL hardening applied to the directory:"
+    Write-HelpDetail "Owner         : Domain Admins group"
+    Write-HelpDetail "Inheritance   : All inherited permissions are removed"
+    Write-HelpDetail "Access        : Only Domain Admins receive FullControl"
+    Write-Host ""
+    Write-HelpLine "Audit policy changes:"
+    Write-HelpDetail "System-level File System auditing is enabled via auditpol.exe:"
+    Write-HelpDetail "  auditpol /set /subcategory:""File System"" /success:enable /failure:enable"
+    Write-HelpDetail "A SACL is written to the folder for the principal 'Everyone':"
+    Write-HelpDetail "  Audited rights : ExecuteFile, DeleteSubdirectoriesAndFiles, Write,"
+    Write-HelpDetail "                   Delete, ChangePermissions, TakeOwnership"
+    Write-HelpDetail "  Inheritance    : ContainerInherit + ObjectInherit (all children)"
+    Write-HelpDetail "  Audit flags    : Success and Failure"
+    Write-HelpDetail "Every interaction with the directory generates a Security event log entry."
+    Write-Host ""
+    Write-HelpModify "System audit policy  (File System subcategory -- Success + Failure)"
+    Write-HelpModify "Install directory ACL  (owner, DACL, and SACL)"
+
+    # =========================================================================
+    Write-HelpStep "3" "Deploy Production Files"
+    Write-HelpLine "Copies only the required files from the current running location to the"
+    Write-HelpLine "install directory. Development files are never copied."
+    Write-Host ""
+    Write-HelpLine "What is copied:"
+    Write-HelpDetail "AD-PowerAdmin.ps1           -- main script"
+    Write-HelpDetail "AD-PowerAdmin_settings.ps1  -- all configuration variables"
+    Write-HelpDetail "Modules\                    -- all module files (recursive)"
+    Write-HelpDetail "README.md                   -- project documentation"
+    Write-Host ""
+    Write-HelpLine "What is NOT copied:"
+    Write-HelpDetail ".git\, temp\, Reports\, password lists, test scripts, and everything"
+    Write-HelpDetail "else not in the four items above."
+    Write-Host ""
+    Write-HelpLine "After copying, the installer verifies these three critical items exist"
+    Write-HelpLine "in the install directory: AD-PowerAdmin.ps1, AD-PowerAdmin_settings.ps1,"
+    Write-HelpLine "and Modules\"
+    Write-Host ""
+    Write-HelpCreate "AD-PowerAdmin.ps1, AD-PowerAdmin_settings.ps1, Modules\, README.md"
+    Write-HelpNote "If you are already running from the install directory this step is skipped."
+
+    # =========================================================================
+    Write-HelpStep "4" "Create the Standalone Managed Service Account (sMSA)"
+    Write-HelpLine "Creates a Standalone Managed Service Account in Active Directory. The"
+    Write-HelpLine "scheduled task runs under this account, which holds Domain Admin rights"
+    Write-HelpLine "so AD-PowerAdmin can perform all required AD operations unattended."
+    Write-Host ""
+    Write-HelpLine "Account details:"
+    Write-HelpDetail "Name        : `$global:MsaAccountName (default: ADPowerAdmMSA)"
+    Write-HelpDetail "Type        : Standalone MSA (-RestrictToSingleComputer)"
+    Write-HelpDetail "Password    : Auto-generated by AD; rotates every 30 days automatically"
+    Write-HelpDetail "              Only this one computer can ever read the password from AD"
+    Write-HelpDetail "Location    : domain.com/Managed Service Accounts container"
+    Write-HelpDetail "Membership  : Domain Admins"
+    Write-Host ""
+    Write-HelpLine "Local installation performed after AD account creation:"
+    Write-HelpDetail "Add-ADComputerServiceAccount  -- tells AD this computer uses the sMSA"
+    Write-HelpDetail "Install-ADServiceAccount      -- installs the sMSA credential locally"
+    Write-HelpDetail "Test-ADServiceAccount         -- confirms local install succeeded"
+    Write-Host ""
+    Write-HelpLine "Re-install behavior (account already exists in AD):"
+    Write-HelpDetail "Test-ADServiceAccount runs to check if the sMSA is installed on this"
+    Write-HelpDetail "computer. If it is not (new server, or previous partial install), the"
+    Write-HelpDetail "local installation steps above are run again before continuing."
+    Write-Host ""
+    Write-HelpCreate "AD Service Account object    in Active Directory"
+    Write-HelpModify "Domain Admins group          (sMSA added as a member)"
+    Write-HelpModify "Local computer               (sMSA credential installed locally)"
+
+    # =========================================================================
+    Write-HelpStep "5" "Modify the Default Domain Controllers Policy GPO"
+    Write-HelpLine "Grants the sMSA the 'Log on as a service' right on the domain controller."
+    Write-HelpLine "Windows requires this right before a service account can be assigned to"
+    Write-HelpLine "a scheduled task running on a DC."
+    Write-Host ""
+    Write-HelpLine "Why the Default Domain Controllers Policy is modified directly:"
+    Write-HelpDetail "PowerShell has no cmdlet that writes the SeServiceLogonRight privilege"
+    Write-HelpDetail "to a GPO. The only way to do it is to directly edit the security template"
+    Write-HelpDetail "file (GptTmpl.inf) on SYSVOL. The existing DC policy is used because it"
+    Write-HelpDetail "is always present and already linked to the Domain Controllers OU, so no"
+    Write-HelpDetail "new GPO needs to be created or linked."
+    Write-Host ""
+    Write-HelpLine "GPO targeted:"
+    Write-HelpDetail "Name : Default Domain Controllers Policy"
+    Write-HelpDetail "GUID : {6AC1786C-016F-11D2-945F-00C04fB984F9}"
+    Write-Host ""
+    Write-HelpLine "File edited on SYSVOL:"
+    Write-HelpDetail "\\domain.fqdn\SYSVOL\domain.fqdn\Policies\"
+    Write-HelpDetail "  {6AC1786C-016F-11D2-945F-00C04fB984F9}\Machine\Microsoft\"
+    Write-HelpDetail "  Windows NT\SecEdit\GptTmpl.inf"
+    Write-Host ""
+    Write-HelpLine "What changes inside GptTmpl.inf:"
+    Write-HelpDetail "The sMSA's SID is appended to the SeServiceLogonRight line. The SID is"
+    Write-HelpDetail "used instead of the account name so the entry survives account renames."
+    Write-HelpDetail "If SeServiceLogonRight does not exist yet, it is added after the"
+    Write-HelpDetail "SeBatchLogonRight line."
+    Write-Host ""
+    Write-HelpLine "A forced GPO refresh is triggered after the file is written:"
+    Write-HelpDetail "Invoke-GPUpdate -Force"
+    Write-Host ""
+    Write-HelpModify "GptTmpl.inf on SYSVOL  (SeServiceLogonRight, sMSA SID appended)"
+    Write-HelpModify "Group Policy           (Invoke-GPUpdate -Force on this DC)"
+    Write-Host ""
+    Write-HelpNote "Security note: the sMSA password is random, AD-managed, and readable only"
+    Write-HelpNote "by this DC. Any attacker who could abuse SeServiceLogonRight on the DC"
+    Write-HelpNote "would already have full control of the domain."
+
+    # =========================================================================
+    Write-HelpStep "6" "Register the AD-PowerAdmin_Daily Scheduled Task"
+    Write-HelpLine "Creates a Windows Scheduled Task that runs AD-PowerAdmin daily in"
+    Write-HelpLine "unattended mode, executing all audit jobs flagged Daily = true."
+    Write-Host ""
+    Write-HelpLine "Task configuration:"
+    Write-HelpDetail "Name              : AD-PowerAdmin_Daily"
+    Write-HelpDetail "Run as            : `$global:MsaAccountName (sMSA)"
+    Write-HelpDetail "Privilege level   : Highest (runs elevated)"
+    Write-HelpDetail "Schedule          : Daily, first run tomorrow at 09:00 AM"
+    Write-HelpDetail "Network required  : Yes (task waits for network availability)"
+    Write-HelpDetail "Wake to run       : Yes"
+    Write-HelpDetail "Working directory : install directory"
+    Write-Host ""
+    Write-HelpLine "Command the task executes:"
+    Write-HelpDetail "PowerShell.exe -File ""<InstallDir>\AD-PowerAdmin.ps1"""
+    Write-HelpDetail "               -Unattended -JobName 'Daily'"
+    Write-Host ""
+    Write-HelpLine "If the task already exists the installer prompts before replacing it."
+    Write-Host ""
+    Write-HelpCreate "Scheduled task  'AD-PowerAdmin_Daily'  in Windows Task Scheduler"
+
+    # =========================================================================
+    Write-HelpStep "7" "Install the DSInternals PowerShell Module"
+    Write-HelpLine "Checks whether DSInternals is installed and installs it from PSGallery"
+    Write-HelpLine "if it is not already present."
+    Write-Host ""
+    Write-HelpLine "Why DSInternals is needed:"
+    Write-HelpDetail "The password audit module uses DSInternals to read AD password hashes"
+    Write-HelpDetail "and compare them against the HaveIBeenPwned breach database and a local"
+    Write-HelpDetail "weak-password dictionary. Password auditing will not work without it."
+    Write-Host ""
+    Write-HelpDetail "Install command: Install-Module -Name DSInternals -Scope AllUsers -Force"
+    Write-HelpDetail "Requires outbound access to PowerShell Gallery (www.powershellgallery.com)."
+    Write-Host ""
+    Write-HelpCreate "DSInternals module  in the system-wide PowerShell module path"
+
+    # =========================================================================
+    Write-HelpHeader "Post-Installation Checks"
+    Write-HelpLine "After all steps complete, Test-ADPowerAdminInstall runs automatically"
+    Write-HelpLine "and verifies the following:"
+    Write-Host ""
+    Write-HelpDetail "[CHECK]  sMSA account exists in AD"
+    Write-HelpDetail "[CHECK]  sMSA is a member of Domain Admins"
+    Write-HelpDetail "[CHECK]  Default Domain Controllers Policy contains sMSA SeServiceLogonRight"
+    Write-HelpDetail "[CHECK]  Scheduled task 'AD-PowerAdmin_Daily' exists and is enabled"
+    Write-HelpDetail "[CHECK]  System File System audit policy is enabled (Success + Failure)"
+    Write-HelpDetail "[CHECK]  Install directory has the correct SACL audit entries"
+    Write-Host ""
+    Write-HelpLine "If the test passes the script exits. Relaunch from the install directory:"
+    Write-HelpDetail "powershell.exe -File ""`$global:InstallDirectory\AD-PowerAdmin.ps1"""
+    Write-Host ""
+    Write-HelpNote "GPO changes take effect on the next refresh cycle. Invoke-GPUpdate -Force"
+    Write-HelpNote "is run on this DC but other DCs need one replication + refresh cycle."
+    Write-HelpNote "The scheduled task will not run on the day of installation (first run"
+    Write-HelpNote "is tomorrow at 09:00 AM)."
+
+    # #########################################################################
+    Write-HelpHeader "Part 2: Updates"
+    Write-Host ""
+    Write-HelpLine "AD-PowerAdmin has two separate update functions covering different parts"
+    Write-HelpLine "of the codebase. Both respect the update channel setting."
+
+    # =========================================================================
+    Write-HelpSection "Update Channel"
+    Write-HelpLine "Both update functions check `$global:UpdateChannel before downloading."
+    Write-HelpLine "The channel is set in AD-PowerAdmin_settings.ps1 and can be changed"
+    Write-HelpLine "via the Configure Settings Wizard."
+    Write-Host ""
+    Write-HelpDetail "Release (default)"
+    Write-HelpDetail "  Queries the GitHub API to find the latest published release tag."
+    Write-HelpDetail "  Downloads files from that specific tagged commit."
+    Write-HelpDetail "  Example URL pattern:"
+    Write-HelpDetail "    https://raw.githubusercontent.com/Brets0150/AD-PowerAdmin/"
+    Write-HelpDetail "    v1.2.0/AD-PowerAdmin.ps1"
+    Write-HelpDetail "  Use this for production. You get tested, versioned code."
+    Write-Host ""
+    Write-HelpDetail "Development"
+    Write-HelpDetail "  Downloads files directly from the 'main' branch on GitHub."
+    Write-HelpDetail "  You get whatever is currently committed to main -- including"
+    Write-HelpDetail "  work-in-progress changes that have not been tested or released."
+    Write-HelpDetail "  Example URL pattern:"
+    Write-HelpDetail "    https://raw.githubusercontent.com/Brets0150/AD-PowerAdmin/"
+    Write-HelpDetail "    main/AD-PowerAdmin.ps1"
+    Write-HelpDetail "  Use this only if you are testing pre-release features and understand"
+    Write-HelpDetail "  that the code may be incomplete or broken."
+    Write-Host ""
+    Write-HelpNote "The update functions do NOT use zip archives or cloning. They fetch"
+    Write-HelpNote "raw file content directly over HTTPS from raw.githubusercontent.com"
+    Write-HelpNote "one file at a time using Invoke-WebRequest."
+
+    # =========================================================================
+    Write-HelpSection "Update Modules"
+    Write-HelpLine "Downloads each .psm1 and .psd1 file in the Modules\ directory from"
+    Write-HelpLine "GitHub and replaces the local copy if the content differs."
+    Write-Host ""
+    Write-HelpLine "What it does, in order:"
+    Write-HelpDetail "1. Determines the download ref (release tag or 'main') from the channel."
+    Write-HelpDetail "2. Scans the local Modules\ folder for every .psm1 and .psd1 file."
+    Write-HelpDetail "3. For each file, fetches the raw content from GitHub."
+    Write-HelpDetail "4. Compares the remote content to the local file (CRLF-normalized)."
+    Write-HelpDetail "5. If the files differ:"
+    Write-HelpDetail "   a. Creates a timestamped backup directory:"
+    Write-HelpDetail "      Reports\ModuleBackups\yyyyMMdd_HHmmss\"
+    Write-HelpDetail "   b. Copies the current local file to the backup as <filename>.txt"
+    Write-HelpDetail "      The .txt extension prevents PowerShell from executing the backup."
+    Write-HelpDetail "      The backup file is marked read-only."
+    Write-HelpDetail "   c. Overwrites the local file with the downloaded content."
+    Write-HelpDetail "6. Reports [UP TO DATE], [UPDATED], or [FAILED] per file."
+    Write-Host ""
+    Write-HelpLine "What it does NOT do:"
+    Write-HelpDetail "It does not add new module files that do not already exist locally."
+    Write-HelpDetail "It does not delete modules you have removed from GitHub."
+    Write-HelpDetail "It does not restart AD-PowerAdmin (you must do that manually)."
+    Write-Host ""
+    Write-HelpModify "Local .psm1 and .psd1 files in Modules\"
+    Write-HelpCreate "Backup copies under Reports\ModuleBackups\  (.txt, read-only)"
+    Write-HelpNote "Restart AD-PowerAdmin after updating modules for changes to take effect."
+
+    # =========================================================================
+    Write-HelpSection "Update Main Script"
+    Write-HelpLine "Downloads the latest AD-PowerAdmin.ps1 from GitHub and replaces the"
+    Write-HelpLine "local copy if the content has changed."
+    Write-Host ""
+    Write-HelpLine "What it does, in order:"
+    Write-HelpDetail "1. Determines the download ref (release tag or 'main') from the channel."
+    Write-HelpDetail "2. Fetches the raw AD-PowerAdmin.ps1 content from GitHub."
+    Write-HelpDetail "3. Compares the remote content to the running script (CRLF-normalized)."
+    Write-HelpDetail "4. If the files are identical, reports [UP TO DATE] and stops."
+    Write-HelpDetail "5. If they differ:"
+    Write-HelpDetail "   a. Extracts the version number from the remote file."
+    Write-HelpDetail "   b. Shows: current version  -->  available version."
+    Write-HelpDetail "   c. Prompts: 'Apply update? (y/N)'"
+    Write-HelpDetail "   d. If confirmed:"
+    Write-HelpDetail "      - Creates a timestamped backup directory:"
+    Write-HelpDetail "        Reports\MainScriptBackups\yyyyMMdd_HHmmss\"
+    Write-HelpDetail "      - Copies the current script to the backup as AD-PowerAdmin.ps1.txt"
+    Write-HelpDetail "        The .txt extension prevents execution; the file is read-only."
+    Write-HelpDetail "      - Writes the downloaded content to the running script path."
+    Write-HelpDetail "      - Reports [UPDATED] and reminds you to restart."
+    Write-Host ""
+    Write-HelpLine "Why it is safe to overwrite the running script:"
+    Write-HelpDetail "PowerShell reads the entire script into memory before executing it."
+    Write-HelpDetail "Overwriting the file on disk does not affect the current session."
+    Write-HelpDetail "The new version takes effect the next time you launch AD-PowerAdmin."
+    Write-Host ""
+    Write-HelpModify "AD-PowerAdmin.ps1  (replaced with downloaded content)"
+    Write-HelpCreate "Backup copy under Reports\MainScriptBackups\  (.txt, read-only)"
+    Write-HelpNote "Restart AD-PowerAdmin after updating the main script."
+
+    # #########################################################################
+    Write-HelpHeader "Part 3: Settings"
+
+    # =========================================================================
+    Write-HelpSection "Migrate Settings File"
+    Write-HelpLine "Downloads the latest AD-PowerAdmin_settings.ps1 from GitHub, extracts"
+    Write-HelpLine "all of your configured values from the current file, and transplants"
+    Write-HelpLine "them into the new file's structure. The result is the new file layout"
+    Write-HelpLine "with your settings preserved."
+    Write-Host ""
+    Write-HelpLine "What it does, in order:"
+    Write-HelpDetail "1. Downloads the new settings file from GitHub (respects update channel)."
+    Write-HelpDetail "2. Reads every typed `$global:* variable from your current settings file."
+    Write-HelpDetail "3. Identifies which of your variables also exist in the new file."
+    Write-HelpDetail "4. Shows a migration plan:"
+    Write-HelpDetail "   - Variables to migrate  (your values will be carried over)"
+    Write-HelpDetail "   - New variables          (new defaults from the downloaded file)"
+    Write-HelpDetail "   - Removed variables      (dropped -- they no longer exist)"
+    Write-HelpDetail "5. Prompts for confirmation before making any change."
+    Write-HelpDetail "6. Creates a read-only backup: AD-PowerAdmin_settings.ps1.txt"
+    Write-HelpDetail "7. Applies each of your values to the new file using targeted regex"
+    Write-HelpDetail "   replacements, then writes the merged result to disk."
+    Write-Host ""
+    Write-HelpLine "What is preserved:"
+    Write-HelpDetail "Every setting you have configured that still exists in the new version."
+    Write-Host ""
+    Write-HelpLine "What is NOT preserved:"
+    Write-HelpDetail "Variables removed from the new version are dropped."
+    Write-HelpDetail "Variables where your value is a computed reference (e.g. a value that"
+    Write-HelpDetail "references another variable) are skipped -- the new file's formula is"
+    Write-HelpDetail "kept so the reference chain stays intact."
+    Write-Host ""
+    Write-HelpModify "AD-PowerAdmin_settings.ps1  (replaced with merged content)"
+    Write-HelpCreate "Backup copy: AD-PowerAdmin_settings.ps1.txt  (read-only)"
+    Write-HelpNote "Restart AD-PowerAdmin after migration for the new settings to load."
+    Write-HelpNote "Run Configure Settings Wizard after migration to review and fill in"
+    Write-HelpNote "any new variables that arrived with their default values."
+
+    Write-Host ""
+    Write-Host $Bar -ForegroundColor Cyan
+    Write-Host ""
+# End of the Show-InstallHelp function.
+}
+
 function Install-ADPowerAdmin {
     <#
     .SYNOPSIS
@@ -99,6 +499,10 @@ function Install-ADPowerAdmin {
         This allows the install script to be run multiple times without causing any issues.
 
     The install will:
+    - Confirm the installation directory. Displays the current InstallDirectory setting and
+        asks the administrator to confirm or change it before any changes are made. If the path
+        is changed, the new value is written back to AD-PowerAdmin_settings.ps1 immediately.
+
     - Create the AD-PowerAdmin home directory as defined in the AD-PowerAdmin_settings.ps1 file.
         Set the owner of the AD-PowerAdmin home directory to the Domain Administrators group
         and remove all other permissions. Set the system audit policy and the AD-PowerAdmin
@@ -106,11 +510,11 @@ function Install-ADPowerAdmin {
         settings means that any interaction with the AD-PowerAdmin home directory will be
         logged in the security event log.
 
-    - Check if the AD-PowerAdmin script is already running from the defined install
-        directory(set in the AD-PowerAdmin_settings.ps1 file). If AD-PowerAdmin is
-        running in a folder other then the defined install
-        directory(set in the AD-PowerAdmin_settings.ps1 file), then copy the AD-PowerAdmin
-        script to the install directory.
+    - Copy the production files to the install directory (defined in AD-PowerAdmin_settings.ps1)
+        if AD-PowerAdmin is not already running from that directory. Only the required
+        production items are copied: AD-PowerAdmin.ps1, AD-PowerAdmin_settings.ps1,
+        Modules\, and README.md. Development-related content is intentionally excluded
+        to keep the installation directory clean and scoped to what the scheduled task needs.
 
     - Install the DSInternals PowerShell module.
 
@@ -136,11 +540,13 @@ function Install-ADPowerAdmin {
 
     #>
 
+    # Confirm the installation directory before making any changes.
+    if (-not (Confirm-InstallDirectory)) { return }
+
     # Create the AD-PowerAdmin home directory.
     New-ADPowerAdminHomeFolder
 
-    # Check if the AD-PowerAdmin script is already installed.
-    # If AD-PowerAdmin is running in a folder other then the defined install directory(set in the AD-PowerAdmin_settings.ps1 file), then copy the AD-PowerAdmin script to the install directory.
+    # Copy production files to the install directory if not already running from there.
     Copy-AdPowerAdmin
 
     # Create a ADPowerAdmMSA account with domain admin rights.
@@ -320,8 +726,36 @@ function New-ADPowerAdminSmsaAccount {
         # Add the sMSA account to the "Domain Admins" group.
         Add-ADGroupMember -Identity "Domain Admins" -Members $MsaIdentity.SamAccountName
     } else {
-        # If the sMSA account already exists, then display a warning and continue.
         Write-Host "The sMSA account '$global:MsaAccountName' already exists." -ForegroundColor Yellow
+        # The account exists in AD but may not be installed on this computer (re-install or
+        # new server). Task Scheduler requires a locally installed sMSA to register a task.
+        [bool]$IsInstalledLocally = $false
+        try {
+            $IsInstalledLocally = Test-ADServiceAccount -Identity $global:MsaAccountName -ErrorAction Stop
+        } catch {
+            $IsInstalledLocally = $false
+        }
+
+        if (-not $IsInstalledLocally) {
+            Write-Host "The sMSA account is not installed on this computer. Installing..." -ForegroundColor Yellow
+            $MsaIdentity      = Get-ADServiceAccount -Filter "Name -eq '$global:MsaAccountName'" -Properties * -ErrorAction SilentlyContinue
+            $AdServerIdentity = Get-ADComputer -Identity "$env:COMPUTERNAME"
+            try {
+                Add-ADComputerServiceAccount -Identity $AdServerIdentity -ServiceAccount $MsaIdentity.sAMAccountName -ErrorAction Stop
+            } catch {
+                # May already be assigned to this computer in AD; proceed to Install.
+            }
+            Install-ADServiceAccount -Identity $MsaIdentity.sAMAccountName
+            [bool]$VerifyInstall = Test-ADServiceAccount -Identity $global:MsaAccountName
+            if ($VerifyInstall) {
+                Write-Host "The sMSA account is now installed on this computer." -ForegroundColor Green
+            } else {
+                Write-Host "Error: Could not install the sMSA account on this computer." -ForegroundColor Red
+                Write-Host "       Scheduled task creation will likely fail." -ForegroundColor Red
+            }
+        } else {
+            Write-Host "The sMSA account is already installed on this computer." -ForegroundColor Green
+        }
     }
 # End of the New-ADPowerAdminSmsaAccount function.
 }
@@ -374,8 +808,8 @@ function New-ADPowerAdminScheduledTask {
         # Create a new schedule task to run the AD-PowerAdmin script daily.
         New-ScheduledTask -ActionString 'PowerShell.exe' -ActionArguments "$ThisScriptsFullName -Unattended -JobName 'Daily'" -ScheduleRunTime $ScheduleRunTime -Recurring "Daliy" -TaskName $TaskName -TaskDiscription $TaskDiscription
     } catch {
-        # If the schedule task was not created successfully, then display an error message to the user.
         Write-Host "Error: The AD-PowerAdmin schedule task failed to be created." -ForegroundColor Red
+        Write-Host "       $($_.Exception.Message)" -ForegroundColor Red
         return
     }
 # End of the New-ADPowerAdminScheduledTask function.
@@ -405,14 +839,28 @@ function New-ADPowerAdminHomeFolder {
         New-Item -Path "$global:InstallDirectory" -ItemType Directory -Force | Out-Null
     }
 
-    # Set the owner of the AD-PowerAdmin home directory to the Domain Administrators group.
-    $InstallDirACL = Get-Acl -Path "$global:InstallDirectory"
-    # Set the owner of the AD-PowerAdmin home directory to the Domain Admins group.
+    # Set the owner of the AD-PowerAdmin home directory to the Domain Admins group and apply
+    # explicit ACEs with full inheritance so the same permissions apply to every file and
+    # subdirectory created inside the install directory.
+    $InstallDirACL     = Get-Acl -Path "$global:InstallDirectory"
     $DomainAdminsGroup = New-Object System.Security.Principal.NTAccount("Domain Admins")
+    $LocalAdminsGroup  = New-Object System.Security.Principal.NTAccount("BUILTIN", "Administrators")
+    $SystemAccount     = New-Object System.Security.Principal.NTAccount("NT AUTHORITY", "SYSTEM")
+    # ContainerInherit propagates to child directories; ObjectInherit propagates to child files.
+    # Without these flags the ACE would apply only to the directory container itself and files
+    # copied into the directory would receive no inherited rights, causing Access Denied for
+    # any admin who did not personally run the original Copy-Item.
+    $InheritFlags = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+                    [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $PropFlags    = [System.Security.AccessControl.PropagationFlags]::None
     $InstallDirACL.SetOwner($DomainAdminsGroup)
     $InstallDirACL.SetAccessRuleProtection($true, $false)
-    $InstallDirRule = New-Object System.Security.AccessControl.FileSystemAccessRule($DomainAdminsGroup, "FullControl", "Allow")
-    $InstallDirACL.AddAccessRule($InstallDirRule)
+    $InstallDirACL.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $DomainAdminsGroup, "FullControl", $InheritFlags, $PropFlags, "Allow")))
+    $InstallDirACL.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $LocalAdminsGroup,  "FullControl", $InheritFlags, $PropFlags, "Allow")))
+    $InstallDirACL.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $SystemAccount,     "FullControl", $InheritFlags, $PropFlags, "Allow")))
     Set-Acl -Path "$global:InstallDirectory" -AclObject $InstallDirACL
 
     # # Enable folder-level auditing
@@ -495,89 +943,163 @@ function Enable-AuditLogging {
 # End of the Enable-AuditLogging function.
 }
 
+function Confirm-InstallDirectory {
+    <#
+    .SYNOPSIS
+    Prompts the administrator to confirm or change the install directory before installation begins.
+
+    .DESCRIPTION
+    Displays the current InstallDirectory value from AD-PowerAdmin_settings.ps1 and asks
+    whether to proceed with it or enter a new path. If a new path is entered it is written
+    back to the settings file and $global:InstallDirectory is updated in memory so the rest
+    of the install sequence uses the new value.
+
+    Returns $true if a directory was confirmed. Returns $false if the user aborted.
+
+    .NOTES
+    Called by Install-ADPowerAdmin. Not exported.
+    #>
+
+    Write-Host ""
+    Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
+    Write-Host "  Installation Directory Confirmation" -ForegroundColor Cyan
+    Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Current install directory (from AD-PowerAdmin_settings.ps1):" -ForegroundColor White
+    Write-Host "    $global:InstallDirectory" -ForegroundColor Yellow
+    Write-Host ""
+
+    [string]$Change = Read-Host "  Is this the correct install directory? (Y/n)"
+    if ($Change -ne 'n' -and $Change -ne 'N') {
+        Write-Host "  Proceeding with install directory: $global:InstallDirectory" -ForegroundColor Green
+        Write-Host ""
+        return $true
+    }
+
+    # User wants to change the directory.
+    [string]$NewPath = ''
+    while ($true) {
+        $NewPath = (Read-Host "  Enter new install directory (absolute path)").Trim()
+        if ([string]::IsNullOrEmpty($NewPath)) {
+            Write-Host "  Path cannot be empty. Press Ctrl+C to cancel the install." -ForegroundColor Yellow
+            continue
+        }
+        if (-not [System.IO.Path]::IsPathRooted($NewPath)) {
+            Write-Host "  '$NewPath' is not an absolute path. Enter a full path (e.g. C:\Scripts\AD-PowerAdmin)." -ForegroundColor Yellow
+            continue
+        }
+        break
+    }
+
+    [string]$ConfirmNew = Read-Host "  Use '$NewPath' as the install directory? (y/N)"
+    if ($ConfirmNew -ne 'y' -and $ConfirmNew -ne 'Y') {
+        Write-Host "  Install cancelled." -ForegroundColor Gray
+        return $false
+    }
+
+    # Persist the change to the settings file so it survives a restart.
+    [string]$SettingsFile = Join-Path $global:ThisScriptDir 'AD-PowerAdmin_settings.ps1'
+    if (Test-Path $SettingsFile) {
+        try {
+            [string]$Content = Get-Content $SettingsFile -Raw
+            [string]$Updated = Set-SettingsFileValue -Content $Content -VarName 'InstallDirectory' -NewValue $NewPath -VarType 'string-double'
+            Write-FileUtf8Crlf -Path $SettingsFile -Content $Updated
+            Write-Host "  Settings file updated." -ForegroundColor Green
+        } catch {
+            Write-Host "  WARNING: Could not write new path to settings file: $_" -ForegroundColor Yellow
+            Write-Host "  The install will proceed with the new path for this session only." -ForegroundColor Yellow
+        }
+    }
+
+    $global:InstallDirectory = $NewPath
+    Write-Host "  Install directory set to: $global:InstallDirectory" -ForegroundColor Green
+    Write-Host ""
+    return $true
+# End of the Confirm-InstallDirectory function.
+}
+
 function Copy-AdPowerAdmin {
     <#
     .SYNOPSIS
-    A function to copy the AD-PowerAdmin script to the install directory.
+    Copies the production AD-PowerAdmin files to the install directory.
 
     .DESCRIPTION
-    Check if the AD-PowerAdmin script is running from the AD-PowerAdmin home directory, defined in the AD-PowerAdmin_settings.ps1 file.
-    If the AD-PowerAdmin script is not running from the AD-PowerAdmin home directory, then check if the file contents of the current running directory match the AD-PowerAdmin home directory.
-    If it does not match, then copy the AD-PowerAdmin current directory contents to the AD-PowerAdmin home directory.
-    Confirm that the files in the current running directory match the AD-PowerAdmin home directory. If you are already running from the AD-PowerAdmin home directory, then the currect directory contents will match the AD-PowerAdmin home directory.
+    Copies only the required production files from the current running directory to the
+    configured install directory ($global:InstallDirectory):
+      - AD-PowerAdmin.ps1     (main script)
+      - AD-PowerAdmin_settings.ps1
+      - Modules\              (recursive)
+      - README.md
+
+    Development-related content in the source location (.git, Reports, temp, test scripts,
+    password lists, etc.) is intentionally excluded. This keeps the install directory clean
+    and scoped to what the scheduled task actually needs to run.
+
+    If the script is already running from the install directory, no action is taken.
 
     .EXAMPLE
     Copy-AdPowerAdmin
 
     .NOTES
-    I was going to have this function return a $true or $false value to indicate if the AD-PowerAdmin home directory was copied successfully.
-    But, I decided I did not want to have another if statment in the Install-ADPowerAdmin function to check the return value.
-
+    Called by Install-ADPowerAdmin. Not exported.
     #>
 
-    # Set deafult output to $false.
-    [bool]$InstallStatus = $false
+    if ($global:InstallDirectory -eq $global:ThisScriptDir) {
+        Write-Host "AD-PowerAdmin is already running from the install directory. No files to copy." -ForegroundColor Green
+        return
+    }
 
-    # ---------- Move the AD-PowerAdmin home directory ----------
-    # Check if this script is running from the AD-PowerAdmin home directory.
-    if ($global:InstallDirectory -ne $global:ThisScriptDir) {
+    Write-Host "Copying production files to: $global:InstallDirectory" -ForegroundColor Yellow
+    Write-Host ""
 
-        try{
-            # Check if the two directory contents match each other before we try to copy the data.
-            $DirCompare = Compare-Object -ReferenceObject (Get-ChildItem -Path "$global:ThisScriptDir" -Exclude ".git","Reports") -DifferenceObject (Get-ChildItem -Path "$global:InstallDirectory" -Exclude ".git","Reports" -Exclude "Reports") -Property Name -PassThru
+    # The four items that make up a production installation.
+    [array]$ProductionItems = @(
+        @{ Name = $global:ThisScriptsName;      IsDirectory = $false },
+        @{ Name = 'AD-PowerAdmin_settings.ps1'; IsDirectory = $false },
+        @{ Name = 'Modules';                    IsDirectory = $true  },
+        @{ Name = 'README.md';                  IsDirectory = $false }
+    )
 
-            # If the two directory contents already match, then exit the function.
-            if ( $null -eq $DirCompare ) {
-                # The two directory contents match each other.
-                Write-Host 'AD-PowerAdmin is not running from the directory set in the AD-PowerAdmin_setttings.ps1($global:InstallDirectory) config file, but the current running scripts files match the install directorys files.' -ForegroundColor Yellow
-                return
-            }
+    [bool]$CopyOk = $true
+
+    foreach ($Item in $ProductionItems) {
+        [string]$SourcePath = Join-Path $global:ThisScriptDir $Item.Name
+
+        if (-not (Test-Path $SourcePath)) {
+            Write-Host "  [SKIP]  $($Item.Name)  (not found in source directory)" -ForegroundColor Yellow
+            continue
         }
-        catch {
-            Write-Host 'The installation directory set in the AD-PowerAdmin_setttings.ps1($global:InstallDirectory) does not exist or is empty.' -ForegroundColor Yellow
-        }
-
-        # Get a list of the files in the AD-PowerAdmin current directory. We will use this list to compare the files in the AD-PowerAdmin home directory.
-        $CurrentDirFiles = Get-ChildItem -Path "$global:ThisScriptDir" -Exclude ".git","Reports"
-
-        # If this script is running from the AD-PowerAdmin home directory, then move the AD-PowerAdmin home directory.
-        Write-Host "Moving the AD-PowerAdmin files to the configured new home directory." -ForegroundColor Yellow
 
         try {
-            # Had this as a copy command, but changed it to a move command. Reason is if someone add a large password list to the AD-PowerAdmin home directory, then it would take a long time to copy the files.
-            Move-Item -Path "$global:ThisScriptDir/*" -Destination "$global:InstallDirectory" -Exclude "Reports" -Force -ErrorAction SilentlyContinue
+            if ($Item.IsDirectory) {
+                Copy-Item -Path $SourcePath -Destination $global:InstallDirectory -Recurse -Force -ErrorAction Stop
+            } else {
+                Copy-Item -Path $SourcePath -Destination $global:InstallDirectory -Force -ErrorAction Stop
+            }
+            Write-Host "  [OK]    $($Item.Name)" -ForegroundColor Green
+        } catch {
+            Write-Host "  [FAIL]  $($Item.Name) -- $_" -ForegroundColor Red
+            $CopyOk = $false
         }
-        catch {
-            # Some error happened when we tried to move the files to the new home directory. The debug file will trigger this. Silenting the error.
+    }
+
+    Write-Host ""
+
+    # Verify the critical items are present in the install directory.
+    [array]$CriticalItems = @($global:ThisScriptsName, 'AD-PowerAdmin_settings.ps1', 'Modules')
+    [bool]$VerifyOk = $true
+    foreach ($Name in $CriticalItems) {
+        if (-not (Test-Path (Join-Path $global:InstallDirectory $Name))) {
+            Write-Host "  [MISSING]  $Name not found in install directory after copy." -ForegroundColor Red
+            $VerifyOk = $false
         }
     }
 
-    # After we copied files to the new home directory, check if the two directory contents match each other.
-    try {
-        # Check if the two directory contents match each other.
-        $DirCompare = Compare-Object -ReferenceObject $CurrentDirFiles -DifferenceObject (Get-ChildItem -Path "$global:InstallDirectory" -Exclude ".git","Reports") -Property Name -PassThru
-
-        # Check the $InstallStatus variable for any differences.
-        if ( $null -ne $DirCompare ) {
-            Write-Host "Error: The AD-PowerAdmin home directory was not moved successfully." -ForegroundColor Red
-            Write-Host "The following files were not copied to the new home directory:" -ForegroundColor Red
-            $DirCompare | Select-Object -ExpandProperty Name
-            return
-        }
-
-        if ( $null -eq $DirCompare ) {
-            Write-Host "The AD-PowerAdmin home directory move was successful." -ForegroundColor Green
-        }
+    if ($CopyOk -and $VerifyOk) {
+        Write-Host "Production files copied successfully to the install directory." -ForegroundColor Green
+    } else {
+        Write-Host "One or more files were not copied. Check the errors above before proceeding." -ForegroundColor Red
     }
-    catch {
-        # If you are here, then the "-DifferenceObject" is empty or does not exist.
-        throw "Error: The AD-PowerAdmin home directory was not moved successfully."
-    }
-
-    # If the function has not returned yet, then the AD-PowerAdmin home directory was copied successfully.
-    $InstallStatus = $true
-    # Return the install status.
-    # $InstallStatus
 # End of the Copy-AdPowerAdmin function.
 }
 
@@ -1090,6 +1612,41 @@ function Set-BackupFileProtection {
 # End of the Set-BackupFileProtection function.
 }
 
+function Write-FileUtf8Crlf {
+    <#
+    .SYNOPSIS
+    Writes a string to a file as UTF-8 (no BOM) with Windows CRLF line endings.
+
+    .DESCRIPTION
+    Clears the read-only attribute on the target file if set, normalizes all line
+    endings to CRLF, then writes the content as UTF-8 without BOM.  Use this
+    instead of [System.IO.File]::WriteAllText() for every settings/script write
+    so that files open correctly in Windows Notepad and are not blocked by the
+    read-only attribute that Set-BackupFileProtection applies to backup copies.
+
+    .PARAMETER Path
+    Full path to the file to write.
+
+    .PARAMETER Content
+    The string content to write.
+
+    .NOTES
+    Private helper. Not exported.
+    #>
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$Content
+    )
+    try {
+        if ((Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue).IsReadOnly) {
+            Set-ItemProperty -LiteralPath $Path -Name IsReadOnly -Value $false -ErrorAction Stop
+        }
+    } catch { }
+    [string]$CrlfContent = $Content -replace '\r?\n', "`r`n"
+    [System.IO.File]::WriteAllText($Path, $CrlfContent, [System.Text.Encoding]::UTF8)
+# End of the Write-FileUtf8Crlf function.
+}
+
 function Update-ADPowerAdminModules {
     <#
     .SYNOPSIS
@@ -1334,8 +1891,8 @@ function Update-ADPowerAdminMainScript {
         Set-BackupFileProtection -Path $BackupFile
         Write-Host "  Backup saved to: $BackupFile" -ForegroundColor Cyan
 
-        # Write the updated content. Use UTF-8 (no BOM) to match project encoding.
-        [System.IO.File]::WriteAllText($LocalPath, $RemoteContent, [System.Text.Encoding]::UTF8)
+        # Write the updated content. Normalize to CRLF for Windows Notepad compatibility.
+        Write-FileUtf8Crlf -Path $LocalPath -Content $RemoteContent
 
         Write-Host ""
         Write-Host "  [UPDATED]  AD-PowerAdmin.ps1  ($LocalVersion --> $RemoteVersion)" -ForegroundColor Yellow
@@ -1382,115 +1939,130 @@ function Get-GlobalVarNames {
     return $Names
 }
 
-function Get-SettingsMigrationContent {
+function Get-SettingsFileValues {
     <#
     .SYNOPSIS
-    Build the text block to append to a settings file when migrating new variables.
+    Extracts all typed $global:* variable values from a settings file content string.
 
     .DESCRIPTION
-    Scans the lines of a reference settings file and, for each variable name in NewVarNames,
-    extracts its preceding comment block and full declaration (including array bodies and +=
-    chains). Returns a formatted string ready to append to the current settings file.
+    Scans the content line by line. For each initial typed declaration (not a += continuation),
+    extracts the variable name, current value, and the VarType understood by Set-SettingsFileValue.
+    Multi-line array declarations are collected in full. Variables whose right-hand side is a bare
+    $global: reference are silently skipped -- their formula should come from the new file.
 
-    .PARAMETER Lines
-    The reference (downloaded) settings file split into an array of lines.
+    Returns a List of PSCustomObjects with properties: Name, Value, VarType.
 
-    .PARAMETER NewVarNames
-    HashSet of variable names that are missing from the current file and must be migrated.
+    .PARAMETER Content
+    Full raw text of the settings file.
+
+    .NOTES
+    Private helper for Update-ADPowerAdminSettingsFile. Not exported.
     #>
-    [OutputType([string])]
+    [OutputType([System.Collections.Generic.List[PSCustomObject]])]
     param(
-        # [AllowEmptyString()] is required: splitting a file on newlines produces a trailing
-        # empty string when the file ends with a newline. PS5.1 mandatory validation rejects
-        # the array the moment it sees that empty element, even though the function handles
-        # empty lines correctly internally.
-        [Parameter(Mandatory=$true)][AllowEmptyString()][string[]]$Lines,
-        [Parameter(Mandatory=$true)][System.Collections.Generic.HashSet[string]]$NewVarNames
+        [Parameter(Mandatory=$true)][string]$Content
     )
 
-    $AllBlocks = [System.Collections.Generic.List[string[]]]::new()
+    $Result = [System.Collections.Generic.List[PSCustomObject]]::new()
+    [string[]]$Lines = @($Content -split '\r?\n')
     [int]$i = 0
 
     while ($i -lt $Lines.Count) {
-        $Line  = $Lines[$i]
+        [string]$Line = $Lines[$i]
 
-        # Match only initial assignment lines (= not +=); += lines are intentionally skipped.
-        $Match = [regex]::Match($Line, '^\[(?:bool|string|int|Int|array)\]\$global:(\w+)\s*=')
+        # Match initial typed declarations only (not += continuation lines).
+        $TypeMatch = [regex]::Match($Line, '^\[(bool|string|int|Int|array)\]\$global:(\w+)\s*=')
+        if (-not $TypeMatch.Success) {
+            $i++
+            continue
+        }
 
-        if ($Match.Success -and $NewVarNames.Contains($Match.Groups[1].Value)) {
-            [string]$VarName = $Match.Groups[1].Value
-            $Block = [System.Collections.Generic.List[string]]::new()
+        [string]$TypeStr = $TypeMatch.Groups[1].Value
+        [string]$VarName = $TypeMatch.Groups[2].Value
 
-            # Collect the comment block above this declaration (scan backward).
-            $CommentBuf = [System.Collections.Generic.List[string]]::new()
-            for ([int]$j = $i - 1; $j -ge 0; $j--) {
-                [string]$Prev = $Lines[$j]
-                if ([string]::IsNullOrWhiteSpace($Prev)) { break }
-                if ($Prev -match '^\[') { break }   # another typed declaration
-                $CommentBuf.Insert(0, $Prev)
+        if ($TypeStr -eq 'bool') {
+            $ValMatch = [regex]::Match($Line, '\$global:' + $VarName + '\s*=\s*\$(true|false)')
+            if ($ValMatch.Success) {
+                $Result.Add([PSCustomObject]@{
+                    Name    = $VarName
+                    Value   = $ValMatch.Groups[1].Value   # "true" or "false" (no leading $)
+                    VarType = 'bool'
+                })
             }
-            foreach ($CL in $CommentBuf) { $Block.Add($CL) }
 
-            # Add the declaration line.
-            $Block.Add($Line)
+        } elseif ($TypeStr -match '^[Ii]nt$') {
+            $ValMatch = [regex]::Match($Line, '\$global:' + $VarName + '\s*=\s*(\d+)')
+            if ($ValMatch.Success) {
+                $Result.Add([PSCustomObject]@{
+                    Name    = $VarName
+                    Value   = $ValMatch.Groups[1].Value
+                    VarType = 'int'
+                })
+            }
 
-            # If this is an array, collect forward until the closing ) on its own line.
-            if ($Line -match '=\s*@\(') {
-                $i++
-                while ($i -lt $Lines.Count) {
-                    $Block.Add($Lines[$i])
-                    if ($Lines[$i] -match '^\s*\)\s*$') { break }
-                    $i++
+        } elseif ($TypeStr -eq 'array') {
+            # Collect the inner body between @( and the closing ) on its own line.
+            $InnerLines = [System.Collections.Generic.List[string]]::new()
+            $j = $i + 1
+            while ($j -lt $Lines.Count) {
+                if ($Lines[$j] -match '^\s*\)\s*$') { break }
+                $InnerLines.Add($Lines[$j])
+                $j++
+            }
+            $i = $j   # advance past closing ) so the final $i++ moves beyond it
+            $Result.Add([PSCustomObject]@{
+                Name    = $VarName
+                Value   = ($InnerLines -join "`n")
+                VarType = 'array-ou-locations'
+            })
+
+        } elseif ($TypeStr -eq 'string') {
+            # Try single-quoted literal.
+            $ValMatch = [regex]::Match($Line, '^\[string\]\$global:' + $VarName + "\s*=\s*'([^']*)'")
+            if ($ValMatch.Success) {
+                $Result.Add([PSCustomObject]@{
+                    Name    = $VarName
+                    Value   = $ValMatch.Groups[1].Value
+                    VarType = 'string-single'
+                })
+            } else {
+                # Try double-quoted literal.
+                $ValMatch = [regex]::Match($Line, '^\[string\]\$global:' + $VarName + '\s*=\s*"([^"]*)"')
+                if ($ValMatch.Success) {
+                    $Result.Add([PSCustomObject]@{
+                        Name    = $VarName
+                        Value   = $ValMatch.Groups[1].Value
+                        VarType = 'string-double'
+                    })
                 }
+                # Bare $global: references are intentionally skipped -- the new file's
+                # formula for those variables is preserved as-is.
             }
-
-            # Collect += continuation lines (e.g. PwAuditAlertEmailMessage).
-            while (($i + 1) -lt $Lines.Count -and
-                   $Lines[$i + 1] -match "\`$global:$([regex]::Escape($VarName))\s*\+=") {
-                $i++
-                $Block.Add($Lines[$i])
-            }
-
-            $AllBlocks.Add($Block.ToArray())
         }
 
         $i++
     }
 
-    if ($AllBlocks.Count -eq 0) { return '' }
-
-    # Build the migration section string.
-    [string]$Sep  = '#' * $global:OptionsMaxTextLength
-    [string]$Date = (Get-Date -Format 'yyyy-MM-dd')
-    $Out = [System.Text.StringBuilder]::new()
-    $null = $Out.AppendLine('')
-    $null = $Out.AppendLine($Sep)
-    $null = $Out.AppendLine("# --- Migrated settings: added by Update-ADPowerAdminSettingsFile on $Date ---")
-    $null = $Out.AppendLine('# These variables were in the latest default file but missing from this one.')
-    $null = $Out.AppendLine('# They have been appended with their default values. Review and adjust as needed.')
-    $null = $Out.AppendLine($Sep)
-
-    foreach ($Block in $AllBlocks) {
-        $null = $Out.AppendLine('')
-        foreach ($BL in $Block) {
-            $null = $Out.AppendLine($BL)
-        }
-    }
-
-    return $Out.ToString()
+    return $Result
+# End of the Get-SettingsFileValues function.
 }
 
 function Update-ADPowerAdminSettingsFile {
     <#
     .SYNOPSIS
-    Download the latest default settings file from GitHub and append any missing variables.
+    Migrates the current settings file to the latest version structure from GitHub.
 
     .DESCRIPTION
-    Compares $global:* variable names in the current AD-PowerAdmin_settings.ps1 against the
-    canonical version on GitHub (Release or Development channel). Variables present in the
-    remote file but absent locally are appended with their default values and original
-    comments. All existing configured values are preserved. A read-only backup (.txt) is
-    created before any write occurs.
+    Downloads the latest AD-PowerAdmin_settings.ps1 from GitHub, then reads every typed
+    $global:* value from the current local file and applies those values to the new file.
+    The result adopts the new file's structure, layout, and variable ordering while
+    preserving all user-configured settings.
+
+    Variables present in the old file but absent from the new version are dropped.
+    Variables new in the downloaded version that were not in the old file keep their
+    new-file default values.
+
+    A read-only backup (.txt) of the current file is created before any write occurs.
 
     .EXAMPLE
     Update-ADPowerAdminSettingsFile
@@ -1506,75 +2078,70 @@ function Update-ADPowerAdminSettingsFile {
         return
     }
 
-    # Determine update channel and git ref.
-    [string]$Channel = if ($global:UpdateChannel) { $global:UpdateChannel } else { 'Release' }
-    [string]$GitRef  = ''
+    [string]$Channel  = if ($global:UpdateChannel) { $global:UpdateChannel } else { 'Release' }
+    [string]$GitRef   = ''
+    [string]$TempFile = Join-Path $env:TEMP 'AD-PowerAdmin_settings.ps1.update'
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     [string]$OriginalProgressPreference = $ProgressPreference
     $ProgressPreference = 'SilentlyContinue'
 
-    if ($Channel -eq 'Development') {
-        $GitRef = 'main'
-        Write-Host "Update channel: Development (main branch)" -ForegroundColor Cyan
-    } else {
-        Write-Host "Update channel: Release -- querying GitHub for latest tag..." -ForegroundColor Cyan
-        $GitRef = Get-ADPowerAdminLatestReleaseTag
-        if (-not $GitRef) {
-            Write-Host "ERROR: Could not determine the latest release tag. Aborting." -ForegroundColor Red
-            return
-        }
-        Write-Host "Latest release tag: $GitRef" -ForegroundColor Cyan
-    }
-
-    [string]$Url      = "https://raw.githubusercontent.com/Brets0150/AD-PowerAdmin/$GitRef/AD-PowerAdmin_settings.ps1"
-    [string]$TempFile = Join-Path $env:TEMP 'AD-PowerAdmin_settings.ps1.update'
-
-    Write-Host "Downloading settings file from $GitRef ..." -ForegroundColor Cyan
-
     try {
-        Invoke-WebRequest -Uri $Url -UseBasicParsing -OutFile $TempFile -ErrorAction Stop
-    } catch {
-        Write-Host "ERROR: Failed to download settings file: $_" -ForegroundColor Red
-        if (Test-Path $TempFile) { Remove-Item $TempFile -Force -ErrorAction SilentlyContinue }
-        return
-    }
-
-    try {
-        [string]$CurrentContent = Get-Content $SettingsFile -Raw
-        [string]$NewContent     = Get-Content $TempFile -Raw
-        [string[]]$NewLines     = $NewContent -split '\r?\n'
-
-        # Find variable names in each file.
-        $CurrentVars = Get-GlobalVarNames -Content $CurrentContent
-        $NewVars     = Get-GlobalVarNames -Content $NewContent
-
-        # Determine which variables are missing from the current file.
-        $MissingVars = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-        foreach ($Name in $NewVars) {
-            if (-not $CurrentVars.Contains($Name)) {
-                $null = $MissingVars.Add($Name)
+        if ($Channel -eq 'Development') {
+            $GitRef = 'main'
+            Write-Host "Update channel: Development (main branch)" -ForegroundColor Cyan
+        } else {
+            Write-Host "Update channel: Release -- querying GitHub for latest tag..." -ForegroundColor Cyan
+            $GitRef = Get-ADPowerAdminLatestReleaseTag
+            if (-not $GitRef) {
+                Write-Host "ERROR: Could not determine the latest release tag. Aborting." -ForegroundColor Red
+                return
             }
+            Write-Host "Latest release tag: $GitRef" -ForegroundColor Cyan
         }
 
-        if ($MissingVars.Count -eq 0) {
-            Write-Host ""
-            Write-Host "Settings file is up to date. No new variables found." -ForegroundColor Green
+        [string]$Url = "https://raw.githubusercontent.com/Brets0150/AD-PowerAdmin/$GitRef/AD-PowerAdmin_settings.ps1"
+        Write-Host "Downloading new settings file from $GitRef ..." -ForegroundColor Cyan
+
+        try {
+            Invoke-WebRequest -Uri $Url -UseBasicParsing -OutFile $TempFile -ErrorAction Stop
+        } catch {
+            Write-Host "ERROR: Failed to download settings file: $_" -ForegroundColor Red
             return
         }
 
-        # Display summary of new variables.
-        Write-Host ""
-        Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
-        Write-Host "  $($MissingVars.Count) new setting(s) found in $Channel channel ($GitRef):" -ForegroundColor Cyan
-        Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
-        Write-Host ""
-        foreach ($Name in ($MissingVars | Sort-Object)) {
-            Write-Host "  + $Name" -ForegroundColor White
+        [string]$OldContent = Get-Content $SettingsFile -Raw
+        [string]$NewContent = Get-Content $TempFile -Raw
+
+        # Extract every configured value from the current file; get variable names from the new file.
+        $OldValues   = Get-SettingsFileValues -Content $OldContent
+        $NewVarNames = Get-GlobalVarNames -Content $NewContent
+
+        # Build a lookup set of old variable names.
+        $OldNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($Entry in $OldValues) { $null = $OldNames.Add($Entry.Name) }
+
+        # Partition: what migrates vs. what is new (keeps defaults) vs. what is removed.
+        $ToMigrate       = [System.Collections.Generic.List[PSCustomObject]]::new()
+        [int]$RemovedCnt = 0
+        foreach ($Entry in $OldValues) {
+            if ($NewVarNames.Contains($Entry.Name)) { $ToMigrate.Add($Entry) }
+            else { $RemovedCnt++ }
         }
+        [int]$NewDefaultCnt = @($NewVarNames | Where-Object { -not $OldNames.Contains($_) }).Count
+
+        # Display migration plan.
         Write-Host ""
-        Write-Host "  These will be appended with their default values." -ForegroundColor DarkGray
-        Write-Host "  Run the Settings Wizard afterward to configure any required values." -ForegroundColor DarkGray
+        Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
+        Write-Host "  Settings migration plan: $GitRef" -ForegroundColor Cyan
+        Write-Host ('=' * $global:OptionsMaxTextLength) -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  Configured values to migrate : $($ToMigrate.Count)  (your settings preserved)" -ForegroundColor White
+        Write-Host "  New variables (keep defaults): $NewDefaultCnt  (added in this version)" -ForegroundColor White
+        Write-Host "  Removed variables (dropped)  : $RemovedCnt  (no longer in new version)" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  The current file will be replaced by the new version's structure." -ForegroundColor DarkGray
+        Write-Host "  All user-configured values will be transplanted into the new layout." -ForegroundColor DarkGray
         Write-Host ""
 
         [string]$Confirm = Read-Host "Apply migration? (y/N)"
@@ -1599,25 +2166,37 @@ function Update-ADPowerAdminSettingsFile {
             $BackupPath = ''
         }
 
-        # Build and append the migration block.
-        [string]$MigrationContent = Get-SettingsMigrationContent -Lines $NewLines -NewVarNames $MissingVars
-        [string]$UpdatedContent   = $CurrentContent.TrimEnd() + "`r`n" + $MigrationContent
-        [System.IO.File]::WriteAllText($SettingsFile, $UpdatedContent, [System.Text.Encoding]::UTF8)
+        # Start from the new file as the base and transplant each configured old value.
+        [string]$MergedContent = $NewContent
+        [int]$AppliedCnt  = 0
+        [int]$SkippedCnt  = 0
+        foreach ($Entry in $ToMigrate) {
+            [string]$Before = $MergedContent
+            $MergedContent  = Set-SettingsFileValue -Content $MergedContent `
+                                  -VarName $Entry.Name -NewValue $Entry.Value -VarType $Entry.VarType
+            if ($MergedContent -ne $Before) { $AppliedCnt++ } else { $SkippedCnt++ }
+        }
+
+        Write-FileUtf8Crlf -Path $SettingsFile -Content $MergedContent
 
         Write-Host ""
-        Write-Host "Migration complete. $($MissingVars.Count) setting(s) added." -ForegroundColor Green
-        Write-Host "  File  : $SettingsFile" -ForegroundColor Green
+        Write-Host "Migration complete." -ForegroundColor Green
+        Write-Host "  Transplanted: $AppliedCnt variable(s)" -ForegroundColor Green
+        if ($SkippedCnt -gt 0) {
+            Write-Host "  Unchanged   : $SkippedCnt variable(s) (value matched new default or pattern unmatched)" -ForegroundColor DarkGray
+        }
         if ($BackupPath) {
-            Write-Host "  Backup: $BackupPath" -ForegroundColor Green
+            Write-Host "  Backup      : $BackupPath" -ForegroundColor Green
         }
         Write-Host ""
-        Write-Host "NOTE: Restart AD-PowerAdmin for the new settings to take effect." -ForegroundColor Yellow
-        Write-Host "      Use the Settings Wizard to review and configure the new values." -ForegroundColor Yellow
+        Write-Host "NOTE: Restart AD-PowerAdmin for changes to take effect." -ForegroundColor Yellow
+        Write-Host "      Run the Settings Wizard to review and configure any new variables." -ForegroundColor Yellow
 
     } finally {
-        if (Test-Path $TempFile) { Remove-Item $TempFile -Force -ErrorAction SilentlyContinue }
+        if ($TempFile -and (Test-Path $TempFile)) { Remove-Item $TempFile -Force -ErrorAction SilentlyContinue }
         $ProgressPreference = $OriginalProgressPreference
     }
+# End of the Update-ADPowerAdminSettingsFile function.
 }
 
 ##############################################################################################
@@ -2232,8 +2811,14 @@ function Start-SettingsWizard {
     }
     Write-Host ""
 
-    [string]$Confirm = Read-Host "Write these changes to AD-PowerAdmin_settings.ps1? (y/N)"
-    if ($Confirm -ne 'y' -and $Confirm -ne 'Y') {
+    [string]$Confirm = ''
+    while ($Confirm -ne 'y' -and $Confirm -ne 'Y' -and $Confirm -ne 'n' -and $Confirm -ne 'N') {
+        $Confirm = Read-Host "Write these changes to AD-PowerAdmin_settings.ps1? (y/n)"
+        if ($Confirm -ne 'y' -and $Confirm -ne 'Y' -and $Confirm -ne 'n' -and $Confirm -ne 'N') {
+            Write-Host "  Please enter 'y' or 'n'." -ForegroundColor Yellow
+        }
+    }
+    if ($Confirm -eq 'n' -or $Confirm -eq 'N') {
         Write-Host "Changes discarded. No files modified." -ForegroundColor Gray
         return
     }
@@ -2258,8 +2843,16 @@ function Start-SettingsWizard {
         $Content = Set-SettingsFileValue -Content $Content -VarName $Key -NewValue $Changes[$Key].Value -VarType $Changes[$Key].VarType
     }
 
-    # Write the updated content back to the settings file using UTF-8 without BOM.
-    [System.IO.File]::WriteAllText($SettingsFile, $Content, [System.Text.Encoding]::UTF8)
+    # Write the updated content back to the settings file. Normalize to CRLF for Windows
+    # Notepad compatibility and clear read-only if set.
+    try {
+        Write-FileUtf8Crlf -Path $SettingsFile -Content $Content
+    } catch {
+        Write-Host ""
+        Write-Host "ERROR: Could not write settings file -- $_" -ForegroundColor Red
+        Write-Host "       Check that the file is not locked and you have write access." -ForegroundColor Red
+        return
+    }
 
     Write-Host ""
     Write-Host "Settings written to: $SettingsFile" -ForegroundColor Green
