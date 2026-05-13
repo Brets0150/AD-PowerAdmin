@@ -4,6 +4,25 @@
 
 ---
 
+### [AD-PowerAdmin_Installer Module]
+
+**Added:**
+- `Get-ADPowerAdminRemoteModuleList` (private) -- queries the GitHub Contents API
+  (`https://api.github.com/repos/Brets0150/AD-PowerAdmin/contents/Modules?ref=<GitRef>`)
+  and returns the list of .psm1/.psd1 file names present in the remote Modules directory.
+  Returns $null on failure. Private helper for `Update-ADPowerAdminModules`.
+
+**Fixed:**
+- `Update-ADPowerAdminModules` -- the function previously iterated only over locally
+  present files, so any new module added to the GitHub repository after the user's last
+  install was never discovered or downloaded. Fixed by calling `Get-ADPowerAdminRemoteModuleList`
+  to obtain the full remote file list, comparing it against local files, and downloading any
+  GitHub-only files directly to the Modules directory with a [NEW] status line. If the
+  GitHub Contents API is unavailable, the function falls back to local-only update behavior
+  with a warning. The restart-required notice now triggers for new modules as well as updated ones.
+
+---
+
 ### [Modules/standalone_scripts/New-ReleasePackage.ps1]
 
 **Added:**

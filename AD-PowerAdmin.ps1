@@ -198,7 +198,9 @@ Function Get-ADPAVersion {
     Get-Content -Path $Modules.FullName | Select-String -Pattern "ModuleVersion" | ForEach-Object {
         $Version += ($_.ToString()).Split('=')[1].Trim().Trim("'")
     }
-    $CumulativeModuleVersion = [System.Version]$Version
+    $VersionStr = [string]$Version
+    if ($VersionStr -notlike '*.*') { $VersionStr += '.0' }
+    $CumulativeModuleVersion = [System.Version]$VersionStr
     [System.Version]$OverallVersion = "$($global:Version.Major).$($global:Version.Minor + $CumulativeModuleVersion.Major).$($global:Version.Build + $CumulativeModuleVersion.Minor)"
 
     # Initialize the OverallChannel variable with a default value

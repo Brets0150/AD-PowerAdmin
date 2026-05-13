@@ -1586,6 +1586,43 @@ function Get-ADPowerAdminLatestReleaseTag {
 # End of the Get-ADPowerAdminLatestReleaseTag function.
 }
 
+function Get-ADPowerAdminRemoteModuleList {
+    <#
+    .SYNOPSIS
+    Queries the GitHub Contents API and returns the list of .psm1/.psd1 file names
+    in the remote Modules directory for the given Git ref.
+
+    .DESCRIPTION
+    Calls https://api.github.com/repos/Brets0150/AD-PowerAdmin/contents/Modules?ref=<GitRef>
+    and returns an array of file name strings where the entry type is 'file' and the
+    extension is .psm1 or .psd1. Returns $null on failure so the caller can fall back
+    gracefully to local-only update behavior.
+
+    .PARAMETER GitRef
+    The Git ref to query: a release tag (e.g. 'v0.6.2') or branch name (e.g. 'main').
+
+    .NOTES
+    Private helper for Update-ADPowerAdminModules. Not exported.
+    #>
+    param(
+        [Parameter(Mandatory=$true)][string]$GitRef
+    )
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    [string]$ApiUrl = "https://api.github.com/repos/Brets0150/AD-PowerAdmin/contents/Modules?ref=$GitRef"
+    try {
+        $Entries = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing -ErrorAction Stop
+        [array]$FileNames = $Entries |
+            Where-Object { $_.type -eq 'file' -and ($_.name -like '*.psm1' -or $_.name -like '*.psd1') } |
+            Select-Object -ExpandProperty name
+        return $FileNames
+    } catch {
+        Write-Host "WARNING: Could not query GitHub Contents API for remote module list. New-module detection unavailable. $_" -ForegroundColor Yellow
+        return $null
+    }
+# End of the Get-ADPowerAdminRemoteModuleList function.
+}
+
 function Set-BackupFileProtection {
     <#
     .SYNOPSIS
@@ -1654,24 +1691,27 @@ function Update-ADPowerAdminModules {
 
     .DESCRIPTION
     Fetches every .psm1 and .psd1 file found in the local Modules directory from
-    the GitHub repository. The source is determined by $global:UpdateChannel:
+    the GitHub repository, and also downloads any new modules present on GitHub
+    that do not yet exist locally. The source is determined by $global:UpdateChannel:
       'Development' -- pulls from the main branch (latest uncommitted work).
       'Release'     -- pulls from the most recent GitHub Release tag (default).
 
     Files that differ from the remote copy are backed up to a timestamped folder
     under $global:ReportsPath\ModuleBackups\ before being overwritten. Files that
     match the remote copy are left untouched. Files with no remote counterpart
-    (local-only modules) are skipped with a warning.
+    (local-only modules) are skipped with a warning. New modules present only on
+    GitHub are downloaded directly to the Modules directory without a backup.
 
-    A restart of PowerShell is required after updating for the new module code
-    to take effect in the current session.
+    A restart of PowerShell is required after updating or adding modules for the
+    new module code to take effect in the current session.
 
     .EXAMPLE
     Update-ADPowerAdminModules
 
     .NOTES
-    Requires internet access to raw.githubusercontent.com and, for the Release
-    channel, to api.github.com.
+    Requires internet access to raw.githubusercontent.com and api.github.com.
+    If the GitHub Contents API is unavailable, new-module detection is skipped and
+    existing modules are still checked for updates.
     #>
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -1700,6 +1740,10 @@ function Update-ADPowerAdminModules {
 
     [string]$BaseUrl = "https://raw.githubusercontent.com/Brets0150/AD-PowerAdmin/$GitRef/Modules/"
 
+    # Query GitHub Contents API for the full remote module list.
+    # If unavailable, $RemoteFileNames is $null and new-module detection is skipped.
+    $RemoteFileNames = Get-ADPowerAdminRemoteModuleList -GitRef $GitRef
+
     # Collect local module files (.psm1 and .psd1).
     [array]$LocalFiles = Get-ChildItem -Path $global:ModulesPath -Filter '*.ps?1' -File |
         Where-Object { $_.Extension -in '.psm1', '.psd1' }
@@ -1716,12 +1760,13 @@ function Update-ADPowerAdminModules {
     [bool]$BackupCreated = $false
 
     # Tracking counters.
-    [System.Collections.Generic.List[string]]$Updated   = [System.Collections.Generic.List[string]]::new()
-    [System.Collections.Generic.List[string]]$Current   = [System.Collections.Generic.List[string]]::new()
-    [System.Collections.Generic.List[string]]$Skipped   = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]]$Updated    = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]]$Current    = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]]$Skipped    = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]]$NewModules = [System.Collections.Generic.List[string]]::new()
 
     Write-Host ""
-    Write-Host "Checking $($LocalFiles.Count) module file(s) against $GitRef ..." -ForegroundColor Cyan
+    Write-Host "Checking $($LocalFiles.Count) local module file(s) against $GitRef ..." -ForegroundColor Cyan
     Write-Host ""
 
     foreach ($LocalFile in $LocalFiles) {
@@ -1769,17 +1814,52 @@ function Update-ADPowerAdminModules {
         }
     }
 
+    # Detect and download modules present on GitHub but not yet installed locally.
+    if ($null -ne $RemoteFileNames) {
+        [string[]]$LocalFileNames  = $LocalFiles | Select-Object -ExpandProperty Name
+        [array]$NewRemoteFiles     = $RemoteFileNames | Where-Object { $_ -notin $LocalFileNames }
+
+        if ($NewRemoteFiles.Count -gt 0) {
+            Write-Host ""
+            Write-Host "Downloading $($NewRemoteFiles.Count) new module file(s) not present locally ..." -ForegroundColor Cyan
+            Write-Host ""
+
+            foreach ($NewFileName in $NewRemoteFiles) {
+                [string]$RemoteUrl = "$BaseUrl$NewFileName"
+                [string]$LocalDest = Join-Path $global:ModulesPath $NewFileName
+                [string]$TempFile  = Join-Path $env:TEMP "$NewFileName.update"
+
+                try {
+                    Invoke-WebRequest -Uri $RemoteUrl -OutFile $TempFile -UseBasicParsing -ErrorAction Stop
+                    Copy-Item -Path $TempFile -Destination $LocalDest -Force
+                    Write-Host "  [NEW]         $NewFileName" -ForegroundColor Green
+                    $NewModules.Add($NewFileName)
+                } catch {
+                    Write-Host "  [ERROR]       $NewFileName  -- $_" -ForegroundColor Red
+                    $Skipped.Add($NewFileName)
+                } finally {
+                    if (Test-Path $TempFile) { Remove-Item $TempFile -Force -ErrorAction SilentlyContinue }
+                }
+            }
+        }
+    }
+
     # Summary report.
     Write-Host ""
     Write-Host "--- Update Summary ---" -ForegroundColor Cyan
-    Write-Host "  Updated   : $($Updated.Count)" -ForegroundColor Yellow
-    Write-Host "  Up to date: $($Current.Count)" -ForegroundColor Green
-    Write-Host "  Skipped   : $($Skipped.Count)" -ForegroundColor Gray
+    Write-Host "  Updated   : $($Updated.Count)"    -ForegroundColor Yellow
+    Write-Host "  Up to date: $($Current.Count)"    -ForegroundColor Green
+    Write-Host "  New       : $($NewModules.Count)" -ForegroundColor Green
+    Write-Host "  Skipped   : $($Skipped.Count)"    -ForegroundColor Gray
     if ($BackupCreated) {
         Write-Host "  Backups saved to: $BackupDir" -ForegroundColor Cyan
     }
+    if ($null -eq $RemoteFileNames) {
+        Write-Host ""
+        Write-Host "NOTE: New-module detection was skipped (GitHub Contents API unavailable)." -ForegroundColor Yellow
+    }
 
-    if ($Updated.Count -gt 0) {
+    if ($Updated.Count -gt 0 -or $NewModules.Count -gt 0) {
         Write-Host ""
         Write-Host "NOTE: Restart PowerShell for updated modules to take effect in this session." -ForegroundColor Yellow
     }
