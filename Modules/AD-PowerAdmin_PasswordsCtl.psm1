@@ -387,6 +387,14 @@ Function Get-PasswordAudit {
         }
     }
 
+    # Release the large account data set before returning. Get-ADReplAccount can load
+    # gigabytes of NT hash and attribute data into memory. Without an explicit free, this
+    # data stays resident while the caller attempts an SMTP TLS handshake, which causes
+    # the handshake to fail under memory pressure ("Server does not support secure connections").
+    $AllAdAccountData = $null
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+
     # If the $ADPasswordTestData is not empty, then return the $ADPasswordTestData.
     return $ADPasswordTestData
 # End of Get-PasswordAudit function

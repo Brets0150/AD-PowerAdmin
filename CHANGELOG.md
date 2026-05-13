@@ -4,6 +4,19 @@
 
 ---
 
+### [AD-PowerAdmin_PasswordsCtl Module]
+
+**Fixed:**
+- `Get-PasswordAudit` -- after DSInternals `Get-ADReplAccount` replicates all AD accounts,
+  the large account data set was held in memory until PowerShell's garbage collector ran
+  automatically. If the caller followed up with an SMTP email (as `Get-PasswordAuditAdminReport
+  -EmailReport` does), the TLS handshake could fail under memory pressure with "Server does not
+  support secure connections." Fixed by explicitly nulling `$AllAdAccountData` and calling
+  `[System.GC]::Collect()` and `[System.GC]::WaitForPendingFinalizers()` before returning,
+  ensuring memory is freed before the SMTP connection is attempted.
+
+---
+
 ### [AD-PowerAdmin_Installer Module]
 
 **Added:**
