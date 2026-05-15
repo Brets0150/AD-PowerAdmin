@@ -970,53 +970,49 @@ function Confirm-InstallDirectory {
     Write-Host ""
 
     [string]$Change = Read-Host "  Is this the correct install directory? (Y/n)"
-    if ($Change -ne 'n' -and $Change -ne 'N') {
+    if ($Change -eq 'n' -or $Change -eq 'N') {
+        # User wants to change the directory.
+        [string]$NewPath = ''
+        while ($true) {
+            $NewPath = (Read-Host "  Enter new install directory (absolute path)").Trim()
+            if ([string]::IsNullOrEmpty($NewPath)) {
+                Write-Host "  Path cannot be empty. Press Ctrl+C to cancel the install." -ForegroundColor Yellow
+                continue
+            }
+            if (-not [System.IO.Path]::IsPathRooted($NewPath)) {
+                Write-Host "  '$NewPath' is not an absolute path. Enter a full path (e.g. C:\Scripts\AD-PowerAdmin)." -ForegroundColor Yellow
+                continue
+            }
+            break
+        }
+
+        [string]$ConfirmNew = Read-Host "  Use '$NewPath' as the install directory? (y/N)"
+        if ($ConfirmNew -ne 'y' -and $ConfirmNew -ne 'Y') {
+            Write-Host "  Install cancelled." -ForegroundColor Gray
+            return $false
+        }
+
+        # Persist the change to the settings file so it survives a restart.
+        [string]$SettingsFile = Join-Path $global:ThisScriptDir 'AD-PowerAdmin_settings.ps1'
+        if (Test-Path $SettingsFile) {
+            try {
+                [string]$Content = Get-Content $SettingsFile -Raw
+                [string]$Updated = Set-SettingsFileValue -Content $Content -VarName 'InstallDirectory' -NewValue $NewPath -VarType 'string-double'
+                Write-FileUtf8Crlf -Path $SettingsFile -Content $Updated
+                Write-Host "  Settings file updated." -ForegroundColor Green
+            } catch {
+                Write-Host "  WARNING: Could not write new path to settings file: $_" -ForegroundColor Yellow
+                Write-Host "  The install will proceed with the new path for this session only." -ForegroundColor Yellow
+            }
+        }
+
+        $global:InstallDirectory = $NewPath
+        Write-Host "  Install directory set to: $global:InstallDirectory" -ForegroundColor Green
+    } else {
         Write-Host "  Proceeding with install directory: $global:InstallDirectory" -ForegroundColor Green
-        if ($global:InstallDirectory -eq $global:ThisScriptDir) {
-            Write-Host "  [NOTE] The install directory matches the current running directory." -ForegroundColor Cyan
-            Write-Host "         No file copy will be performed." -ForegroundColor Cyan
-        }
-        Write-Host ""
-        return $true
     }
 
-    # User wants to change the directory.
-    [string]$NewPath = ''
-    while ($true) {
-        $NewPath = (Read-Host "  Enter new install directory (absolute path)").Trim()
-        if ([string]::IsNullOrEmpty($NewPath)) {
-            Write-Host "  Path cannot be empty. Press Ctrl+C to cancel the install." -ForegroundColor Yellow
-            continue
-        }
-        if (-not [System.IO.Path]::IsPathRooted($NewPath)) {
-            Write-Host "  '$NewPath' is not an absolute path. Enter a full path (e.g. C:\Scripts\AD-PowerAdmin)." -ForegroundColor Yellow
-            continue
-        }
-        break
-    }
-
-    [string]$ConfirmNew = Read-Host "  Use '$NewPath' as the install directory? (y/N)"
-    if ($ConfirmNew -ne 'y' -and $ConfirmNew -ne 'Y') {
-        Write-Host "  Install cancelled." -ForegroundColor Gray
-        return $false
-    }
-
-    # Persist the change to the settings file so it survives a restart.
-    [string]$SettingsFile = Join-Path $global:ThisScriptDir 'AD-PowerAdmin_settings.ps1'
-    if (Test-Path $SettingsFile) {
-        try {
-            [string]$Content = Get-Content $SettingsFile -Raw
-            [string]$Updated = Set-SettingsFileValue -Content $Content -VarName 'InstallDirectory' -NewValue $NewPath -VarType 'string-double'
-            Write-FileUtf8Crlf -Path $SettingsFile -Content $Updated
-            Write-Host "  Settings file updated." -ForegroundColor Green
-        } catch {
-            Write-Host "  WARNING: Could not write new path to settings file: $_" -ForegroundColor Yellow
-            Write-Host "  The install will proceed with the new path for this session only." -ForegroundColor Yellow
-        }
-    }
-
-    $global:InstallDirectory = $NewPath
-    Write-Host "  Install directory set to: $global:InstallDirectory" -ForegroundColor Green
+    # Always check after the directory is finalised, regardless of whether it changed.
     if ($global:InstallDirectory -eq $global:ThisScriptDir) {
         Write-Host "  [NOTE] The install directory matches the current running directory." -ForegroundColor Cyan
         Write-Host "         No file copy will be performed." -ForegroundColor Cyan
