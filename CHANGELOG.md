@@ -77,9 +77,12 @@
   explicit ACE removes that dependency.
 
 **Changed:**
-- `Install-ADPowerAdmin` -- added a post-install step (after DSInternals installation) that calls
-  `Set-ReportsFolderAcl` to ensure the Reports folder is created and the sMSA has explicit write
-  access before the validation step runs.
+- `Install-ADPowerAdmin` -- `New-ADPowerAdminHomeFolder` (install directory ACL setup) was
+  previously bundled inside the `if ($CopyRequired)` conditional, so ACLs were never checked or
+  repaired when the install directory matched the running directory. Moved to a dedicated Step 1
+  that always runs. `Set-ReportsFolderAcl` promoted from a post-install note to numbered Step 6.
+  Step labels updated from `/5` to `/6`. Permission setup (install directory and Reports folder)
+  now runs unconditionally on every installer invocation.
 - `Test-ADPowerAdminInstall` -- added two new checks: (8) Reports folder exists at
   `$global:ReportsPath`; (9) sMSA account has an explicit `WriteData` ACE on the Reports folder.
   These checks surface the permission gap that caused `AD-PowerAdmin_Unattended.log` to be silently

@@ -558,47 +558,48 @@ function Install-ADPowerAdmin {
         Write-Host "Install directory matches the current running directory. File copy will be skipped." -ForegroundColor Cyan
     }
 
-    # Create the home directory and copy files only when the install directory differs from
-    # the current running directory. If they match the directory and files are already in place.
-    if ($CopyRequired) {
-        Write-Host ""
-        Write-Host "  [Step 1/5] Creating install directory and setting permissions..." -ForegroundColor Cyan
-        New-ADPowerAdminHomeFolder
+    # Step 1: Always verify and repair the install directory ACLs.
+    # New-ADPowerAdminHomeFolder is idempotent: it creates the directory only if it does not
+    # exist, then (re)applies the correct ACLs every time. This step runs unconditionally so
+    # that permissions are checked and repaired even when no file copy is needed.
+    Write-Host ""
+    Write-Host "  [Step 1/6] Verifying install directory and permissions..." -ForegroundColor Cyan
+    New-ADPowerAdminHomeFolder
 
-        Write-Host ""
-        Write-Host "  [Step 2/5] Copying production files to install directory..." -ForegroundColor Cyan
+    # Step 2: Copy files only when the running directory differs from the install directory.
+    Write-Host ""
+    if ($CopyRequired) {
+        Write-Host "  [Step 2/6] Copying production files to install directory..." -ForegroundColor Cyan
         Copy-AdPowerAdmin
     } else {
-        Write-Host ""
-        Write-Host "  [Step 1/5] Create install directory   -- SKIPPED (already running from install directory)" -ForegroundColor DarkGray
-        Write-Host "  [Step 2/5] Copy production files      -- SKIPPED (already running from install directory)" -ForegroundColor DarkGray
+        Write-Host "  [Step 2/6] Copy production files -- SKIPPED (already running from install directory)" -ForegroundColor DarkGray
     }
 
     Write-Host ""
-    Write-Host "  [Step 3/5] Creating sMSA service account..." -ForegroundColor Cyan
+    Write-Host "  [Step 3/6] Creating sMSA service account..." -ForegroundColor Cyan
     # Create a ADPowerAdmMSA account with domain admin rights.
     New-ADPowerAdminSmsaAccount
 
     Write-Host ""
-    Write-Host "  [Step 4/5] Configuring GPO (Log on as a service right for sMSA)..." -ForegroundColor Cyan
+    Write-Host "  [Step 4/6] Configuring GPO (Log on as a service right for sMSA)..." -ForegroundColor Cyan
     # Create a new GPO to give the sMSA account the "Log on as a service" right.
     Set-ADPowerAdminGPO -Install
 
     Write-Host ""
-    Write-Host "  [Step 5/5] Creating scheduled task..." -ForegroundColor Cyan
+    Write-Host "  [Step 5/6] Creating scheduled task..." -ForegroundColor Cyan
     # Create a new scheduled task to run the AD-PowerAdmin script daily.
     New-ADPowerAdminScheduledTask -ScriptFullPathForScheduleTask "$global:InstallDirectory\$global:ThisScriptsName"
+
+    Write-Host ""
+    Write-Host "  [Step 6/6] Setting Reports folder permissions for sMSA..." -ForegroundColor Cyan
+    # Create the Reports folder and grant the sMSA explicit Modify access.
+    # Must run after Step 3 (New-ADPowerAdminSmsaAccount) so the account already exists.
+    Set-ReportsFolderAcl
 
     Write-Host ""
     Write-Host "  [Post-install] Installing DSInternals module..." -ForegroundColor Cyan
     # Install the DSInternals PowerShell module.
     Install-DSInternals
-
-    Write-Host ""
-    Write-Host "  [Post-install] Setting Reports folder permissions for sMSA..." -ForegroundColor Cyan
-    # Create the Reports folder and grant the sMSA explicit Modify access.
-    # This must run after New-ADPowerAdminSmsaAccount so the account already exists.
-    Set-ReportsFolderAcl
 
     # Test the AD-PowerAdmin install.
     Write-Host ""
