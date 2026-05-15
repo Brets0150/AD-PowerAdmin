@@ -66,6 +66,22 @@
   operational need to diagnose why the daily scheduled task fails silently -- no logs, no emails,
   no errors visible -- without manually hunting through multiple event log sources.
 
+**Fixed:**
+- `Invoke-ScheduledTaskDiagnostic` -- four problems caused the function to flood the console
+  with errors and scroll endlessly through event log output: (1) `Get-WinEvent` queries had no
+  `EndTime` bound, so any event written after the task finished (from unrelated processes) was
+  included; (2) no `-MaxEvents` cap meant the PowerShell Operational log (which Script Block
+  Logging fills with hundreds of entries per AD-PowerAdmin run) could load thousands of records;
+  (3) the PS/Operational filter used `Where-Object { $_.Message -like "*AD-PowerAdmin*" }` which
+  matches every logged script block from the entire AD-PowerAdmin session -- not just errors --
+  defeating its purpose as a selector; (4) all matched events were written to the console with no
+  limit. Fixed by adding `EndTime = $DiagEnd.AddSeconds(30)` and `-MaxEvents 200` to every
+  `Get-WinEvent` call; changing the PS/Operational section to filter by `Level = @(1, 2, 3)`
+  (errors and warnings only) instead of message text; and capping console display to 15 events
+  per section with a "(N more -- see export file)" summary for overflow. The export file still
+  receives the full untruncated event list. Added progress dots to the wait loop so the operator
+  can see the tool is actively waiting for the task to finish.
+
 ---
 
 ### [AD-PowerAdmin_Utils Module]

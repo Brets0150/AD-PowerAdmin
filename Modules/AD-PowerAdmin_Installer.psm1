@@ -3314,17 +3314,21 @@ Function Invoke-ScheduledTaskDiagnostic {
     # ---- Wait for completion ----
     [int]$TimeoutSec = 180
     [int]$Elapsed    = 0
+    Write-Host "  [INFO] Waiting for task to complete " -ForegroundColor Cyan -NoNewline
     Start-Sleep -Seconds 2
     while ($true) {
         if ((Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue).State -ne 'Running') { break }
+        Write-Host "." -NoNewline -ForegroundColor DarkGray
         Start-Sleep -Seconds 3
         $Elapsed += 3
         if ($Elapsed -ge $TimeoutSec) {
+            Write-Host ""
             Write-Host "  [WARN] Task did not complete within $TimeoutSec seconds. Diagnostic results may be partial." -ForegroundColor Yellow
             break
         }
     }
     [datetime]$DiagEnd = Get-Date
+    Write-Host ""
     Write-Host "  [INFO] Task finished (elapsed ~$Elapsed s, wall time: $($DiagEnd.ToString('HH:mm:ss')))." -ForegroundColor DarkGray
 
     # ---- Post-run task result ----
@@ -3363,53 +3367,81 @@ Function Invoke-ScheduledTaskDiagnostic {
     }
 
     # ---- Event log collection ----
+    # Window is bounded on both sides: $DiagStart (just before Start-ScheduledTask) to
+    # $DiagEnd + 30 seconds (buffer for events written after the process exits).
+    # MaxEvents caps each query so a busy log cannot produce thousands of results.
+    # Console output is capped at 15 lines per section; full data goes in the export file.
     Write-Host ""
-    Write-Host "  [INFO] Collecting event log entries since $($DiagStart.ToString('HH:mm:ss')) ..." -ForegroundColor Cyan
+    Write-Host "  [INFO] Collecting event log entries ($($DiagStart.ToString('HH:mm:ss')) -- $($DiagEnd.ToString('HH:mm:ss'))) ..." -ForegroundColor Cyan
 
     # Task Scheduler Operational
     Write-Host ""
     Write-Host "  --- Task Scheduler / Operational ---" -ForegroundColor Yellow
-    $TaskEvents = Get-WinEvent -FilterHashTable @{
-        LogName   = 'Microsoft-Windows-TaskScheduler/Operational'
-        StartTime = $DiagStart
-    } -ErrorAction SilentlyContinue | Where-Object { $_.Message -like "*AD-PowerAdmin*" }
-    if ($TaskEvents) {
-        $TaskEvents | Sort-Object TimeCreated | ForEach-Object {
+    [array]$TaskEvents = @()
+    try {
+        $TaskEvents = @(Get-WinEvent -FilterHashTable @{
+            LogName   = 'Microsoft-Windows-TaskScheduler/Operational'
+            StartTime = $DiagStart
+            EndTime   = $DiagEnd.AddSeconds(30)
+        } -MaxEvents 200 -ErrorAction SilentlyContinue | Where-Object { $_.Message -like "*AD-PowerAdmin*" })
+    } catch { }
+    if ($TaskEvents.Count -gt 0) {
+        $TaskEvents | Sort-Object TimeCreated | Select-Object -First 15 | ForEach-Object {
             [string]$Msg = if ($_.Message.Length -gt 200) { $_.Message.Substring(0, 200) + '...' } else { $_.Message }
             Write-Host "    $($_.TimeCreated.ToString('HH:mm:ss'))  ID=$($_.Id)  $($_.LevelDisplayName): $Msg"
         }
+        if ($TaskEvents.Count -gt 15) {
+            Write-Host "    ... ($($TaskEvents.Count - 15) more events captured -- see export file)" -ForegroundColor DarkGray
+        }
     } else {
-        Write-Host "    (no Task Scheduler events containing 'AD-PowerAdmin' in this window)" -ForegroundColor DarkGray
+        Write-Host "    (no Task Scheduler events for 'AD-PowerAdmin' in this window)" -ForegroundColor DarkGray
     }
 
-    # PowerShell Script Block Logging
+    # PowerShell Operational -- errors and warnings only (Level 1-3).
+    # Filtering by message text would match every Script Block Logging entry for the
+    # entire AD-PowerAdmin session, which can be hundreds of entries.
     Write-Host ""
-    Write-Host "  --- Microsoft-Windows-PowerShell / Operational ---" -ForegroundColor Yellow
-    $PsOpEvents = Get-WinEvent -FilterHashTable @{
-        LogName   = 'Microsoft-Windows-PowerShell/Operational'
-        StartTime = $DiagStart
-    } -ErrorAction SilentlyContinue | Where-Object { $_.Message -like "*AD-PowerAdmin*" }
-    if ($PsOpEvents) {
-        $PsOpEvents | Sort-Object TimeCreated | ForEach-Object {
+    Write-Host "  --- Microsoft-Windows-PowerShell / Operational (errors and warnings) ---" -ForegroundColor Yellow
+    [array]$PsOpEvents = @()
+    try {
+        $PsOpEvents = @(Get-WinEvent -FilterHashTable @{
+            LogName   = 'Microsoft-Windows-PowerShell/Operational'
+            StartTime = $DiagStart
+            EndTime   = $DiagEnd.AddSeconds(30)
+            Level     = @(1, 2, 3)
+        } -MaxEvents 200 -ErrorAction SilentlyContinue)
+    } catch { }
+    if ($PsOpEvents.Count -gt 0) {
+        $PsOpEvents | Sort-Object TimeCreated | Select-Object -First 15 | ForEach-Object {
             [string]$Msg = if ($_.Message.Length -gt 200) { $_.Message.Substring(0, 200) + '...' } else { $_.Message }
             Write-Host "    $($_.TimeCreated.ToString('HH:mm:ss'))  ID=$($_.Id)  $($_.LevelDisplayName): $Msg"
         }
+        if ($PsOpEvents.Count -gt 15) {
+            Write-Host "    ... ($($PsOpEvents.Count - 15) more events -- see export file)" -ForegroundColor DarkGray
+        }
     } else {
-        Write-Host "    (none found -- Script Block Logging may not be enabled via GPO)" -ForegroundColor DarkGray
+        Write-Host "    (no PowerShell errors/warnings in this window)" -ForegroundColor DarkGray
     }
 
     # Classic Windows PowerShell log -- errors and warnings only
     Write-Host ""
     Write-Host "  --- Windows PowerShell log (errors and warnings) ---" -ForegroundColor Yellow
-    $PsClassicEvents = Get-WinEvent -FilterHashTable @{
-        LogName   = 'Windows PowerShell'
-        StartTime = $DiagStart
-        Level     = @(1, 2, 3)
-    } -ErrorAction SilentlyContinue
-    if ($PsClassicEvents) {
-        $PsClassicEvents | Sort-Object TimeCreated | ForEach-Object {
+    [array]$PsClassicEvents = @()
+    try {
+        $PsClassicEvents = @(Get-WinEvent -FilterHashTable @{
+            LogName   = 'Windows PowerShell'
+            StartTime = $DiagStart
+            EndTime   = $DiagEnd.AddSeconds(30)
+            Level     = @(1, 2, 3)
+        } -MaxEvents 200 -ErrorAction SilentlyContinue)
+    } catch { }
+    if ($PsClassicEvents.Count -gt 0) {
+        $PsClassicEvents | Sort-Object TimeCreated | Select-Object -First 15 | ForEach-Object {
             [string]$Msg = if ($_.Message.Length -gt 200) { $_.Message.Substring(0, 200) + '...' } else { $_.Message }
             Write-Host "    $($_.TimeCreated.ToString('HH:mm:ss'))  ID=$($_.Id)  $($_.LevelDisplayName): $Msg"
+        }
+        if ($PsClassicEvents.Count -gt 15) {
+            Write-Host "    ... ($($PsClassicEvents.Count - 15) more events -- see export file)" -ForegroundColor DarkGray
         }
     } else {
         Write-Host "    (no errors or warnings in this window)" -ForegroundColor DarkGray
