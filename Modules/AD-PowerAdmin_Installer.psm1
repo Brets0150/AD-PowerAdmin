@@ -832,7 +832,7 @@ function New-ADPowerAdminScheduledTask {
     # Try to set up a new schedule task to run the AD-PowerAdmin script daily.
     try {
         # Create a new schedule task to run the AD-PowerAdmin script daily.
-        New-ScheduledTask -ActionString 'PowerShell.exe' -ActionArguments "$ThisScriptsFullName -Unattended -JobName 'Daily'" -ScheduleRunTime $ScheduleRunTime -Recurring "Daliy" -TaskName $TaskName -TaskDiscription $TaskDiscription
+        AD-PowerAdmin_Utils\New-ScheduledTask -ActionString 'PowerShell.exe' -ActionArguments "$ThisScriptsFullName -Unattended -JobName 'Daily'" -ScheduleRunTime $ScheduleRunTime -Recurring "Daliy" -TaskName $TaskName -TaskDiscription $TaskDiscription
     } catch {
         Write-Host "Error: The AD-PowerAdmin schedule task failed to be created." -ForegroundColor Red
         Write-Host "       $($_.Exception.Message)" -ForegroundColor Red
