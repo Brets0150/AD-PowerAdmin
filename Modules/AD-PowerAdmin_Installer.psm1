@@ -543,11 +543,21 @@ function Install-ADPowerAdmin {
     # Confirm the installation directory before making any changes.
     if (-not (Confirm-InstallDirectory)) { return }
 
+    # Determine whether a file copy is needed. If the confirmed install directory is the
+    # same as the directory the script is currently running from, the files are already in
+    # place and no copy should be attempted.
+    [bool]$CopyRequired = ($global:InstallDirectory -ne $global:ThisScriptDir)
+    if (-not $CopyRequired) {
+        Write-Host "Install directory matches the current running directory. File copy will be skipped." -ForegroundColor Cyan
+    }
+
     # Create the AD-PowerAdmin home directory.
     New-ADPowerAdminHomeFolder
 
-    # Copy production files to the install directory if not already running from there.
-    Copy-AdPowerAdmin
+    # Copy production files to the install directory only when the source and destination differ.
+    if ($CopyRequired) {
+        Copy-AdPowerAdmin
+    }
 
     # Create a ADPowerAdmMSA account with domain admin rights.
     New-ADPowerAdminSmsaAccount
@@ -1012,11 +1022,6 @@ function Confirm-InstallDirectory {
         Write-Host "  Proceeding with install directory: $global:InstallDirectory" -ForegroundColor Green
     }
 
-    # Always check after the directory is finalised, regardless of whether it changed.
-    if ($global:InstallDirectory -eq $global:ThisScriptDir) {
-        Write-Host "  [NOTE] The install directory matches the current running directory." -ForegroundColor Cyan
-        Write-Host "         No file copy will be performed." -ForegroundColor Cyan
-    }
     Write-Host ""
     return $true
 # End of the Confirm-InstallDirectory function.
