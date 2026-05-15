@@ -4,6 +4,70 @@
 
 ---
 
+### [AD-PowerAdmin.ps1 — Transcript Management]
+
+**Fixed:**
+- `Stop-AllTranscripts` -- the function used `Stop-Transcript -ErrorAction Stop` inside a
+  `while($true)` loop to detect when all transcripts were drained. `Stop` converts the
+  non-terminating "not currently transcribing" error into a terminating error, which PowerShell's
+  Script Block Logging records as a Warning event before the `catch` block suppresses it. Every
+  scheduled task invocation generated this spurious warning because the session starts with no
+  active transcript. Changed to `-ErrorAction SilentlyContinue` with `$?` as the loop-exit
+  condition. `SilentlyContinue` suppresses the error before logging occurs; `$?` is `$false`
+  when `Stop-Transcript` fails, providing the same reliable exit signal without the event log
+  noise.
+
+- `Initialize-UnattendedLog` -- relied on `Get-Transcript` to detect a running transcript before
+  stopping it. `Get-Transcript` was added in PowerShell 7 and does not exist in PS 5.1
+  (the version used by the scheduled task). On PS 5.1 the call always threw, leaving
+  `$currentTranscript` as `$null`, so the `if ($currentTranscript) { Stop-AllTranscripts }`
+  guard never fired. When `Start-Transcript -Force` was then called for the unattended log, the
+  debug log (started by `Initialize-ADPowerAdmin`) was already active, and PS 5.1 does not allow
+  `-Force` to override an already-active transcript. The unattended log silently failed to start,
+  and all scheduled-run output was routed to the debug log instead. Fixed by removing the
+  conditional guard and always calling `Stop-AllTranscripts` before starting the unattended log.
+  The fixed `Stop-AllTranscripts` (above) is a silent no-op when nothing is running, making the
+  unconditional call safe.
+
+- `Start-Automation` -- `Initialize-Debug` was called immediately after `Initialize-UnattendedLog`
+  at both the start and end of the function. `Initialize-Debug` is correct as a fallback when
+  `$global:UnattendedLog` is disabled, but when the unattended log is active, calling it
+  caused transcript competition: because `Get-Transcript` is absent in PS 5.1, `Initialize-Debug`
+  always believed no transcript was running and attempted `Start-Transcript -Force` for the debug
+  log, which either silently failed or stopped the just-started unattended log. All three
+  `Initialize-Debug` calls inside `Start-Automation` are now wrapped with
+  `if (-not $global:UnattendedLog)` so the debug log is only used as a fallback when the
+  dedicated unattended log is disabled.
+
+---
+
+### [AD-PowerAdmin_Installer Module]
+
+**Changed:**
+- `New-ADPowerAdminScheduledTask` -- the daily scheduled task was created with action arguments
+  `"$ScriptPath -Unattended -JobName 'Daily'"`, missing the `-File`, `-NonInteractive`, and
+  `-NoProfile` flags. This matched neither PowerShell best practice nor the pattern already
+  used by the Honeypot task. Updated to
+  `"-NonInteractive -NoProfile -File \"$ScriptPath\" -Unattended -JobName 'Daily'"`.
+  `-File` ensures correct parameter binding and a clean exit code. `-NonInteractive` prevents
+  the task from hanging on `Read-Host` prompts if any are inadvertently reached. `-NoProfile`
+  eliminates profile-loading side effects that could alter the module path or variable state.
+  Note: Existing installed tasks must be recreated (via "Install AD-PowerAdmin" or
+  "Diagnose Scheduled Task") for this change to take effect.
+
+**Added:**
+- `Invoke-ScheduledTaskDiagnostic` -- new function accessible from the AD-PowerAdmin Management
+  submenu. Triggers the `AD-PowerAdmin_Daily` scheduled task, waits for it to complete (180 s
+  timeout), then collects evidence from four sources: (1) Task Scheduler Operational event log,
+  (2) Microsoft-Windows-PowerShell/Operational log, (3) classic Windows PowerShell log
+  (errors/warnings only), and (4) the transcript log files (`AD-PowerAdmin_Debug.log` and
+  `AD-PowerAdmin_Unattended.log`). Displays a colour-coded console report and offers to export
+  the full findings to `Reports\AD-PowerAdmin_TaskDiag_<timestamp>.txt`. Addresses the
+  operational need to diagnose why the daily scheduled task fails silently -- no logs, no emails,
+  no errors visible -- without manually hunting through multiple event log sources.
+
+---
+
 ### [AD-PowerAdmin_Utils Module]
 
 **Changed:**

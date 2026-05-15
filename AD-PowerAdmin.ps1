@@ -165,11 +165,12 @@ function Initialize-UnattendedLog {
         return
     }
 
-    # Stop any other running transcript (e.g., the debug log). Suppress the
-    # return-value string so it is not buffered into the new transcript.
-    if ($currentTranscript) {
-        Stop-AllTranscripts | Out-Null
-    }
+    # Always stop any running transcript before starting the unattended log.
+    # The $currentTranscript guard above is unreliable in PS 5.1 because
+    # Get-Transcript does not exist in that version and always throws, leaving
+    # $currentTranscript as $null even when a transcript IS active.
+    # Stop-AllTranscripts is a silent no-op when nothing is running (Fix 1).
+    Stop-AllTranscripts | Out-Null
 
     # Start the dedicated unattended log.
     Start-Transcript -Path "$global:ReportsPath\AD-PowerAdmin_Unattended.log" -Append -Force | Out-Null
@@ -528,19 +529,17 @@ function Stop-AllTranscripts {
     <#
     .SYNOPSIS
     Function that will stop all transcripts that are currently running.
-    Yes, this is a bit of a hack, but it works. There is not a way to query the current transcript sessions,
-        so we are forced to use a while loop to stop all transcripts. Auful, I know. I am open to suggestions on how to do this better.
+    Uses SilentlyContinue so that calling this function when no transcript is active does not
+    generate a terminating error that Windows Script Block Logging records as a warning.
+    The loop exits when Stop-Transcript sets $? to $false, indicating nothing more to stop.
     #>
 
-    # Check if a transcript is already running.
     try {
         while ($true) {
-            Stop-Transcript -ErrorAction Stop
+            Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+            if (-not $?) { return }
         }
-    } catch {
-        # Do nothing.
-        return
-    }
+    } catch { }
 }
 
 function Stop-ADPowerAdmin {
@@ -756,9 +755,10 @@ function Start-Automation {
     $JobName = $JobName.Trim("'").Trim('"')
 
     # Start the dedicated unattended log (always on when $global:UnattendedLog is $true).
-    # Falls back to the debug transcript when $global:UnattendedLog is $false.
+    # Initialize-Debug is only called as a fallback when the unattended log is disabled;
+    # calling both when $global:UnattendedLog is $true causes transcript competition in PS 5.1.
     Initialize-UnattendedLog
-    Initialize-Debug
+    if (-not $global:UnattendedLog) { Initialize-Debug }
 
     # Write a timestamped boundary marker so individual runs are identifiable in the log.
     Write-Host "=== Unattended Run Start: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
@@ -791,7 +791,7 @@ function Start-Automation {
             }
         }
         Initialize-UnattendedLog
-        Initialize-Debug
+        if (-not $global:UnattendedLog) { Initialize-Debug }
         Write-Host "=== Unattended Run End: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
         Stop-AllTranscripts | Out-Null
         return
@@ -812,7 +812,7 @@ function Start-Automation {
     }
 
     Initialize-UnattendedLog
-    Initialize-Debug
+    if (-not $global:UnattendedLog) { Initialize-Debug }
     Write-Host "=== Unattended Run End: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
     Stop-AllTranscripts | Out-Null
 # End of Start-Automation function.

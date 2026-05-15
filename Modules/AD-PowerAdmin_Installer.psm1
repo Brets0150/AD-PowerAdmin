@@ -68,6 +68,11 @@ Function Initialize-Module {
                     Label   = "Run a multi-stage diagnostic to verify SMTP settings: validates configuration values, tests DNS resolution of the SMTP server, tests TCP port connectivity, and attempts to send a test email to ADAdminEmail. Detailed pass/fail output at each stage aids troubleshooting."
                     Command = "Test-EmailConfiguration"
                 }
+                'DiagnoseScheduledTask' = @{
+                    Title   = "Diagnose Scheduled Task"
+                    Label   = "Trigger the AD-PowerAdmin_Daily scheduled task, wait for it to complete, then collect Task Scheduler and PowerShell event log entries and check transcript log files. Produces a full diagnostic report to identify why the daily task is not running correctly."
+                    Command = "Invoke-ScheduledTaskDiagnostic"
+                }
             }
         }
     }
@@ -832,7 +837,7 @@ function New-ADPowerAdminScheduledTask {
     # Try to set up a new schedule task to run the AD-PowerAdmin script daily.
     try {
         # Create a new schedule task to run the AD-PowerAdmin script daily.
-        New-ADPAScheduledTask -ActionString 'PowerShell.exe' -ActionArguments "$ThisScriptsFullName -Unattended -JobName 'Daily'" -ScheduleRunTime $ScheduleRunTime -Recurring "Daliy" -TaskName $TaskName -TaskDiscription $TaskDiscription
+        New-ADPAScheduledTask -ActionString 'PowerShell.exe' -ActionArguments "-NonInteractive -NoProfile -File `"$ThisScriptsFullName`" -Unattended -JobName 'Daily'" -ScheduleRunTime $ScheduleRunTime -Recurring "Daliy" -TaskName $TaskName -TaskDiscription $TaskDiscription
     } catch {
         Write-Host "Error: The AD-PowerAdmin schedule task failed to be created." -ForegroundColor Red
         Write-Host "       $($_.Exception.Message)" -ForegroundColor Red
@@ -3224,4 +3229,252 @@ Test details:
         Write-Host "         Use 'Configure Settings Wizard' from this menu to update settings." -ForegroundColor Yellow
     }
     Write-Host ""
+# End of Test-EmailConfiguration function.
+}
+
+Function Invoke-ScheduledTaskDiagnostic {
+    <#
+    .SYNOPSIS
+    Triggers the AD-PowerAdmin_Daily scheduled task and collects all available diagnostic data.
+
+    .DESCRIPTION
+    Confirms the task exists, records the current log file state, starts the task, waits for
+    completion, then collects Task Scheduler and PowerShell event log entries and checks whether
+    the transcript log files were written. Produces a full console report and optionally exports
+    it to Reports\AD-PowerAdmin_TaskDiag_<timestamp>.txt.
+
+    Operational justification: Administrators need a structured, repeatable way to diagnose why
+    the AD-PowerAdmin daily scheduled task fails silently -- no logs, no emails, no event entries
+    visible without knowing exactly where to look. This function automates the evidence collection.
+
+    .EXAMPLE
+    Invoke-ScheduledTaskDiagnostic
+    #>
+
+    [string]$TaskName     = "AD-PowerAdmin_Daily"
+    [string]$DebugLog     = Join-Path $global:ReportsPath "AD-PowerAdmin_Debug.log"
+    [string]$UnattLog     = Join-Path $global:ReportsPath "AD-PowerAdmin_Unattended.log"
+
+    Write-Host ""
+    Write-Host "  ========================================================" -ForegroundColor Cyan
+    Write-Host "  AD-PowerAdmin Scheduled Task Diagnostic" -ForegroundColor Cyan
+    Write-Host "  ========================================================" -ForegroundColor Cyan
+    Write-Host ""
+
+    # ---- Pre-check: task must exist ----
+    $Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $Task) {
+        Write-Host "  [FAIL] Scheduled task '$TaskName' not found." -ForegroundColor Red
+        Write-Host "         Run 'Install AD-PowerAdmin' from this menu first." -ForegroundColor Yellow
+        return
+    }
+
+    $TaskInfo = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+
+    Write-Host "  [INFO] Task found. Pre-run state:" -ForegroundColor Cyan
+    Write-Host "    State       : $($Task.State)"
+    Write-Host "    Last Run    : $($TaskInfo.LastRunTime)"
+    [string]$LastResultStr = if ($TaskInfo.LastTaskResult -eq 0) { "0 [OK]" } else { "$($TaskInfo.LastTaskResult) [FAIL]" }
+    Write-Host "    Last Result : $LastResultStr"
+
+    # Show current task action arguments so the admin can verify the -File fix is applied.
+    $TaskAction = ($Task.Actions | Select-Object -First 1)
+    Write-Host "    Action      : $($TaskAction.Execute) $($TaskAction.Arguments)"
+
+    # Warn if task is already running -- starting it again may behave unexpectedly.
+    if ($Task.State -eq 'Running') {
+        Write-Host ""
+        Write-Host "  [WARN] The task is currently running. Waiting for it to finish before starting a new run..." -ForegroundColor Yellow
+        [int]$WaitElapsed = 0
+        while ((Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue).State -eq 'Running') {
+            Start-Sleep -Seconds 3
+            $WaitElapsed += 3
+            if ($WaitElapsed -ge 180) {
+                Write-Host "  [WARN] Task still running after 3 minutes. Proceeding anyway." -ForegroundColor Yellow
+                break
+            }
+        }
+    }
+
+    # ---- Snapshot log file timestamps before the run ----
+    $DebugLogBefore  = if (Test-Path $DebugLog) { (Get-Item $DebugLog).LastWriteTime } else { $null }
+    $UnattLogBefore  = if (Test-Path $UnattLog)  { (Get-Item $UnattLog).LastWriteTime  } else { $null }
+
+    # ---- Start the task ----
+    [datetime]$DiagStart = Get-Date
+    Write-Host ""
+    Write-Host "  [INFO] Starting '$TaskName' at $($DiagStart.ToString('HH:mm:ss')) ..." -ForegroundColor Cyan
+    try {
+        Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    } catch {
+        Write-Host "  [FAIL] Could not start the task: $($_.Exception.Message)" -ForegroundColor Red
+        return
+    }
+
+    # ---- Wait for completion ----
+    [int]$TimeoutSec = 180
+    [int]$Elapsed    = 0
+    Start-Sleep -Seconds 2
+    while ($true) {
+        if ((Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue).State -ne 'Running') { break }
+        Start-Sleep -Seconds 3
+        $Elapsed += 3
+        if ($Elapsed -ge $TimeoutSec) {
+            Write-Host "  [WARN] Task did not complete within $TimeoutSec seconds. Diagnostic results may be partial." -ForegroundColor Yellow
+            break
+        }
+    }
+    [datetime]$DiagEnd = Get-Date
+    Write-Host "  [INFO] Task finished (elapsed ~$Elapsed s, wall time: $($DiagEnd.ToString('HH:mm:ss')))." -ForegroundColor DarkGray
+
+    # ---- Post-run task result ----
+    $TaskInfo = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+    [int]$ExitCode = $TaskInfo.LastTaskResult
+    Write-Host ""
+    Write-Host "  [INFO] Post-run result:" -ForegroundColor Cyan
+    if ($ExitCode -eq 0) {
+        Write-Host "    Last Result : 0 [OK]  (task reported success)" -ForegroundColor Green
+    } else {
+        Write-Host "    Last Result : $ExitCode [FAIL]  (non-zero exit -- script may have called exit 1)" -ForegroundColor Red
+    }
+    Write-Host "    Last Run    : $($TaskInfo.LastRunTime)"
+
+    # ---- Log file check ----
+    Write-Host ""
+    Write-Host "  [INFO] Log file check:" -ForegroundColor Cyan
+
+    foreach ($LogEntry in @(
+        [PSCustomObject]@{ Label = 'AD-PowerAdmin_Debug.log';      Path = $DebugLog; Before = $DebugLogBefore },
+        [PSCustomObject]@{ Label = 'AD-PowerAdmin_Unattended.log'; Path = $UnattLog; Before = $UnattLogBefore }
+    )) {
+        if (Test-Path $LogEntry.Path) {
+            [datetime]$After = (Get-Item $LogEntry.Path).LastWriteTime
+            if ($LogEntry.Before -ne $After) {
+                Write-Host "    [OK]   $($LogEntry.Label) -- updated during the run." -ForegroundColor Green
+            } else {
+                Write-Host "    [WARN] $($LogEntry.Label) -- exists but was NOT updated." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "    [FAIL] $($LogEntry.Label) -- not found at:" -ForegroundColor Red
+            Write-Host "           $($LogEntry.Path)" -ForegroundColor Red
+            Write-Host "           Possible causes: sMSA lacks write access to the Reports folder, or" -ForegroundColor Yellow
+            Write-Host "           Start-Transcript is failing. Check ACLs on: $global:ReportsPath" -ForegroundColor Yellow
+        }
+    }
+
+    # ---- Event log collection ----
+    Write-Host ""
+    Write-Host "  [INFO] Collecting event log entries since $($DiagStart.ToString('HH:mm:ss')) ..." -ForegroundColor Cyan
+
+    # Task Scheduler Operational
+    Write-Host ""
+    Write-Host "  --- Task Scheduler / Operational ---" -ForegroundColor Yellow
+    $TaskEvents = Get-WinEvent -FilterHashTable @{
+        LogName   = 'Microsoft-Windows-TaskScheduler/Operational'
+        StartTime = $DiagStart
+    } -ErrorAction SilentlyContinue | Where-Object { $_.Message -like "*AD-PowerAdmin*" }
+    if ($TaskEvents) {
+        $TaskEvents | Sort-Object TimeCreated | ForEach-Object {
+            [string]$Msg = if ($_.Message.Length -gt 200) { $_.Message.Substring(0, 200) + '...' } else { $_.Message }
+            Write-Host "    $($_.TimeCreated.ToString('HH:mm:ss'))  ID=$($_.Id)  $($_.LevelDisplayName): $Msg"
+        }
+    } else {
+        Write-Host "    (no Task Scheduler events containing 'AD-PowerAdmin' in this window)" -ForegroundColor DarkGray
+    }
+
+    # PowerShell Script Block Logging
+    Write-Host ""
+    Write-Host "  --- Microsoft-Windows-PowerShell / Operational ---" -ForegroundColor Yellow
+    $PsOpEvents = Get-WinEvent -FilterHashTable @{
+        LogName   = 'Microsoft-Windows-PowerShell/Operational'
+        StartTime = $DiagStart
+    } -ErrorAction SilentlyContinue | Where-Object { $_.Message -like "*AD-PowerAdmin*" }
+    if ($PsOpEvents) {
+        $PsOpEvents | Sort-Object TimeCreated | ForEach-Object {
+            [string]$Msg = if ($_.Message.Length -gt 200) { $_.Message.Substring(0, 200) + '...' } else { $_.Message }
+            Write-Host "    $($_.TimeCreated.ToString('HH:mm:ss'))  ID=$($_.Id)  $($_.LevelDisplayName): $Msg"
+        }
+    } else {
+        Write-Host "    (none found -- Script Block Logging may not be enabled via GPO)" -ForegroundColor DarkGray
+    }
+
+    # Classic Windows PowerShell log -- errors and warnings only
+    Write-Host ""
+    Write-Host "  --- Windows PowerShell log (errors and warnings) ---" -ForegroundColor Yellow
+    $PsClassicEvents = Get-WinEvent -FilterHashTable @{
+        LogName   = 'Windows PowerShell'
+        StartTime = $DiagStart
+        Level     = @(1, 2, 3)
+    } -ErrorAction SilentlyContinue
+    if ($PsClassicEvents) {
+        $PsClassicEvents | Sort-Object TimeCreated | ForEach-Object {
+            [string]$Msg = if ($_.Message.Length -gt 200) { $_.Message.Substring(0, 200) + '...' } else { $_.Message }
+            Write-Host "    $($_.TimeCreated.ToString('HH:mm:ss'))  ID=$($_.Id)  $($_.LevelDisplayName): $Msg"
+        }
+    } else {
+        Write-Host "    (no errors or warnings in this window)" -ForegroundColor DarkGray
+    }
+
+    # ---- Tail of each log ----
+    foreach ($LogEntry in @(
+        [PSCustomObject]@{ Label = 'Debug log';      Path = $DebugLog },
+        [PSCustomObject]@{ Label = 'Unattended log'; Path = $UnattLog }
+    )) {
+        if (Test-Path $LogEntry.Path) {
+            Write-Host ""
+            Write-Host "  --- Last 30 lines: $($LogEntry.Label) ---" -ForegroundColor Yellow
+            Get-Content -Path $LogEntry.Path -Tail 30 | ForEach-Object { Write-Host "    $_" }
+        }
+    }
+
+    # ---- Export offer ----
+    Write-Host ""
+    [string]$ExportChoice = Read-Host "  Export full report to Reports folder? (Y/n)"
+    if ($ExportChoice -ne 'N' -and $ExportChoice -ne 'n') {
+        [string]$ReportFile = Join-Path $global:ReportsPath "AD-PowerAdmin_TaskDiag_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+        [System.Collections.Generic.List[string]]$Lines = [System.Collections.Generic.List[string]]::new()
+        $Lines.Add("AD-PowerAdmin Scheduled Task Diagnostic")
+        $Lines.Add("Generated  : $(Get-Date)")
+        $Lines.Add("Task       : $TaskName")
+        $Lines.Add("Window     : $DiagStart  to  $DiagEnd")
+        $Lines.Add("Exit Code  : $ExitCode")
+        $Lines.Add("Action     : $($TaskAction.Execute) $($TaskAction.Arguments)")
+        $Lines.Add("")
+
+        if ($TaskEvents) {
+            $Lines.Add("=== Task Scheduler / Operational ===")
+            $TaskEvents | Sort-Object TimeCreated | ForEach-Object {
+                $Lines.Add("$($_.TimeCreated)  ID=$($_.Id)  $($_.LevelDisplayName): $($_.Message)")
+            }
+            $Lines.Add("")
+        }
+        if ($PsOpEvents) {
+            $Lines.Add("=== Microsoft-Windows-PowerShell / Operational ===")
+            $PsOpEvents | Sort-Object TimeCreated | ForEach-Object {
+                $Lines.Add("$($_.TimeCreated)  ID=$($_.Id)  $($_.LevelDisplayName): $($_.Message)")
+            }
+            $Lines.Add("")
+        }
+        if ($PsClassicEvents) {
+            $Lines.Add("=== Windows PowerShell Log (errors/warnings) ===")
+            $PsClassicEvents | Sort-Object TimeCreated | ForEach-Object {
+                $Lines.Add("$($_.TimeCreated)  ID=$($_.Id)  $($_.LevelDisplayName): $($_.Message)")
+            }
+            $Lines.Add("")
+        }
+        if (Test-Path $DebugLog) {
+            $Lines.Add("=== AD-PowerAdmin_Debug.log (full content) ===")
+            $Lines.Add((Get-Content -Path $DebugLog -Raw))
+        }
+        if (Test-Path $UnattLog) {
+            $Lines.Add("=== AD-PowerAdmin_Unattended.log (full content) ===")
+            $Lines.Add((Get-Content -Path $UnattLog -Raw))
+        }
+
+        $Lines | Out-File -FilePath $ReportFile -Encoding ASCII -Force
+        Write-Host "  [OK] Report written to: $ReportFile" -ForegroundColor Green
+    }
+
+    Write-Host ""
+# End of Invoke-ScheduledTaskDiagnostic function.
 }
