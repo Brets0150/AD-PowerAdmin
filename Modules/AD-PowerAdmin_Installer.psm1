@@ -972,6 +972,10 @@ function Confirm-InstallDirectory {
     [string]$Change = Read-Host "  Is this the correct install directory? (Y/n)"
     if ($Change -ne 'n' -and $Change -ne 'N') {
         Write-Host "  Proceeding with install directory: $global:InstallDirectory" -ForegroundColor Green
+        if ($global:InstallDirectory -eq $global:ThisScriptDir) {
+            Write-Host "  [NOTE] The install directory matches the current running directory." -ForegroundColor Cyan
+            Write-Host "         No file copy will be performed." -ForegroundColor Cyan
+        }
         Write-Host ""
         return $true
     }
@@ -1013,6 +1017,10 @@ function Confirm-InstallDirectory {
 
     $global:InstallDirectory = $NewPath
     Write-Host "  Install directory set to: $global:InstallDirectory" -ForegroundColor Green
+    if ($global:InstallDirectory -eq $global:ThisScriptDir) {
+        Write-Host "  [NOTE] The install directory matches the current running directory." -ForegroundColor Cyan
+        Write-Host "         No file copy will be performed." -ForegroundColor Cyan
+    }
     Write-Host ""
     return $true
 # End of the Confirm-InstallDirectory function.
