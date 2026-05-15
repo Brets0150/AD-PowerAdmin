@@ -3447,16 +3447,14 @@ Function Invoke-ScheduledTaskDiagnostic {
         Write-Host "    (no errors or warnings in this window)" -ForegroundColor DarkGray
     }
 
-    # ---- Tail of each log ----
-    foreach ($LogEntry in @(
-        [PSCustomObject]@{ Label = 'Debug log';      Path = $DebugLog },
-        [PSCustomObject]@{ Label = 'Unattended log'; Path = $UnattLog }
-    )) {
-        if (Test-Path $LogEntry.Path) {
-            Write-Host ""
-            Write-Host "  --- Last 10 lines: $($LogEntry.Label) ---" -ForegroundColor Yellow
-            Get-Content -Path $LogEntry.Path -Tail 10 | ForEach-Object { Write-Host "    $_" }
-        }
+    # ---- Tail of unattended log only ----
+    # The debug log is shared with the current interactive session, so tailing it would
+    # echo the diagnostic output we just printed back to the console. Only the unattended
+    # log is task-specific and safe to display here.
+    if (Test-Path $UnattLog) {
+        Write-Host ""
+        Write-Host "  --- Last 10 lines: AD-PowerAdmin_Unattended.log ---" -ForegroundColor Yellow
+        Get-Content -Path $UnattLog -Tail 10 | ForEach-Object { Write-Host "    $_" }
     }
 
     # ---- Export offer ----
