@@ -546,6 +546,11 @@ function Install-ADPowerAdmin {
     # Determine whether a file copy is needed. If the confirmed install directory is the
     # same as the directory the script is currently running from, the files are already in
     # place and no copy should be attempted.
+    Write-Host "  [DIAG] InstallDirectory  : '$global:InstallDirectory'" -ForegroundColor DarkGray
+    Write-Host "  [DIAG] InstallDirectory  length: $($global:InstallDirectory.Length)" -ForegroundColor DarkGray
+    Write-Host "  [DIAG] ThisScriptDir     : '$global:ThisScriptDir'" -ForegroundColor DarkGray
+    Write-Host "  [DIAG] ThisScriptDir     length: $($global:ThisScriptDir.Length)" -ForegroundColor DarkGray
+    Write-Host "  [DIAG] Are they equal?   : $($global:InstallDirectory -eq $global:ThisScriptDir)" -ForegroundColor DarkGray
     [bool]$CopyRequired = ($global:InstallDirectory -ne $global:ThisScriptDir)
     if (-not $CopyRequired) {
         Write-Host "Install directory matches the current running directory. File copy will be skipped." -ForegroundColor Cyan
