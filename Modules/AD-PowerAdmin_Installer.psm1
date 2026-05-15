@@ -553,38 +553,52 @@ function Install-ADPowerAdmin {
         Write-Host "Install directory matches the current running directory. File copy will be skipped." -ForegroundColor Cyan
     }
 
-    # Create the AD-PowerAdmin home directory.
-    New-ADPowerAdminHomeFolder
-
-    # Copy production files to the install directory only when the source and destination differ.
+    # Create the home directory and copy files only when the install directory differs from
+    # the current running directory. If they match the directory and files are already in place.
     if ($CopyRequired) {
+        Write-Host ""
+        Write-Host "  [Step 1/5] Creating install directory and setting permissions..." -ForegroundColor Cyan
+        New-ADPowerAdminHomeFolder
+
+        Write-Host ""
+        Write-Host "  [Step 2/5] Copying production files to install directory..." -ForegroundColor Cyan
         Copy-AdPowerAdmin
+    } else {
+        Write-Host ""
+        Write-Host "  [Step 1/5] Create install directory   -- SKIPPED (already running from install directory)" -ForegroundColor DarkGray
+        Write-Host "  [Step 2/5] Copy production files      -- SKIPPED (already running from install directory)" -ForegroundColor DarkGray
     }
 
+    Write-Host ""
+    Write-Host "  [Step 3/5] Creating sMSA service account..." -ForegroundColor Cyan
     # Create a ADPowerAdmMSA account with domain admin rights.
     New-ADPowerAdminSmsaAccount
 
+    Write-Host ""
+    Write-Host "  [Step 4/5] Configuring GPO (Log on as a service right for sMSA)..." -ForegroundColor Cyan
     # Create a new GPO to give the sMSA account the "Log on as a service" right.
     Set-ADPowerAdminGPO -Install
 
+    Write-Host ""
+    Write-Host "  [Step 5/5] Creating scheduled task..." -ForegroundColor Cyan
     # Create a new scheduled task to run the AD-PowerAdmin script daily.
     New-ADPowerAdminScheduledTask -ScriptFullPathForScheduleTask "$global:InstallDirectory\$global:ThisScriptsName"
 
+    Write-Host ""
+    Write-Host "  [Post-install] Installing DSInternals module..." -ForegroundColor Cyan
     # Install the DSInternals PowerShell module.
     Install-DSInternals
 
     # Test the AD-PowerAdmin install.
-    Write-Host "Testing the AD-PowerAdmin install." -ForegroundColor White
-    Write-host "----------------------------------------" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  [Post-install] Validating installation..." -ForegroundColor Cyan
+    Write-host "  ----------------------------------------" -ForegroundColor White
     if (Test-ADPowerAdminInstall) {
-        Write-Host "The AD-PowerAdmin install was successful." -ForegroundColor Green
-        Write-host "----------------------------------------" -ForegroundColor White
-        Write-Host "Breaking out of script to ensure you move to the running AD-PowerAdmin from the new install directory." -ForegroundColor Green
-        Write-host "----------------------------------------" -ForegroundColor White
+        Write-Host "  Installation validated successfully." -ForegroundColor Green
+        Write-Host "  Exiting -- relaunch AD-PowerAdmin from the install directory to continue." -ForegroundColor Green
         exit 0
     } else {
-        Write-Host "The AD-PowerAdmin install failed." -ForegroundColor Red
-        Write-host "----------------------------------------" -ForegroundColor White
+        Write-Host "  Installation validation FAILED. Review the output above for errors." -ForegroundColor Red
     }
 # End of the Install-ADPowerAdmin function.
 }
