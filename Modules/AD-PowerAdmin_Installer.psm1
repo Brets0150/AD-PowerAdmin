@@ -3454,8 +3454,8 @@ Function Invoke-ScheduledTaskDiagnostic {
     )) {
         if (Test-Path $LogEntry.Path) {
             Write-Host ""
-            Write-Host "  --- Last 30 lines: $($LogEntry.Label) ---" -ForegroundColor Yellow
-            Get-Content -Path $LogEntry.Path -Tail 30 | ForEach-Object { Write-Host "    $_" }
+            Write-Host "  --- Last 10 lines: $($LogEntry.Label) ---" -ForegroundColor Yellow
+            Get-Content -Path $LogEntry.Path -Tail 10 | ForEach-Object { Write-Host "    $_" }
         }
     }
 
