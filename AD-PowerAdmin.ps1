@@ -763,33 +763,60 @@ function Start-Automation {
     # Write a timestamped boundary marker so individual runs are identifiable in the log.
     Write-Host "=== Unattended Run Start: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
 
-    # Foreach value in the $global:UnattendedJobs variable, build a new PowerShell object and add the value to the object.
-    # The $global:UnattendedJobs variable is populated by the Initialize-Module function in each module.
+    # Flatten $global:UnattendedJobs into an array of objects for easier iteration.
+    # $global:UnattendedJobs is populated by Initialize-Module in each loaded module.
     [array]$UnattendedJobObjects = @()
     foreach ($UnattendedJob in $global:UnattendedJobs.GetEnumerator()) {
-        # Create a new object to store the menu item.
         [object]$UnattendedJobObject = New-Object -TypeName PSObject
-        # Add the menu index value to the object.
-        $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "JobName" -Value $UnattendedJob.Name
-        $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "Title" -Value $UnattendedJob.Value.Title
-        $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "Label" -Value $UnattendedJob.Value.Label
-        $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "Module" -Value $UnattendedJob.Value.Module
+        $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "JobName"  -Value $UnattendedJob.Name
+        $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "Title"    -Value $UnattendedJob.Value.Title
+        $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "Label"    -Value $UnattendedJob.Value.Label
+        $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "Module"   -Value $UnattendedJob.Value.Module
         $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "Function" -Value $UnattendedJob.Value.Function
-        $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "Daily" -Value $UnattendedJob.Value.Daily
-        $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "Command" -Value $UnattendedJob.Value.Command
-        # Add the object to the $MenuObjects variable.
+        $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "Daily"    -Value $UnattendedJob.Value.Daily
+        $UnattendedJobObject | Add-Member -MemberType NoteProperty -Name "Command"  -Value $UnattendedJob.Value.Command
         $UnattendedJobObjects += $UnattendedJobObject
     }
 
-    # if JobName is "Daily", then run the Start-DailyADTacks functions.
+    # Log registration summary so the unattended log shows what modules loaded and what jobs exist.
+    Write-Host ""
+    Write-Host "  Registered jobs : $($UnattendedJobObjects.Count)"
+    if ($UnattendedJobObjects.Count -gt 0) {
+        $UnattendedJobObjects | Sort-Object JobName | ForEach-Object {
+            [string]$DailyFlag = if ($_.Daily) { "[Daily]" } else { "       " }
+            Write-Host "    $DailyFlag  $($_.JobName)  ($($_.Module))"
+        }
+    } else {
+        Write-Host "    [WARN] No jobs are registered. Check that all modules loaded correctly." -ForegroundColor Yellow
+    }
+    Write-Host ""
+
+    # if JobName is "Daily", run every registered job that has Daily = $true.
     if ($JobName -eq "Daily") {
-        # Foreach item in the $global:UnattendedJobs variable, if the item has a Daily value of $true, run the Command that is associated with the item.
-        $UnattendedJobObjects | ForEach-Object {
-            if ($_.Daily -eq $true) {
-                # Run the function that is associated with the $MenuObjects.MenuIndex; $MenuObjects.FunctionName.
-                Invoke-Expression $_.Command
+        [array]$DailyJobs = @($UnattendedJobObjects | Where-Object { $_.Daily -eq $true })
+        Write-Host "  Daily jobs to run : $($DailyJobs.Count)"
+
+        if ($DailyJobs.Count -eq 0) {
+            Write-Host "  [WARN] No jobs have Daily = true. Nothing to execute." -ForegroundColor Yellow
+            Write-Host "         Verify that at least one module registers a job with Daily = `$true in Initialize-Module."
+        } else {
+            foreach ($DailyJob in $DailyJobs) {
+                Write-Host ""
+                Write-Host "  --- Job start : $($DailyJob.JobName) | $(Get-Date -Format 'HH:mm:ss') ---"
+                Write-Host "  Module  : $($DailyJob.Module)"
+                Write-Host "  Command : $($DailyJob.Command)"
+                try {
+                    Invoke-Expression $DailyJob.Command
+                    Write-Host "  --- Job end   : $($DailyJob.JobName) | $(Get-Date -Format 'HH:mm:ss') ---"
+                } catch {
+                    Write-Host "  [FAIL] Job '$($DailyJob.JobName)' threw an unhandled error:" -ForegroundColor Red
+                    Write-Host "         $($_.Exception.Message)" -ForegroundColor Red
+                    Write-Host "         $($_.ScriptStackTrace)" -ForegroundColor Red
+                    Write-Host "  --- Job end (with error) : $($DailyJob.JobName) | $(Get-Date -Format 'HH:mm:ss') ---"
+                }
             }
         }
+
         Initialize-UnattendedLog
         if (-not $global:UnattendedLog) { Initialize-Debug }
         Write-Host "=== Unattended Run End: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
@@ -797,18 +824,33 @@ function Start-Automation {
         return
     }
 
-    # Foreach JobName in the $UnattendedJobsObject, if the JobName matches the $JobName variable, run the Command that is associated with the JobName.
+    # Single named job path: find the matching job and run it.
+    [bool]$JobFound = $false
     $UnattendedJobObjects | ForEach-Object {
         if ($_.JobName -eq $JobName) {
-            Write-Host "Running $($_.Title) - $($_.Label)" -ForegroundColor Green
+            $JobFound = $true
+            Write-Host "  --- Job start : $($_.JobName) | $(Get-Date -Format 'HH:mm:ss') ---"
+            Write-Host "  Module  : $($_.Module)"
 
-            # If the $JobVar1 variable is not null, add it to the Command.
+            # If the $JobVar1 variable is not null, append it to the command string.
             if ($null -ne $JobVar1) {
                 $_.Command = "$($_.Command) -JobVar1 `"$JobVar1`""
             }
-            # Run the function that is associated with the $MenuObjects.MenuIndex; $MenuObjects.FunctionName.
-            Invoke-Expression $_.Command
+            Write-Host "  Command : $($_.Command)"
+            try {
+                Invoke-Expression $_.Command
+                Write-Host "  --- Job end   : $($_.JobName) | $(Get-Date -Format 'HH:mm:ss') ---"
+            } catch {
+                Write-Host "  [FAIL] Job '$($_.JobName)' threw an unhandled error:" -ForegroundColor Red
+                Write-Host "         $($_.Exception.Message)" -ForegroundColor Red
+                Write-Host "         $($_.ScriptStackTrace)" -ForegroundColor Red
+                Write-Host "  --- Job end (with error) : $($_.JobName) | $(Get-Date -Format 'HH:mm:ss') ---"
+            }
         }
+    }
+    if (-not $JobFound) {
+        Write-Host "  [WARN] No job named '$JobName' found in the registered job list." -ForegroundColor Yellow
+        Write-Host "         Registered job names: $(($UnattendedJobObjects | Select-Object -ExpandProperty JobName) -join ', ')"
     }
 
     Initialize-UnattendedLog

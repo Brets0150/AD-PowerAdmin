@@ -4,6 +4,22 @@
 
 ---
 
+### [AD-PowerAdmin.ps1 — Unattended Run Logging]
+
+**Changed:**
+- `Start-Automation` -- added diagnostic output to the unattended log so every run now records:
+  (1) a registration summary listing every job name, module, and whether it is flagged `[Daily]`;
+  (2) a count of Daily jobs selected for the current run with a `[WARN]` if none are registered;
+  (3) a timestamped start line before each job showing its name, module, and resolved command;
+  (4) a timestamped end line after each job showing whether it completed normally or with an error;
+  (5) full exception message and stack trace if a job throws an unhandled error (previously
+  swallowed silently by `Invoke-Expression`). For single named jobs, a `[WARN]` is now printed
+  if no job with that name exists in the registered list, along with the list of known job names.
+  These changes allow log-only diagnosis of why daily jobs are or are not executing without
+  requiring interactive access to the server.
+
+---
+
 ### [AD-PowerAdmin.ps1 — Transcript Management]
 
 **Fixed:**
