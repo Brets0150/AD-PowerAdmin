@@ -488,7 +488,7 @@ Key settings groups:
 ### AD-PowerAdmin_Utils (v1.1, Production)
 Shared utilities used by all other modules.
 
-Key exports: `Get-DownloadFile`, `New-ScheduledTask`, `Send-Email`, `Send-EmailTest`, `Get-DateFromCalendar`, `Export-AdPowerAdminData`, `Search-SingleAdObject`, `Show-Menu`
+Key exports: `Get-DownloadFile`, `New-ADPAScheduledTask`, `Send-Email`, `Send-EmailTest`, `Get-DateFromCalendar`, `Export-AdPowerAdminData`, `Search-SingleAdObject`, `Show-Menu`
 
 ### AD-PowerAdmin_LogMgr (v1.0, Beta)
 Windows Security Event Log searching -- lockout events (4740) and failed logons (4625).

@@ -58,7 +58,7 @@ Function Get-DownloadFile {
     # End of Get-DownloadFile function
 }
 
-Function New-ScheduledTask {
+Function New-ADPAScheduledTask {
     <#
     .SYNOPSIS
     Function that will create a scheduled task that runs a command at a specified time.
@@ -67,16 +67,16 @@ Function New-ScheduledTask {
     Create a scheduled task that runs a command at a specified time.
 
     .EXAMPLE
-    New-ScheduledTask -ActionString "Taskmgr.exe" -ActionArguments "/q" -ScheduleRunTime "09:00" -Recurring Once -TaskName "Test" -TaskDiscription "Just a Test"
+    New-ADPAScheduledTask -ActionString "Taskmgr.exe" -ActionArguments "/q" -ScheduleRunTime "09:00" -Recurring Once -TaskName "Test" -TaskDiscription "Just a Test"
 
     .INPUTS
-    New-ScheduledTask does not take pipeline input, but requires the following parameters: ActionString, ActionArguments, ScheduleRunTime, Recurring, TaskName, TaskDiscription
+    New-ADPAScheduledTask does not take pipeline input, but requires the following parameters: ActionString, ActionArguments, ScheduleRunTime, Recurring, TaskName, TaskDiscription
 
     .OUTPUTS
-    New-ScheduledTask will output the following: None
+    New-ADPAScheduledTask will output the following: None
 
     .NOTES
-    This function is used by AD-PowerAdmin_Main.ps1 to create a scheduled task.
+    This function is used by AD-PowerAdmin modules to create scheduled tasks.
 
     #>
     Param(
@@ -86,16 +86,15 @@ Function New-ScheduledTask {
         [string]$ActionArguments,
         [Parameter(Mandatory=$True,Position=3)]
         [string]$ScheduleRunTime,
-        [Parameter(Mandatory=$True,Position=4)][ValidateSet("Daliy","Weekly","Monthly","Once")]
+        [Parameter(Mandatory=$True,Position=4)][ValidateSet("Daliy","Weekly","Monthly","Once","Interval")]
         [string]$Recurring,
         [Parameter(Mandatory=$True,Position=5)]
         [string]$TaskName,
         [Parameter(Mandatory=$True,Position=6)]
-        [string]$TaskDiscription
+        [string]$TaskDiscription,
+        [Parameter(Mandatory=$False,Position=7)]
+        [int]$RepeatIntervalMinutes = 0
     )
-
-    # Get the current user's name
-    [string]$UserName = "$env:UserDomain\$env:UserName"
 
     # Create $trigger based on $Recurring
     if ($Recurring -eq "Daliy") {
@@ -110,13 +109,22 @@ Function New-ScheduledTask {
     elseif ($Recurring -eq "Once") {
         $Trigger = New-ScheduledTaskTrigger -Once -At $ScheduleRunTime
     }
+    elseif ($Recurring -eq "Interval") {
+        $Trigger = New-ScheduledTaskTrigger -Once -At $ScheduleRunTime -RepetitionInterval (New-TimeSpan -Minutes $RepeatIntervalMinutes)
+    }
 
     try {
         $Action          = New-ScheduledTaskAction -Execute $ActionString -Argument $ActionArguments -WorkingDirectory "$global:ThisScriptDir"
         $Settings        = New-ScheduledTaskSettingsSet -RunOnlyIfNetworkAvailable -WakeToRun
-        $DomainNameShort = Get-ADDomain | Select-Object Name | Select-Object -ExpandProperty Name | Select-Object -First 1
-        $UserId          = "$DomainNameShort`\$global:MsaAccountName`$"
-        $Principal       = New-ScheduledTaskPrincipal -UserID "$UserId" -LogonType Password -RunLevel Highest
+        $DomainNameShort = (Get-ADDomain -ErrorAction Stop).NetBIOSName
+        $UserId          = "$DomainNameShort\$($global:MsaAccountName)`$"
+        $MsaAccount      = Get-ADServiceAccount -Filter "Name -eq '$($global:MsaAccountName)'" -ErrorAction SilentlyContinue
+        if ($MsaAccount) {
+            $Principal = New-ScheduledTaskPrincipal -UserID $UserId -LogonType Password -RunLevel Highest
+        } else {
+            Write-Host "  [WARN] sMSA account '$($global:MsaAccountName)' not found. Task will run as current user." -ForegroundColor Yellow
+            $Principal = New-ScheduledTaskPrincipal -UserId "$env:UserDomain\$env:UserName" -LogonType Interactive -RunLevel Highest
+        }
 
         Register-ScheduledTask -TaskName "$TaskName" -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Description "$TaskDiscription" -ErrorAction Stop | Out-Null
 
@@ -133,7 +141,7 @@ Function New-ScheduledTask {
         throw
     }
 
-    #End of New-ScheduledTask function
+    #End of New-ADPAScheduledTask function
 }
 
 Function Send-Email {

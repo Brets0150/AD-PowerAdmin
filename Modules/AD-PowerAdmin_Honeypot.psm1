@@ -439,43 +439,16 @@ Function New-HoneypotScheduledTask {
     }
 
     # First run is one interval from now; then repeats every interval indefinitely.
-    $FirstRun = (Get-Date).AddMinutes($IntervalMinutes)
-    $Trigger  = New-ScheduledTaskTrigger -Once -At $FirstRun -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
+    [datetime]$FirstRun = (Get-Date).AddMinutes($IntervalMinutes)
 
-    $Action = New-ScheduledTaskAction `
-        -Execute 'PowerShell.exe' `
-        -Argument ("-NonInteractive -NoProfile -File `"$ScriptPath`" -Unattended -JobName 'HoneypotHourlyMonitor'") `
-        -WorkingDirectory $global:ThisScriptDir
-
-    $Settings = New-ScheduledTaskSettingsSet -RunOnlyIfNetworkAvailable -WakeToRun
-
-    # Prefer the sMSA account that the installer creates; fall back to the current user.
-    $DomainShort = (Get-ADDomain).Name
-    $MsaId       = "$DomainShort\$($global:MsaAccountName)`$"
-    $MsaAccount  = Get-ADServiceAccount -Filter "Name -eq '$($global:MsaAccountName)'" -ErrorAction SilentlyContinue
-    if ($MsaAccount) {
-        $Principal = New-ScheduledTaskPrincipal -UserID $MsaId -LogonType Password -RunLevel Highest
-    } else {
-        Write-Host "  [WARN] sMSA account '$($global:MsaAccountName)' not found. Task will run as current user." -ForegroundColor Yellow
-        $Principal = New-ScheduledTaskPrincipal -UserId "$env:UserDomain\$env:UserName" -LogonType Interactive -RunLevel Highest
-    }
-
-    try {
-        Register-ScheduledTask -TaskName $TaskName `
-                               -Action $Action `
-                               -Trigger $Trigger `
-                               -Settings $Settings `
-                               -Principal $Principal `
-                               -Description $TaskDesc | Out-Null
-
-        if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-            Write-Host "  [OK] Scheduled task '$TaskName' created (every $IntervalMinutes min, first run at $FirstRun)." -ForegroundColor Green
-        } else {
-            Write-Host "  [FAIL] Scheduled task creation failed." -ForegroundColor Red
-        }
-    } catch {
-        Write-Host "  [FAIL] Could not create scheduled task: $_" -ForegroundColor Red
-    }
+    New-ADPAScheduledTask `
+        -ActionString          'PowerShell.exe' `
+        -ActionArguments       "-NonInteractive -NoProfile -File `"$ScriptPath`" -Unattended -JobName 'HoneypotHourlyMonitor'" `
+        -ScheduleRunTime       $FirstRun `
+        -Recurring             'Interval' `
+        -RepeatIntervalMinutes $IntervalMinutes `
+        -TaskName              $TaskName `
+        -TaskDiscription       $TaskDesc
 }
 
 Function Remove-HoneypotScheduledTask {

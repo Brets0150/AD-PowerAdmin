@@ -621,7 +621,7 @@ Function Update-KRBTGTPassword {
                     [string]$ThisScriptsFullName = $global:ThisScript
 
                     # Create a schedule task to run the Update-KRBTGTPassword function X number of hours after first password update.
-                    New-ScheduledTask -ActionString 'PowerShell' -ActionArguments "$ThisScriptsFullName -Unattended -JobName `"krbtgt-RotateKey`"" -ScheduleRunTime $NextUpdateTime `
+                    New-ADPAScheduledTask -ActionString 'PowerShell' -ActionArguments "$ThisScriptsFullName -Unattended -JobName `"krbtgt-RotateKey`"" -ScheduleRunTime $NextUpdateTime `
                     -Recurring Once -TaskName "KRBTGT-Final-Update" -TaskDiscription "KRBTGT second password update, to run once."
 
                     # Check if the scheduled task named "KRBTGT-Final-Update" was created successfully.
@@ -745,7 +745,7 @@ Function Invoke-WeakPwdProcess {
 
             # Try to schedule a task to change the password of the user in $global:PwAuditPwChangeGracePeriod.
             try {
-                <# Create a New-ScheduledTask.
+                <# Create a New-ADPAScheduledTask.
                     The action will be to run the $ThisScriptsFullName with the -ActionArguments "-Unattended -JobName 'PwUserFollowup' -JobVar1 '$UserOnly'"
                     The -ScheduleRunTime at $PwFollowUpTime.
                     The run task once.
@@ -753,7 +753,7 @@ Function Invoke-WeakPwdProcess {
                     The create with the TaskDiscription with the value of $TaskDiscription.
                     Do not output anything to the console.
                 #>
-                New-ScheduledTask -ActionString 'PowerShell' -ActionArguments "$ThisScriptsFullName -Unattended -JobName `'PwUserFollowup`' -JobVar1 `'$UserOnly`'" -ScheduleRunTime $PwFollowUpTime -Recurring Once -TaskName $TaskName -TaskDiscription $TaskDiscription | Out-Null
+                New-ADPAScheduledTask -ActionString 'PowerShell' -ActionArguments "$ThisScriptsFullName -Unattended -JobName `'PwUserFollowup`' -JobVar1 `'$UserOnly`'" -ScheduleRunTime $PwFollowUpTime -Recurring Once -TaskName $TaskName -TaskDiscription $TaskDiscription | Out-Null
 
             } catch {
                 # If the task fails, then output an error and exit the function.

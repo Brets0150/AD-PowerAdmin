@@ -4,6 +4,38 @@
 
 ---
 
+### [AD-PowerAdmin_Utils Module]
+
+**Changed:**
+- `New-ScheduledTask` renamed to `New-ADPAScheduledTask` to eliminate a name collision with
+  the PowerShell built-in `ScheduledTasks\New-ScheduledTask` cmdlet. The collision caused
+  callers to bind to the built-in instead of the custom wrapper, producing "A parameter cannot
+  be found that matches parameter name 'ActionString'" at runtime. All callers across
+  `AD-PowerAdmin_Installer`, `AD-PowerAdmin_PasswordsCtl`, and `AD-PowerAdmin_Honeypot`
+  updated accordingly. `FunctionsToExport` in the manifest updated to match.
+- `New-ADPAScheduledTask` extended with a new optional `-RepeatIntervalMinutes [int]` parameter
+  and a new `"Interval"` value in the `-Recurring` ValidateSet. When `Recurring = 'Interval'`,
+  the trigger fires once at the specified time and then repeats every `-RepeatIntervalMinutes`
+  minutes indefinitely. This replaces the equivalent logic that was previously duplicated inside
+  `New-HoneypotScheduledTask`.
+- `New-ADPAScheduledTask` principal selection now includes sMSA-with-current-user fallback.
+  If the configured sMSA account is not found in AD, the task is registered under the current
+  interactive user with a `[WARN]` message, rather than silently producing a malformed principal.
+
+**Fixed:**
+- `New-ScheduledTask` -- `Get-ADDomain` was called without `-ErrorAction Stop` inside the
+  `try` block, so a non-terminating error left `$DomainNameShort` as `$null`, producing a
+  UserID of `\AccountName$` (no domain prefix). Task Scheduler silently accepted the malformed
+  principal and stored just `AccountName$`, causing the scheduled task to fail at runtime
+  because the sMSA could not be resolved without the domain qualifier. Additionally, the code
+  used `.Name` (the first DNS label, e.g. "contoso" from "contoso.com") instead of
+  `.NetBIOSName` (e.g. "CONTOSO"), which is the format required by Task Scheduler for
+  `DOMAIN\AccountName$` sMSA principals. Fixed by replacing the pipeline with
+  `(Get-ADDomain -ErrorAction Stop).NetBIOSName`, which retrieves the correct NetBIOS name
+  and causes any failure to propagate cleanly to the `catch` block.
+
+---
+
 ### [AD-PowerAdmin_PasswordsCtl Module]
 
 **Fixed:**
@@ -14,6 +46,18 @@
   support secure connections." Fixed by explicitly nulling `$AllAdAccountData` and calling
   `[System.GC]::Collect()` and `[System.GC]::WaitForPendingFinalizers()` before returning,
   ensuring memory is freed before the SMTP connection is attempted.
+
+---
+
+### [AD-PowerAdmin_Honeypot Module]
+
+**Changed:**
+- `New-HoneypotScheduledTask` -- rewritten to call `New-ADPAScheduledTask` (the Utils wrapper)
+  instead of directly invoking the low-level built-in task cmdlets. The function retains its
+  Honeypot-specific logic (removing any pre-existing task, computing the first-run datetime from
+  the configured interval). Principal selection, trigger construction, action construction,
+  settings, and registration are now handled by the shared wrapper, keeping all scheduled task
+  creation consistent across modules.
 
 ---
 
