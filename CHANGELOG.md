@@ -66,6 +66,25 @@
   operational need to diagnose why the daily scheduled task fails silently -- no logs, no emails,
   no errors visible -- without manually hunting through multiple event log sources.
 
+**Added:**
+- `Set-ReportsFolderAcl` -- private helper function that creates `$global:ReportsPath` if it does
+  not exist, then stamps an explicit `Allow Modify` ACE for the sMSA account (`$global:MsaAccountName$`)
+  onto the folder with `ObjectInherit` so log files written inside also carry the ACE. Called by
+  `Install-ADPowerAdmin` after `New-ADPowerAdminSmsaAccount`. Fixes the root cause of
+  `AD-PowerAdmin_Unattended.log` never being created: the sMSA's Domain Admins group membership is
+  not reliably resolved by Windows when evaluating filesystem ACLs in a scheduled-task token
+  context, so the inherited FullControl from Domain Admins does not reach the sMSA's process. An
+  explicit ACE removes that dependency.
+
+**Changed:**
+- `Install-ADPowerAdmin` -- added a post-install step (after DSInternals installation) that calls
+  `Set-ReportsFolderAcl` to ensure the Reports folder is created and the sMSA has explicit write
+  access before the validation step runs.
+- `Test-ADPowerAdminInstall` -- added two new checks: (8) Reports folder exists at
+  `$global:ReportsPath`; (9) sMSA account has an explicit `WriteData` ACE on the Reports folder.
+  These checks surface the permission gap that caused `AD-PowerAdmin_Unattended.log` to be silently
+  missing on every scheduled task run.
+
 **Fixed:**
 - `Invoke-ScheduledTaskDiagnostic` -- four problems caused the function to flood the console
   with errors and scroll endlessly through event log output: (1) `Get-WinEvent` queries had no

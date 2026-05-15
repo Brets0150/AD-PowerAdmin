@@ -594,6 +594,12 @@ function Install-ADPowerAdmin {
     # Install the DSInternals PowerShell module.
     Install-DSInternals
 
+    Write-Host ""
+    Write-Host "  [Post-install] Setting Reports folder permissions for sMSA..." -ForegroundColor Cyan
+    # Create the Reports folder and grant the sMSA explicit Modify access.
+    # This must run after New-ADPowerAdminSmsaAccount so the account already exists.
+    Set-ReportsFolderAcl
+
     # Test the AD-PowerAdmin install.
     Write-Host ""
     Write-Host "  [Post-install] Validating installation..." -ForegroundColor Cyan
@@ -897,6 +903,47 @@ function New-ADPowerAdminHomeFolder {
     # # Enable folder-level auditing
     Enable-AuditLogging -FolderPath "$global:InstallDirectory" -Principal "Everyone" -AuditSuccess $true -AuditFailure $true -Policy "File System" -AuditFlags "Success,Failure"
 # End of the Install-ADPowerAdminHomeFolder function.
+}
+
+Function Set-ReportsFolderAcl {
+    <#
+    .SYNOPSIS
+    Creates the Reports folder and grants the sMSA account explicit Modify access.
+
+    .DESCRIPTION
+    Called during installation after the sMSA account has been created. Relying on the
+    sMSA's Domain Admins group membership to grant filesystem write access is unreliable:
+    the scheduled-task token for an sMSA does not always resolve group membership when
+    evaluating ACLs. An explicit ACE on the Reports folder guarantees the sMSA can write
+    transcript logs regardless of token resolution behaviour.
+
+    .EXAMPLE
+    Set-ReportsFolderAcl
+    #>
+
+    # Create the Reports folder if it does not already exist.
+    if (-not (Test-Path -Path $global:ReportsPath)) {
+        New-Item -ItemType Directory -Path $global:ReportsPath -Force | Out-Null
+        Write-Host "  [INFO] Created Reports folder: $global:ReportsPath" -ForegroundColor Cyan
+    }
+
+    # Resolve the domain-qualified sMSA identity.  sMSA account names end with '$'.
+    [string]$DomainNetBios = (Get-ADDomain -ErrorAction SilentlyContinue).NetBIOSName
+    [string]$MsaIdentity   = "$DomainNetBios\$($global:MsaAccountName)`$"
+
+    try {
+        $Acl          = Get-Acl -Path $global:ReportsPath -ErrorAction Stop
+        $InheritFlags = [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+        $PropFlags    = [System.Security.AccessControl.PropagationFlags]::None
+        $Ace          = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                            $MsaIdentity, "Modify", $InheritFlags, $PropFlags, "Allow")
+        $Acl.AddAccessRule($Ace)
+        Set-Acl -Path $global:ReportsPath -AclObject $Acl -ErrorAction Stop
+        Write-Host "  [OK] Granted Modify access on Reports folder to '$MsaIdentity'." -ForegroundColor Green
+    } catch {
+        Write-Host "  [FAIL] Could not set Reports folder ACL: $($_.Exception.Message)" -ForegroundColor Red
+    }
+# End of Set-ReportsFolderAcl function.
 }
 
 function Enable-AuditLogging {
@@ -1407,6 +1454,30 @@ function Test-ADPowerAdminInstall {
     } else {
         Write-Host "The Install folder Audit Policies are incorrect" -ForegroundColor Red
         $TestAdPowerAdminInstallGood = $false
+    }
+
+    # Check that the Reports folder exists.
+    if (-not (Test-Path -Path $global:ReportsPath)) {
+        Write-Host "The Reports folder does not exist: $global:ReportsPath" -ForegroundColor Red
+        $TestAdPowerAdminInstallGood = $false
+    } else {
+        Write-Host "The Reports folder exists." -ForegroundColor Green
+
+        # Check that the sMSA account has an explicit Write ACE on the Reports folder.
+        [string]$DomainNetBios = (Get-ADDomain -ErrorAction SilentlyContinue).NetBIOSName
+        [string]$MsaIdentity   = "$DomainNetBios\$($global:MsaAccountName)`$"
+        $ReportsAcl = Get-Acl -Path $global:ReportsPath -ErrorAction SilentlyContinue
+        $MsaWriteAce = $ReportsAcl.Access | Where-Object {
+            $_.IdentityReference.Value -like "*$($global:MsaAccountName)*" -and
+            $_.AccessControlType -eq 'Allow' -and
+            (($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::WriteData) -ne 0)
+        }
+        if ($MsaWriteAce) {
+            Write-Host "The sMSA '$MsaIdentity' has write access to the Reports folder." -ForegroundColor Green
+        } else {
+            Write-Host "The sMSA '$MsaIdentity' does not have explicit write access to the Reports folder." -ForegroundColor Red
+            $TestAdPowerAdminInstallGood = $false
+        }
     }
 
     return $TestAdPowerAdminInstallGood
