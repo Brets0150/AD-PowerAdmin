@@ -1189,7 +1189,8 @@ Function Show-NTLMAuthEvents {
     [array]$Events = Get-NTLMAuthEvents -StartTime $StartTime -EndTime $EndTime
 
     if ($Events.Count -eq 0) {
-        Write-Host "  [INFO] No NTLM authentication events found in the selected time range." -ForegroundColor Green
+        Write-Host "  [OK] NTLMv1 : No events detected in the selected time range." -ForegroundColor Green
+        Write-Host "  [OK] NTLMv2 : No events detected in the selected time range." -ForegroundColor Green
         Write-Host "         Verify the NTLM Audit Policy GPO is applied and allow time for events to accumulate." -ForegroundColor Yellow
         Write-Host ""
         return
@@ -1273,19 +1274,23 @@ Function Start-DailyNTLMAuthReport {
     [array]$Events = Get-NTLMAuthEvents -StartTime $StartTime -EndTime $EndTime
 
     [string]$DateLabel = $EndTime.ToString('yyyy-MM-dd')
-    [string]$Subject   = "[AD-PowerAdmin] Daily NTLM Auth Summary - $DateLabel"
 
     if ($Events.Count -eq 0) {
         Send-Email -ToEmail $global:ADAdminEmail `
                    -FromEmail $global:FromEmail `
-                   -Subject $Subject `
-                   -Body "AD-PowerAdmin Daily NTLM Auth Summary - $DateLabel`r`n`r`nNo NTLM authentication events were recorded in the past 24 hours.`r`n`r`nThis may indicate that NTLM auditing is not yet enabled on domain controllers.`r`nApply the Enable NTLM Audit Policy GPO via the Best Practices GPO Deployer and allow time for events to accumulate.`r`n"
+                   -Subject "[AD-PowerAdmin] Daily NTLM Auth Summary - $DateLabel - No NTLMv1 or NTLMv2 Detected" `
+                   -Body "AD-PowerAdmin Daily NTLM Auth Summary - $DateLabel`r`n`r`nNTLMv1 : No events detected in the past 24 hours.`r`nNTLMv2 : No events detected in the past 24 hours.`r`n`r`nThis may indicate that NTLM auditing is not yet enabled on domain controllers.`r`nApply the Enable NTLM Audit Policy GPO via the Best Practices GPO Deployer and allow time for events to accumulate.`r`n"
         return
     }
 
     [int]$V1Count     = ($Events | Where-Object { $_.NTLMVersion -eq 'NTLMv1' }).Count
     [int]$V2Count     = ($Events | Where-Object { $_.NTLMVersion -eq 'NTLMv2' }).Count
     [int]$TotalEvents = $Events.Count
+
+    # Build a version-specific subject so the email subject alone conveys what was found.
+    [string]$V1Status = if ($V1Count -gt 0) { "NTLMv1: $V1Count DETECTED" } else { "NTLMv1: Clear" }
+    [string]$V2Status = if ($V2Count -gt 0) { "NTLMv2: $V2Count" } else { "NTLMv2: Clear" }
+    $Subject = "[AD-PowerAdmin] Daily NTLM Auth Summary - $DateLabel - $V1Status | $V2Status"
 
     [string]$Divider = "------------------------------------------------------------`r`n"
 
@@ -1295,9 +1300,11 @@ Function Start-DailyNTLMAuthReport {
     $EmailBody         += $Divider
     $EmailBody         += "Total Events : $TotalEvents`r`n"
     $EmailBody         += "NTLMv1       : $V1Count"
-    if ($V1Count -gt 0) { $EmailBody += "  ** NTLMv1 DETECTED -- HIGH RISK **" }
+    if ($V1Count -gt 0) { $EmailBody += "  ** NTLMv1 DETECTED -- HIGH RISK **" } else { $EmailBody += "  [NOT DETECTED]" }
     $EmailBody         += "`r`n"
-    $EmailBody         += "NTLMv2       : $V2Count`r`n"
+    $EmailBody         += "NTLMv2       : $V2Count"
+    if ($V2Count -eq 0) { $EmailBody += "  [NOT DETECTED]" }
+    $EmailBody         += "`r`n"
     $EmailBody         += $Divider
 
     # NTLMv1 section (highest risk -- list first).

@@ -454,6 +454,29 @@ Function Show-Diagnostics {
         Write-Host "    (none configured)" -ForegroundColor Gray
     }
 
+    # -------------------------------------------------------------------------
+    # Registered unattended jobs
+    # -------------------------------------------------------------------------
+    Write-Host ""
+    Write-Host $Dash -ForegroundColor Cyan
+    Write-Host "  Registered Unattended Jobs" -ForegroundColor Cyan
+    Write-Host $Dash -ForegroundColor Cyan
+    if ($global:UnattendedJobs -and $global:UnattendedJobs.Count -gt 0) {
+        $global:UnattendedJobs.GetEnumerator() | Sort-Object { $_.Value.Module }, { $_.Key } | ForEach-Object {
+            $JobKey   = $_.Key
+            $JobData  = $_.Value
+            $JobTitle = if ($JobData.Title)  { $JobData.Title }  else { "(no title)" }
+            $JobMod   = if ($JobData.Module) { $JobData.Module } else { "(unknown)" }
+            $JobDaily = if ($JobData.Daily)  { "Yes" }           else { "No" }
+            Write-Host ("  [{0}]" -f $JobKey) -ForegroundColor Yellow
+            Write-Host ("    {0,-20} : {1}" -f "Title",  $JobTitle) -ForegroundColor White
+            Write-Host ("    {0,-20} : {1}" -f "Module", $JobMod)   -ForegroundColor Gray
+            Write-Host ("    {0,-20} : {1}" -f "Daily",  $JobDaily) -ForegroundColor Gray
+        }
+    } else {
+        Write-Host "  (no unattended jobs registered)" -ForegroundColor Gray
+    }
+
     Write-Host ""
     Write-Host $Sep -ForegroundColor Cyan
     Write-Host ""

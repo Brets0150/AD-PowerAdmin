@@ -211,7 +211,7 @@ $script:GPOBestPractices = @(
     @{
         Id             = 'DisableNTLMProtocols'
         Title          = 'Disable NTLM Protocols'
-        Label          = "Disables LM/NTLMv1, restricts domain-level NTLM authentication, or both. Choose a variant at deployment time. AUDIT FIRST using the Enable NTLM Audit Policy option before enforcing restrictions to avoid breaking legacy dependencies."
+        Label          = "Disables NTLM protocols via Group Policy. Option 1 disables NTLMv1 and LM outbound while keeping NTLMv2. Option 2 disables all NTLM (v1, v2, and LM) outbound and denies all NTLM inbound on all machines and DCs. AUDIT FIRST using Enable NTLM Audit Policy before applying option 2."
         AppliesTo      = @('All Computers', 'Domain Controllers', 'Servers', 'Workstations')
         Description    = @(
             'NTLM authentication, especially NTLMv1, exposes credential material to capture,',
@@ -222,15 +222,29 @@ $script:GPOBestPractices = @(
             'Legacy devices, printers, NAS appliances, and embedded systems may break.',
             'Use the Enable NTLM Audit Policy GPO and review logs before deploying this.'
         )
-        Note           = 'If restricting all domain NTLM, fix Kerberos dependencies first: use FQDNs instead of IP addresses, correct missing SPNs, and update legacy applications. Start with restriction level 1 and escalate after validating no breakage.'
+        Note           = 'Fix Kerberos dependencies before applying Option 2: use FQDNs instead of IP addresses, correct missing SPNs, and update legacy applications. Always start with Option 1 and escalate to Option 2 only after confirming no NTLM-dependent breakage.'
+        SelectionGuide = @(
+            'Option 1 -- Recommended starting point for most environments.',
+            '  Removes NTLMv1 and LM (the weakest NTLM variants) while keeping NTLMv2 available',
+            '  for services that have not yet been migrated to Kerberos. Breakage is typically',
+            '  limited to very old embedded devices and legacy Samba servers.',
+            '',
+            'Option 2 -- Full NTLM elimination. Apply only after validating with Option 1.',
+            '  Disables NTLMv2 in addition to NTLMv1 and LM. Requires the Enable NTLM Audit',
+            '  Policy GPO to have been running for at least 14-30 days with zero remaining',
+            '  NTLM events. All systems must be reachable by FQDN, all SPNs must be correctly',
+            '  registered, and Kerberos must be fully functional before this is safe to apply.',
+            '  Printers, NAS appliances, and legacy line-of-business applications frequently',
+            '  require NTLM and must be remediated or excepted before enabling this option.'
+        )
         DefaultGpoName = 'CorpSec-Disable-NTLM'
         GpoDescription = 'NTLM protocol restriction policy. Deployed by AD-PowerAdmin Best Practices GPO Deployer.'
         RegistrySettings = @()
         Variants = @(
             @{
-                Label          = '1. Disable LM and NTLMv1 only  (clients send NTLMv2; DCs refuse LM and NTLM)'
-                DefaultGpoName = 'CorpSec-Disable-NTLMv1'
-                GpoDescription = 'Disables LM and NTLMv1. LmCompatibilityLevel=5. Deployed by AD-PowerAdmin Best Practices GPO Deployer.'
+                Label          = '1. Disable NTLMv1 and LM outbound; deny NTLMv1 and LM inbound  (all machines and DCs; NTLMv2 still allowed)'
+                DefaultGpoName = 'CorpSec-Disable-NTLMv1-LM'
+                GpoDescription = 'Disables NTLMv1 and LM outbound and denies NTLMv1 and LM inbound on all machines. NTLMv2 remains allowed. Deployed by AD-PowerAdmin Best Practices GPO Deployer.'
                 RegistrySettings = @(
                     @{
                         Key       = 'HKLM\SYSTEM\CurrentControlSet\Control\Lsa'
@@ -241,24 +255,9 @@ $script:GPOBestPractices = @(
                 )
             },
             @{
-                Label          = '2. Restrict all domain NTLM authentication  (blocks NTLMv2 for domain accounts -- AUDIT FIRST)'
-                DefaultGpoName = 'CorpSec-Restrict-NTLM-Domain'
-                GpoDescription = 'Restricts domain-level NTLM authentication. RestrictNTLMInDomain configured. Deployed by AD-PowerAdmin Best Practices GPO Deployer.'
-                RegistrySettings = @(
-                    @{
-                        Key          = 'HKLM\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters'
-                        ValueName    = 'RestrictNTLMInDomain'
-                        Type         = 'DWord'
-                        Value        = 1
-                        Configurable = $true
-                        Prompt       = 'Domain NTLM restriction level: 1=Deny domain accounts to domain servers (recommended start), 3=Deny all domain accounts, 5=Deny domain accounts to domain and remote servers, 7=Deny all. Enter a number:'
-                    }
-                )
-            },
-            @{
-                Label          = '3. Disable NTLMv1 AND restrict all domain NTLM  (both controls combined -- AUDIT FIRST)'
-                DefaultGpoName = 'CorpSec-Disable-NTLM-All'
-                GpoDescription = 'Disables NTLMv1 and restricts domain-level NTLM authentication. Deployed by AD-PowerAdmin Best Practices GPO Deployer.'
+                Label          = '2. Disable all NTLM outbound; deny all NTLM inbound  (all machines and DCs; blocks NTLMv1, NTLMv2, and LM -- AUDIT FIRST)'
+                DefaultGpoName = 'CorpSec-Disable-All-NTLM'
+                GpoDescription = 'Disables all NTLM (v1, v2, LM) outbound and denies all NTLM inbound on all machines and domain controllers. Deployed by AD-PowerAdmin Best Practices GPO Deployer.'
                 RegistrySettings = @(
                     @{
                         Key       = 'HKLM\SYSTEM\CurrentControlSet\Control\Lsa'
@@ -267,12 +266,22 @@ $script:GPOBestPractices = @(
                         Value     = 5
                     },
                     @{
-                        Key          = 'HKLM\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters'
-                        ValueName    = 'RestrictNTLMInDomain'
-                        Type         = 'DWord'
-                        Value        = 1
-                        Configurable = $true
-                        Prompt       = 'Domain NTLM restriction level: 1=Deny domain accounts to domain servers (recommended start), 3=Deny all domain accounts, 5=Deny domain accounts to domain and remote servers, 7=Deny all. Enter a number:'
+                        Key       = 'HKLM\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
+                        ValueName = 'RestrictSendingNTLMTraffic'
+                        Type      = 'DWord'
+                        Value     = 2
+                    },
+                    @{
+                        Key       = 'HKLM\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
+                        ValueName = 'RestrictReceivingNTLMTraffic'
+                        Type      = 'DWord'
+                        Value     = 2
+                    },
+                    @{
+                        Key       = 'HKLM\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters'
+                        ValueName = 'RestrictNTLMInDomain'
+                        Type      = 'DWord'
+                        Value     = 7
                     }
                 )
             }
@@ -648,77 +657,89 @@ Function Invoke-GPOBestPracticeDeployment {
         return
     }
 
-    # Display header
+    [bool]$IsVariantEntry = ($null -ne $BP.Variants -and $BP.Variants.Count -gt 0)
+
+    # -----------------------------------------------------------------------
+    # HELP SECTION
+    # Displayed first so the administrator understands what the settings do
+    # and, for variant entries, which option to choose before any scan or
+    # selection prompt appears.
+    # -----------------------------------------------------------------------
     Write-Host ""
     Write-Host "  === $($BP.Title) ===" -ForegroundColor Cyan
     Write-Host ""
 
-    # Applies-to scope
     if ($BP.AppliesTo -and $BP.AppliesTo.Count -gt 0) {
         Write-Host "  Applies To: $($BP.AppliesTo -join ', ')" -ForegroundColor Magenta
         Write-Host ""
     }
 
-    # Description lines
     foreach ($Line in $BP.Description) {
         Write-Host "  $Line" -ForegroundColor Yellow
     }
 
-    # Registry setting summary
-    if ($null -ne $BP.RegistrySettings -and $BP.RegistrySettings.Count -gt 0) {
-        Write-Host ""
-        foreach ($S in $BP.RegistrySettings) {
-            [string]$Tag = if ($S.Configurable) { ' [configurable]' } else { '' }
-            Write-Host "  Setting : $($S.ValueName) = $($S.Value) ($($S.Type))$Tag" -ForegroundColor White
-            Write-Host "  Registry: $($S.Key)" -ForegroundColor White
+    # For non-variant entries show the full settings summary here so the
+    # administrator knows exactly what will be written before the scan runs.
+    if (-not $IsVariantEntry) {
+        if ($null -ne $BP.RegistrySettings -and $BP.RegistrySettings.Count -gt 0) {
+            Write-Host ""
+            foreach ($S in $BP.RegistrySettings) {
+                [string]$Tag = if ($S.Configurable) { ' [configurable]' } else { '' }
+                Write-Host "  Setting : $($S.ValueName) = $($S.Value) ($($S.Type))$Tag" -ForegroundColor White
+                Write-Host "  Registry: $($S.Key)" -ForegroundColor White
+            }
+        }
+        if ($null -ne $BP.SecuritySettings -and $BP.SecuritySettings.Count -gt 0) {
+            Write-Host ""
+            foreach ($S in $BP.SecuritySettings) {
+                [string]$Tag = if ($S.Configurable) { ' [configurable]' } else { '' }
+                Write-Host "  Policy  : $($S.Key) = $($S.Value) [$($S.Section)]$Tag" -ForegroundColor White
+            }
         }
     }
 
-    # Security setting summary
-    if ($null -ne $BP.SecuritySettings -and $BP.SecuritySettings.Count -gt 0) {
+    # For variant entries show the SelectionGuide so the administrator can
+    # compare options before the variant selection prompt appears.
+    if ($IsVariantEntry -and $null -ne $BP.SelectionGuide -and $BP.SelectionGuide.Count -gt 0) {
         Write-Host ""
-        foreach ($S in $BP.SecuritySettings) {
-            [string]$Tag = if ($S.Configurable) { ' [configurable]' } else { '' }
-            Write-Host "  Policy  : $($S.Key) = $($S.Value) [$($S.Section)]$Tag" -ForegroundColor White
+        foreach ($Line in $BP.SelectionGuide) {
+            Write-Host "  $Line" -ForegroundColor White
         }
     }
 
-    # Optional note
     if (-not [string]::IsNullOrWhiteSpace($BP.Note)) {
         Write-Host ""
         Write-Host "  NOTE: $($BP.Note)" -ForegroundColor DarkGray
     }
     Write-Host ""
 
-    # Variant selection -- when the entry defines Variants, prompt before the
-    # setting summary and coverage check so downstream code sees the resolved settings.
-    if ($null -ne $BP.Variants -and $BP.Variants.Count -gt 0) {
-        $SelectedVariant = Select-BestPracticeVariant -Variants $BP.Variants
-        if ($null -eq $SelectedVariant) {
-            Write-Host "  [INFO] Operation cancelled." -ForegroundColor Cyan
-            return
-        }
-        $BP = $BP.Clone()
-        $BP['RegistrySettings'] = $SelectedVariant.RegistrySettings
-        if ($SelectedVariant.ContainsKey('DefaultGpoName')) { $BP['DefaultGpoName'] = $SelectedVariant.DefaultGpoName }
-        if ($SelectedVariant.ContainsKey('GpoDescription')) { $BP['GpoDescription'] = $SelectedVariant.GpoDescription }
-
-        # Display the resolved registry settings for the chosen variant.
-        Write-Host ""
-        foreach ($S in $BP.RegistrySettings) {
-            [string]$Tag = if ($S.Configurable) { ' [configurable]' } else { '' }
-            Write-Host "  Setting : $($S.ValueName) = $($S.Value) ($($S.Type))$Tag" -ForegroundColor White
-            Write-Host "  Registry: $($S.Key)" -ForegroundColor White
-        }
-        Write-Host ""
-    }
-
-    # Coverage check: scan all domain GPOs for exact and partial overlaps
+    # -----------------------------------------------------------------------
+    # COVERAGE SCAN
+    # Runs after the help section but before any user selection so the
+    # administrator sees what is already in the domain while the context is
+    # still fresh. For variant entries all settings across all variants are
+    # scanned (deduplicated) so the full picture is visible before the
+    # variant is chosen.
+    # -----------------------------------------------------------------------
     Write-Host "  Checking existing GPOs for overlapping settings..." -ForegroundColor Cyan
     $CoverageResults = [System.Collections.Generic.List[PSCustomObject]]::new()
 
-    if ($null -ne $BP.RegistrySettings) {
-        foreach ($Setting in $BP.RegistrySettings) {
+    # Build the settings list to scan.
+    $RegistryToScan = if ($IsVariantEntry) {
+        $Seen     = [System.Collections.Generic.HashSet[string]]::new()
+        $Combined = [System.Collections.Generic.List[hashtable]]::new()
+        foreach ($V in $BP.Variants) {
+            foreach ($S in $V.RegistrySettings) {
+                if ($Seen.Add("$($S.Key)|$($S.ValueName)")) { $Combined.Add($S) }
+            }
+        }
+        $Combined.ToArray()
+    } else {
+        $BP.RegistrySettings
+    }
+
+    if ($null -ne $RegistryToScan) {
+        foreach ($Setting in $RegistryToScan) {
             $Hits = Search-GPOSetting -Key $Setting.Key -ValueName $Setting.ValueName `
                 -ExpectedValue $Setting.Value -Force
             foreach ($H in $Hits) {
@@ -758,6 +779,32 @@ Function Invoke-GPOBestPracticeDeployment {
         }
     } else {
         Write-Host "  [INFO] No overlapping settings found in existing GPOs." -ForegroundColor Green
+        Write-Host ""
+    }
+
+    # -----------------------------------------------------------------------
+    # VARIANT SELECTION
+    # Appears after the help section and coverage scan so the administrator
+    # has full context (what the options do, what already exists) before
+    # making a selection.
+    # -----------------------------------------------------------------------
+    if ($IsVariantEntry) {
+        $SelectedVariant = Select-BestPracticeVariant -Variants $BP.Variants
+        if ($null -eq $SelectedVariant) {
+            Write-Host "  [INFO] Operation cancelled." -ForegroundColor Cyan
+            return
+        }
+        $BP = $BP.Clone()
+        $BP['RegistrySettings'] = $SelectedVariant.RegistrySettings
+        if ($SelectedVariant.ContainsKey('DefaultGpoName')) { $BP['DefaultGpoName'] = $SelectedVariant.DefaultGpoName }
+        if ($SelectedVariant.ContainsKey('GpoDescription')) { $BP['GpoDescription'] = $SelectedVariant.GpoDescription }
+
+        Write-Host ""
+        foreach ($S in $BP.RegistrySettings) {
+            [string]$Tag = if ($S.Configurable) { ' [configurable]' } else { '' }
+            Write-Host "  Setting : $($S.ValueName) = $($S.Value) ($($S.Type))$Tag" -ForegroundColor White
+            Write-Host "  Registry: $($S.Key)" -ForegroundColor White
+        }
         Write-Host ""
     }
 

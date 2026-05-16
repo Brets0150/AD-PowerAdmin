@@ -4,6 +4,66 @@
 
 ---
 
+### [AD-PowerAdmin_GPOBestPracticesDeployer — NTLM Variant Redesign, Help Section, and Coverage-Check Ordering]
+
+**Changed:**
+- `DisableNTLMProtocols` (best-practice definition) -- redesigned from three variants to two.
+  The previous options mixed "Disable" and "Restrict" terminology inconsistently and left a gap:
+  no option blocked all NTLM at the machine level. The new variants follow a consistent language
+  framework (outbound = "disable"; inbound = "deny") and cover two distinct hardening levels.
+  Variant 1 (`CorpSec-Disable-NTLMv1-LM`) sets `LmCompatibilityLevel=5` to disable NTLMv1 and
+  LM outbound on all machines and deny NTLMv1/LM inbound at DCs, while NTLMv2 remains allowed.
+  Variant 2 (`CorpSec-Disable-All-NTLM`) adds `RestrictSendingNTLMTraffic=2`,
+  `RestrictReceivingNTLMTraffic=2`, and `RestrictNTLMInDomain=7` to disable all NTLM outbound
+  and deny all NTLM inbound on every machine and at DCs -- NTLMv2 is also blocked. Variant 2
+  carries an AUDIT FIRST warning and should only be applied after reviewing logs with the
+  Enable NTLM Audit Policy GPO.
+- `DisableNTLMProtocols` (best-practice definition) -- added `SelectionGuide` field. This
+  new field provides a concise decision guide explaining when to choose Option 1 vs Option 2,
+  what prerequisites each requires, and what breakage risk each carries. The guide is displayed
+  before the variant selection prompt so administrators have full context before choosing.
+- `Invoke-GPOBestPracticeDeployment` -- redesigned the deployment workflow display order.
+  The function now follows: help section (AppliesTo, Description, settings summary or
+  SelectionGuide, Note) -> coverage scan -> variant selection (if applicable) -> application
+  mode. For variant entries the coverage scan now collects all registry settings across all
+  variants (deduplicated by Key and ValueName) and scans the entire set before the variant
+  selection prompt appears, giving administrators a complete picture of what already exists
+  in the domain before they choose an option. Previously the scan ran after variant selection,
+  leaving no domain-state visibility at decision time.
+
+---
+
+### [AD-PowerAdmin_LogMgr — NTLM Auth Reporting]
+
+**Changed:**
+- `Show-NTLMAuthEvents` -- when no events are found, the console message now reports NTLMv1 and
+  NTLMv2 status on separate lines (`[OK] NTLMv1 : No events detected` / `[OK] NTLMv2 : No events
+  detected`) instead of a single generic "no NTLM authentication events found" line. This makes
+  it explicit which NTLM versions were audited and found clear, which is important when validating
+  that both protocol versions have been eliminated from the environment.
+- `Start-DailyNTLMAuthReport` -- when no events are found, the email subject now reads
+  `No NTLMv1 or NTLMv2 Detected` and the body lists NTLMv1 and NTLMv2 status on separate lines,
+  matching the interactive display change above.
+- `Start-DailyNTLMAuthReport` -- when events are found, the email subject now includes per-version
+  status (e.g., `NTLMv1: 3 DETECTED | NTLMv2: 47`) so the security posture is visible from the
+  inbox without opening the message.
+- `Start-DailyNTLMAuthReport` -- the email body NTLMv1 and NTLMv2 count lines now append
+  `[NOT DETECTED]` when a version's count is zero, providing an explicit clear status rather than
+  a bare zero.
+
+---
+
+### [AD-PowerAdmin.ps1 — Diagnostics]
+
+**Changed:**
+- `Show-Diagnostics` -- added a "Registered Unattended Jobs" section at the end of the `d`
+  (diagnostics) display. For each entry in `$global:UnattendedJobs` the section shows the job
+  key, title, sourcing module, and whether it is flagged as a Daily job. Entries are sorted
+  first by module name then by job key, making it straightforward to identify which module
+  contributes each scheduled job and whether any expected jobs failed to register.
+
+---
+
 ### [AD-PowerAdmin.ps1 — Module Loading]
 
 **Changed:**
@@ -119,6 +179,26 @@
   folder exists at `$global:ReportsPath`; (10) sMSA has an explicit `WriteData` ACE on the Reports
   folder. These checks surface the permission gaps that caused modules to not load and the
   unattended log to be missing on every scheduled run.
+
+**Changed:**
+- `Show-InstallHelp` -- updated to match the current six-step installer structure and to add a
+  complete troubleshooting section based on root causes discovered during scheduled task
+  diagnostics. Changes: (1) Updated topic list from three parts to four; (2) "Confirm
+  Installation Directory" redesignated from Step 1 to an "Initial Confirmation" section, keeping
+  it as a pre-step before the six numbered steps; (3) Remaining steps renumbered: old Steps 2-6
+  are now Steps 1-5; (4) Added new Step 6 description for `Set-ReportsFolderAcl`, explaining the
+  two explicit sMSA ACEs (ReadAndExecute on install directory; Modify on Reports folder), why
+  explicit ACEs are required in a scheduled-task token context, and what silently fails without
+  each ACE; (5) `Install DSInternals` promoted from Step 7 (numbered) to a post-install section
+  header to match the installer's actual structure; (6) Post-installation checks section expanded
+  from six to ten checks, adding: sMSA has explicit ReadData on install directory, Reports folder
+  exists, sMSA has explicit WriteData on Reports folder; (7) Added Part 4 -- Troubleshooting with
+  four sections: "Symptom: Unattended Log Not Created" (sMSA write permission, Modify ACE fix),
+  "Symptom: Task Runs but No Jobs Execute" (sMSA read permission, ReadAndExecute ACE fix),
+  "Symptom: Stop-Transcript Warnings in the Event Log" (PS 5.1 transcript conflict, cosmetic when
+  alone), "Diagnostic Tool: Diagnose Scheduled Task" (what it triggers, what it collects, how to
+  read the output), and "Reading Module Load Status in the Unattended Log" (explaining [OK]/[SKIP]/
+  [FAIL] codes and the '.psd1 files found : 0' signal that indicates missing read permissions).
 
 **Fixed:**
 - `Invoke-ScheduledTaskDiagnostic` -- four problems caused the function to flood the console
