@@ -4,6 +4,20 @@
 
 ---
 
+### [AD-PowerAdmin.ps1 — Module Loading]
+
+**Changed:**
+- `Initialize-AllModules` -- added per-module diagnostic output captured by the debug transcript.
+  The function now logs the module path, how many `.psd1` files `Get-ChildItem` found, and an
+  `[OK]` / `[FAIL]` / `[SKIP]` result for each manifest import. If `Get-ChildItem` returns zero
+  files (the symptom when the sMSA lacks read access to the Modules folder), a `[FAIL]` message
+  is written and the function returns immediately instead of silently proceeding with no modules.
+  Previously, `Import-Module` was called with `-Verbose` (noisy) and the loop was wrapped in a
+  single `try/catch` that couldn't distinguish which module failed; changed to per-module
+  `try/catch` with `-ErrorAction Stop`. Removed `-Verbose` flag.
+
+---
+
 ### [AD-PowerAdmin.ps1 — Unattended Run Logging]
 
 **Changed:**
@@ -83,14 +97,15 @@
   no errors visible -- without manually hunting through multiple event log sources.
 
 **Added:**
-- `Set-ReportsFolderAcl` -- private helper function that creates `$global:ReportsPath` if it does
-  not exist, then stamps an explicit `Allow Modify` ACE for the sMSA account (`$global:MsaAccountName$`)
-  onto the folder with `ObjectInherit` so log files written inside also carry the ACE. Called by
-  `Install-ADPowerAdmin` after `New-ADPowerAdminSmsaAccount`. Fixes the root cause of
-  `AD-PowerAdmin_Unattended.log` never being created: the sMSA's Domain Admins group membership is
-  not reliably resolved by Windows when evaluating filesystem ACLs in a scheduled-task token
-  context, so the inherited FullControl from Domain Admins does not reach the sMSA's process. An
-  explicit ACE removes that dependency.
+- `Set-ReportsFolderAcl` -- private helper that stamps two explicit sMSA ACEs on every Step 6
+  run: (1) `ReadAndExecute` with `ContainerInherit + ObjectInherit` on `$global:InstallDirectory`,
+  propagating to `Modules/` and all subdirectories so the sMSA's scheduled-task process can read
+  and load modules; (2) `Modify` with `ObjectInherit` on `$global:ReportsPath` so the sMSA can
+  write transcript logs and CSV exports. Both ACEs are necessary because the sMSA's Domain Admins
+  group membership is not reliably evaluated for filesystem ACLs in a scheduled-task token context;
+  explicit ACEs remove that dependency. Previously only granted Modify on the Reports folder, which
+  allowed the unattended log to be created but left modules unreadable, resulting in zero registered
+  jobs on every scheduled run.
 
 **Changed:**
 - `Install-ADPowerAdmin` -- `New-ADPowerAdminHomeFolder` (install directory ACL setup) was
@@ -99,10 +114,11 @@
   that always runs. `Set-ReportsFolderAcl` promoted from a post-install note to numbered Step 6.
   Step labels updated from `/5` to `/6`. Permission setup (install directory and Reports folder)
   now runs unconditionally on every installer invocation.
-- `Test-ADPowerAdminInstall` -- added two new checks: (8) Reports folder exists at
-  `$global:ReportsPath`; (9) sMSA account has an explicit `WriteData` ACE on the Reports folder.
-  These checks surface the permission gap that caused `AD-PowerAdmin_Unattended.log` to be silently
-  missing on every scheduled task run.
+- `Test-ADPowerAdminInstall` -- added three new checks: (8) sMSA has an explicit `ReadData` ACE
+  on the install directory (absence causes zero modules to load in unattended mode); (9) Reports
+  folder exists at `$global:ReportsPath`; (10) sMSA has an explicit `WriteData` ACE on the Reports
+  folder. These checks surface the permission gaps that caused modules to not load and the
+  unattended log to be missing on every scheduled run.
 
 **Fixed:**
 - `Invoke-ScheduledTaskDiagnostic` -- four problems caused the function to flood the console

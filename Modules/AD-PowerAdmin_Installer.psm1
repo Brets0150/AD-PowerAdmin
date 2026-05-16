@@ -909,35 +909,57 @@ function New-ADPowerAdminHomeFolder {
 Function Set-ReportsFolderAcl {
     <#
     .SYNOPSIS
-    Creates the Reports folder and grants the sMSA account explicit Modify access.
+    Sets explicit sMSA ACEs on the install directory and Reports folder.
 
     .DESCRIPTION
     Called during installation after the sMSA account has been created. Relying on the
-    sMSA's Domain Admins group membership to grant filesystem write access is unreliable:
-    the scheduled-task token for an sMSA does not always resolve group membership when
-    evaluating ACLs. An explicit ACE on the Reports folder guarantees the sMSA can write
-    transcript logs regardless of token resolution behaviour.
+    sMSA's Domain Admins group membership to grant filesystem access is unreliable: the
+    scheduled-task token for an sMSA does not always resolve group membership when evaluating
+    ACLs. This function stamps two explicit ACEs:
+
+      1. ReadAndExecute (ContainerInherit + ObjectInherit) on the install directory.
+         This propagates to Modules/ and all other subdirectories, ensuring the sMSA
+         can read and load modules when running as a scheduled task.
+
+      2. Modify (ObjectInherit) on the Reports folder so the sMSA can write transcript
+         logs and CSV exports.
 
     .EXAMPLE
     Set-ReportsFolderAcl
     #>
 
-    # Create the Reports folder if it does not already exist.
-    if (-not (Test-Path -Path $global:ReportsPath)) {
-        New-Item -ItemType Directory -Path $global:ReportsPath -Force | Out-Null
-        Write-Host "  [INFO] Created Reports folder: $global:ReportsPath" -ForegroundColor Cyan
-    }
-
     # Resolve the domain-qualified sMSA identity.  sMSA account names end with '$'.
     [string]$DomainNetBios = (Get-ADDomain -ErrorAction SilentlyContinue).NetBIOSName
     [string]$MsaIdentity   = "$DomainNetBios\$($global:MsaAccountName)`$"
 
+    $FullInherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+                   [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $PropNone    = [System.Security.AccessControl.PropagationFlags]::None
+
+    # --- Install directory: ReadAndExecute with full inheritance ---
+    # This covers Modules/ and every other subdirectory the sMSA needs to read.
     try {
-        $Acl          = Get-Acl -Path $global:ReportsPath -ErrorAction Stop
-        $InheritFlags = [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-        $PropFlags    = [System.Security.AccessControl.PropagationFlags]::None
-        $Ace          = New-Object System.Security.AccessControl.FileSystemAccessRule(
-                            $MsaIdentity, "Modify", $InheritFlags, $PropFlags, "Allow")
+        $Acl = Get-Acl -Path $global:InstallDirectory -ErrorAction Stop
+        $Ace = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                   $MsaIdentity, "ReadAndExecute", $FullInherit, $PropNone, "Allow")
+        $Acl.AddAccessRule($Ace)
+        Set-Acl -Path $global:InstallDirectory -AclObject $Acl -ErrorAction Stop
+        Write-Host "  [OK] Granted ReadAndExecute on install directory to '$MsaIdentity'." -ForegroundColor Green
+    } catch {
+        Write-Host "  [FAIL] Could not set install directory ACL: $($_.Exception.Message)" -ForegroundColor Red
+    }
+
+    # --- Reports folder: Modify with ObjectInherit so log files inherit the ACE ---
+    if (-not (Test-Path -Path $global:ReportsPath)) {
+        New-Item -ItemType Directory -Path $global:ReportsPath -Force | Out-Null
+        Write-Host "  [INFO] Created Reports folder: $global:ReportsPath" -ForegroundColor Cyan
+    }
+    try {
+        $Acl = Get-Acl -Path $global:ReportsPath -ErrorAction Stop
+        $Ace = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                   $MsaIdentity, "Modify",
+                   [System.Security.AccessControl.InheritanceFlags]::ObjectInherit,
+                   $PropNone, "Allow")
         $Acl.AddAccessRule($Ace)
         Set-Acl -Path $global:ReportsPath -AclObject $Acl -ErrorAction Stop
         Write-Host "  [OK] Granted Modify access on Reports folder to '$MsaIdentity'." -ForegroundColor Green
@@ -1454,6 +1476,23 @@ function Test-ADPowerAdminInstall {
         Write-Host "The Install folder Audit Policies are set correctly" -ForegroundColor Green
     } else {
         Write-Host "The Install folder Audit Policies are incorrect" -ForegroundColor Red
+        $TestAdPowerAdminInstallGood = $false
+    }
+
+    # Check that the sMSA has explicit ReadAndExecute on the install directory.
+    # Without this the sMSA's scheduled-task process cannot read Modules/ and no jobs load.
+    [string]$DomainNetBiosTmp = (Get-ADDomain -ErrorAction SilentlyContinue).NetBIOSName
+    [string]$MsaIdentityTmp   = "$DomainNetBiosTmp\$($global:MsaAccountName)`$"
+    $InstallAcl = Get-Acl -Path $global:InstallDirectory -ErrorAction SilentlyContinue
+    $MsaReadAce = $InstallAcl.Access | Where-Object {
+        $_.IdentityReference.Value -like "*$($global:MsaAccountName)*" -and
+        $_.AccessControlType -eq 'Allow' -and
+        (($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::ReadData) -ne 0)
+    }
+    if ($MsaReadAce) {
+        Write-Host "The sMSA '$MsaIdentityTmp' has read access to the install directory." -ForegroundColor Green
+    } else {
+        Write-Host "The sMSA '$MsaIdentityTmp' does NOT have explicit read access to the install directory." -ForegroundColor Red
         $TestAdPowerAdminInstallGood = $false
     }
 

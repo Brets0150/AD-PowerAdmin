@@ -624,21 +624,31 @@ function Initialize-AllModules {
     Get-IncompatibleModules | Out-Null
     [array]$incompatibleNames = $global:IncompatibleModules | Select-Object -ExpandProperty Name
 
-    # Try to import the models from the Modules folder and catch any errors.
-    try {
-        # We only want to import the module manifests. This ensures the modules are loaded in the correct order and only things we want are loaded.
-        # Do not change this to import the modules directly(".psm1"). Don't be lazy, write the module manifest.
-        Get-ChildItem -Path $global:ModulesPath -Filter *.psd1 | ForEach-Object {
-            if ($incompatibleNames -contains $_.BaseName) { return }
-            Import-Module "$global:ModulesPath\\$($_.Name)" -Force -Verbose
-        }
-        clear-host
-    } catch {
-        Write-Host "Error: Could not import the modules from the Modules folder.
-        Please ensure that the script is being run from a PowerShell prompt (i.e. not from a script or batch file).
-        The Modules folder needs to be located in the same directory as the main AD-PowerAdmin.ps1 file, in the `"Modules`" folder" -ForegroundColor Red
-        exit 1
+    Write-Host "  [INFO] Module path  : $global:ModulesPath"
+
+    [array]$PsdFiles = @(Get-ChildItem -Path $global:ModulesPath -Filter *.psd1 -ErrorAction SilentlyContinue)
+    Write-Host "  [INFO] .psd1 files found : $($PsdFiles.Count)"
+
+    if ($PsdFiles.Count -eq 0) {
+        Write-Host "  [FAIL] No module manifests found. The sMSA account may lack read access to the Modules folder." -ForegroundColor Red
+        Write-Host "         Run 'Install AD-PowerAdmin' to repair folder permissions." -ForegroundColor Yellow
+        return
     }
+
+    foreach ($PsdFile in $PsdFiles) {
+        if ($incompatibleNames -contains $PsdFile.BaseName) {
+            Write-Host "  [SKIP] $($PsdFile.Name) (requires PS version higher than current session)"
+            continue
+        }
+        try {
+            Import-Module "$global:ModulesPath\\$($PsdFile.Name)" -Force -ErrorAction Stop
+            Write-Host "  [OK]   $($PsdFile.Name)"
+        } catch {
+            Write-Host "  [FAIL] $($PsdFile.Name) : $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+
+    clear-host
 }
 
 function Initialize-ADPowerAdmin {
