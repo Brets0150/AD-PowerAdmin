@@ -4,6 +4,18 @@
 
 ---
 
+### [AD-PowerAdmin_HIBP_PwndPwMgr — Weak Password Download TLS Fix]
+
+**Fixed:**
+- `Get-WeakPasswordsList` -- replaced the call to `Enable-OldWindowsTLS12` (a function from
+  `AD-PowerAdmin_Utils`) with the module-local `Initialize-HibpTls12`. The Utils function was
+  never guaranteed to be loaded when `Get-WeakPasswordsList` runs, causing a "not recognized"
+  error that silently aborted the download. The HIBP module already contains `Initialize-HibpTls12`
+  for this exact purpose; using it eliminates the cross-module dependency and matches how the
+  HIBP downloader itself enables TLS 1.2 in all other paths.
+
+---
+
 ### [AD-PowerAdmin_GPOBestPracticesDeployer — NTLM Variant Redesign, Help Section, and Coverage-Check Ordering]
 
 **Changed:**

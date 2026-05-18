@@ -1261,7 +1261,7 @@ Function Get-WeakPasswordsList {
     try {
         Write-Host "Downloading weak password list from weakpasswords.net..." -ForegroundColor Yellow
         Write-Host "Output file: $OutFile" -ForegroundColor Yellow
-        Enable-OldWindowsTLS12
+        Initialize-HibpTls12
         Invoke-WebRequest -Uri 'https://weakpasswords.net/' -UseBasicParsing -OutFile $OutFile
         Write-Host "Weak password list downloaded successfully." -ForegroundColor Green
         return $true
