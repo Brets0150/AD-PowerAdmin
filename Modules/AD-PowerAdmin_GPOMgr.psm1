@@ -957,6 +957,12 @@ Function New-ADPAGPO {
         [Parameter(Mandatory=$false)]
         [string]$Domain = '',
 
+        # Target DC for all GroupPolicy operations. Pass the PDC emulator FQDN when the
+        # caller also needs to run Get-ADObject / Set-ADObject against the same object
+        # immediately after creation, to avoid a replication race between DCs.
+        [Parameter(Mandatory=$false)]
+        [string]$Server = '',
+
         [Parameter(Mandatory=$false)]
         [switch]$Force
     )
@@ -964,8 +970,11 @@ Function New-ADPAGPO {
     if (-not (Test-GPOMgrPreFlight)) { return $null }
     $ResolvedDomain = Get-ResolvedDomain -Domain $Domain
 
+    $GpoQueryParams = @{ Name = $Name; Domain = $ResolvedDomain; ErrorAction = 'SilentlyContinue' }
+    if ($Server) { $GpoQueryParams['Server'] = $Server }
+
     # Idempotency check
-    $Existing = Get-GPO -Name $Name -Domain $ResolvedDomain -ErrorAction SilentlyContinue
+    $Existing = Get-GPO @GpoQueryParams
     if ($null -ne $Existing) {
         if (-not $Force) {
             Write-Host "[OK] GPO '$Name' already exists. Returning existing object." -ForegroundColor Green
@@ -975,7 +984,9 @@ Function New-ADPAGPO {
 
     if ($PSCmdlet.ShouldProcess("Domain '$ResolvedDomain'", "Create GPO '$Name'")) {
         try {
-            $NewGpo = New-GPO -Name $Name -Comment $Description -Domain $ResolvedDomain -ErrorAction Stop
+            $NewGpoParams = @{ Name = $Name; Comment = $Description; Domain = $ResolvedDomain; ErrorAction = 'Stop' }
+            if ($Server) { $NewGpoParams['Server'] = $Server }
+            $NewGpo = New-GPO @NewGpoParams
             Write-Host "[OK] GPO '$Name' created successfully." -ForegroundColor Green
             return $NewGpo
         } catch {
