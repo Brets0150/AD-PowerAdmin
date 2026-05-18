@@ -1548,10 +1548,34 @@ Function New-ADPAuditPolicyGpo {
         $SecurityCseBlock    = '[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]'
         $RegistryCseBlock    = '[{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D02B1F72-3407-48AE-BA88-E8213C6761F1}]'
         $AuditPolicyCseBlock = '[{F3CCC681-B74C-4060-9F26-CD84525DCA2A}{0F3F3735-573D-9804-99E4-AB2A69BA5FD4}]'
-        $GpoGuidStr          = '{' + $GpoObject.Id.ToString().ToUpper() + '}'
-        $DomainDN5b          = (Get-ADDomain -ErrorAction Stop).DistinguishedName
-        $GpoDN               = "CN=$GpoGuidStr,CN=Policies,CN=System,$DomainDN5b"
-        $GpoAdObj2           = Get-ADObject -Identity $GpoDN `
+
+        # Emit GPO identity info before any AD call so a DN construction bug is visible.
+        Write-Host "[DBG] GpoObject type   : $($GpoObject.GetType().FullName)" -ForegroundColor DarkGray
+        Write-Host "[DBG] GpoObject.Id     : $($GpoObject.Id)" -ForegroundColor DarkGray
+        Write-Host "[DBG] GpoObject.DisplayName: $($GpoObject.DisplayName)" -ForegroundColor DarkGray
+
+        $GpoGuidStr = '{' + $GpoObject.Id.ToString().ToUpper() + '}'
+        Write-Host "[DBG] GpoGuidStr       : $GpoGuidStr" -ForegroundColor DarkGray
+
+        $DomainDN5b = (Get-ADDomain -ErrorAction Stop).DistinguishedName
+        Write-Host "[DBG] DomainDN         : $DomainDN5b" -ForegroundColor DarkGray
+
+        $GpoDN = "CN=$GpoGuidStr,CN=Policies,CN=System,$DomainDN5b"
+        Write-Host "[DBG] Computed GPO DN  : $GpoDN" -ForegroundColor DarkGray
+
+        # Verify the object exists via filter before attempting DN-based lookup,
+        # so a missing object produces a clear message rather than a cryptic AD error.
+        $GpoByFilter = Get-ADObject -LDAPFilter "(cn=$GpoGuidStr)" `
+            -SearchBase "CN=Policies,CN=System,$DomainDN5b" `
+            -Properties distinguishedName -ErrorAction SilentlyContinue
+        if ($GpoByFilter) {
+            Write-Host "[DBG] Filter-search found: $($GpoByFilter.DistinguishedName)" -ForegroundColor DarkGray
+        } else {
+            Write-Host "[WARN] Filter-search found NO object with cn=$GpoGuidStr under CN=Policies,CN=System,$DomainDN5b" -ForegroundColor Yellow
+            Write-Host "       The GPO AD object may not have replicated yet, or the GUID is wrong." -ForegroundColor Yellow
+        }
+
+        $GpoAdObj2 = Get-ADObject -Identity $GpoDN `
             -Properties gPCMachineExtensionNames -ErrorAction Stop
 
         $CurrentExt = [string]$GpoAdObj2.gPCMachineExtensionNames
@@ -1570,6 +1594,9 @@ Function New-ADPAuditPolicyGpo {
         Write-Host "[OK]  gPCMachineExtensionNames set: '$FinalExt'" -ForegroundColor Green
     } catch {
         Write-Host "[WARN] Could not set gPCMachineExtensionNames on GPO AD object: $_" -ForegroundColor Yellow
+        Write-Host "[DBG]  Exception type    : $($_.Exception.GetType().FullName)" -ForegroundColor DarkGray
+        Write-Host "[DBG]  Exception message : $($_.Exception.Message)" -ForegroundColor DarkGray
+        Write-Host "[DBG]  Script position   : $($_.InvocationInfo.PositionMessage)" -ForegroundColor DarkGray
     }
 
     # 6. Link GPO.
