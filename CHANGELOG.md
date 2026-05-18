@@ -4,6 +4,34 @@
 
 ---
 
+### [AD-PowerAdmin_GPOMgr — Generalized GPO Content Search]
+
+**Added:**
+- `Search-GPOContent` -- domain-wide GPO content scanner supporting three content types
+  via a single unified interface: `Registry` (reads registry settings via
+  Get-GPRegistryValue), `SecurityTemplate` (reads GptTmpl.inf INI settings from SYSVOL),
+  and `AdvancedAuditPolicy` (reads audit.csv Advanced Audit Policy entries from SYSVOL).
+  All result objects share a common envelope (GpoName, GpoId, ContentType) with
+  type-specific data in a `Details` PSCustomObject. The `switch` on ContentType means new
+  content types can be added without changing the calling interface. The existing
+  `Search-GPOSetting` and `Search-GPOSecuritySetting` are unchanged and continue to serve
+  existing callers; this function is the generalized form for new code.
+
+### [AD-PowerAdmin_AuditPolicy — Competing GPO Detection in Compliance Scan]
+
+**Changed:**
+- `Show-ADPAuditFindings` -- added optional `$GpoConflicts` parameter (PSCustomObject[]
+  from Search-GPOContent). When populated, displays competing GPO names and configured
+  values beneath each non-compliant `Audit Subcategory` finding. If no GPO configures the
+  subcategory, displays an advisory pointing to GPO link, security filter, or WMI filter
+  as likely causes.
+- `Start-ADPAuditPolicyCheck` -- after collecting findings, calls
+  `Search-GPOContent -ContentType AdvancedAuditPolicy` when at least one non-compliant
+  `Audit Subcategory` finding is present, then passes the results to Show-ADPAuditFindings.
+  Fully-compliant systems skip the GPO scan entirely to avoid unnecessary overhead.
+
+---
+
 ### [AD-PowerAdmin_HIBP_PwndPwMgr — Weak Password Download TLS Fix]
 
 **Fixed:**

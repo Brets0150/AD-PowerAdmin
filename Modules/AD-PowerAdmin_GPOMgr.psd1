@@ -16,6 +16,7 @@
         'Get-GPOAdvancedAuditPolicy',
         'Search-GPOSetting',
         'Search-GPOSecuritySetting',
+        'Search-GPOContent',
         'New-ADPAGPO',
         'Set-GPORegistrySetting',
         'Set-GPOPermission',

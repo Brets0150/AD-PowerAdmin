@@ -909,6 +909,240 @@ Function Search-GPOSecuritySetting {
     return $Results.ToArray()
 }
 
+Function Search-GPOContent {
+    <#
+    .SYNOPSIS
+        Scans all domain GPOs for a specified type of policy content.
+
+    .DESCRIPTION
+        Enumerates all GPOs in the domain and, for each, extracts settings of the
+        requested content type. A single switch (-ContentType) selects what to look
+        for; type-specific parameters control the filter.
+
+        Supported content types and their required/optional parameters:
+
+          Registry        -- Reads registry settings via Get-GPRegistryValue.
+                             -Key is required. -ValueName and -ExpectedValue are optional.
+
+          SecurityTemplate -- Reads GptTmpl.inf INI settings from SYSVOL.
+                             -Settings is required: array of @{Section; Key; ExpectedValue}.
+
+          AdvancedAuditPolicy -- Reads audit.csv Advanced Audit Policy entries from SYSVOL.
+                             -Subcategory is optional filter (exact match).
+
+        All result objects share a common envelope (GpoName, GpoId, ContentType) with
+        type-specific data in a Details property. This makes the output consistent
+        regardless of content type and allows a single result set to be passed between
+        functions without type-specific branching in the caller.
+
+        The existing Search-GPOSetting and Search-GPOSecuritySetting functions are
+        unchanged and continue to serve their existing callers. This function provides
+        a unified interface for new code.
+
+    .PARAMETER ContentType
+        What to search for. One of: 'Registry', 'SecurityTemplate', 'AdvancedAuditPolicy'.
+
+    .PARAMETER Key
+        [Registry] Full registry key path, e.g. 'HKLM\System\...\Parameters'. Required.
+
+    .PARAMETER ValueName
+        [Registry] Optional value name within the key. Omit to return all values.
+
+    .PARAMETER ExpectedValue
+        [Registry] Optional. When supplied, Details.Matches = ($actual -eq $expected).
+
+    .PARAMETER Settings
+        [SecurityTemplate] Array of hashtables, each with Section, Key, ExpectedValue.
+
+    .PARAMETER Subcategory
+        [AdvancedAuditPolicy] Optional exact subcategory name to filter results.
+
+    .PARAMETER Force
+        Suppresses progress messages. Use when calling from other functions.
+
+    .PARAMETER Domain
+        Target domain. Defaults to the current user's domain.
+
+    .OUTPUTS
+        [PSCustomObject[]] -- one object per match:
+        @{
+            GpoName     = [string]
+            GpoId       = [Guid]
+            ContentType = [string]
+            Details     = [PSCustomObject]  # type-specific; see below
+        }
+
+        Registry Details:
+            Key [string], ValueName [string], ActualValue [object], Matches [bool or $null]
+
+        SecurityTemplate Details:
+            Section [string], Key [string], ActualValue [string],
+            ExpectedValue [string], Matches [bool]
+
+        AdvancedAuditPolicy Details:
+            Subcategory [string], InclusionSetting [int], InclusionSettingText [string]
+
+    .EXAMPLE
+        Search-GPOContent -ContentType AdvancedAuditPolicy -Subcategory 'Logon'
+
+    .EXAMPLE
+        Search-GPOContent -ContentType Registry `
+            -Key 'HKLM\System\CurrentControlSet\Control\Lsa' -ValueName 'LmCompatibilityLevel'
+
+    .EXAMPLE
+        Search-GPOContent -ContentType SecurityTemplate -Settings @(
+            @{ Section='System Access'; Key='MinimumPasswordLength'; ExpectedValue='14' }
+        )
+    #>
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('Registry', 'SecurityTemplate', 'AdvancedAuditPolicy')]
+        [string]$ContentType,
+
+        [Parameter(Mandatory=$false)]
+        [string]$Key = '',
+
+        [Parameter(Mandatory=$false)]
+        [string]$ValueName = '',
+
+        [Parameter(Mandatory=$false)]
+        $ExpectedValue = $null,
+
+        [Parameter(Mandatory=$false)]
+        [hashtable[]]$Settings = @(),
+
+        [Parameter(Mandatory=$false)]
+        [string]$Subcategory = '',
+
+        [Parameter(Mandatory=$false)]
+        [switch]$Force,
+
+        [Parameter(Mandatory=$false)]
+        [string]$Domain = ''
+    )
+
+    if (-not (Test-GPOMgrPreFlight)) { return @() }
+    $ResolvedDomain = Get-ResolvedDomain -Domain $Domain
+
+    # Validate type-specific required parameters.
+    if ($ContentType -eq 'Registry' -and [string]::IsNullOrWhiteSpace($Key)) {
+        Write-Host "[FAIL] -Key is required when ContentType='Registry'." -ForegroundColor Red
+        return @()
+    }
+    if ($ContentType -eq 'SecurityTemplate' -and $Settings.Count -eq 0) {
+        Write-Host "[FAIL] -Settings is required when ContentType='SecurityTemplate'." -ForegroundColor Red
+        return @()
+    }
+
+    try {
+        $AllGpos = Get-GPO -All -Domain $ResolvedDomain -ErrorAction Stop
+    } catch {
+        Write-Host "[FAIL] Could not retrieve GPOs from domain '$ResolvedDomain': $_" -ForegroundColor Red
+        return @()
+    }
+
+    # Resolve SYSVOL base once for SecurityTemplate (avoids per-GPO AD call).
+    $SysvolBase = $null
+    if ($ContentType -eq 'SecurityTemplate') {
+        try {
+            $DomainObj  = Get-ADDomain -Identity $ResolvedDomain -ErrorAction Stop
+            $SysvolBase = "\\$($DomainObj.DNSRoot)\SYSVOL\$($DomainObj.DNSRoot)\Policies"
+        } catch {
+            Write-Host "[FAIL] Could not determine SYSVOL path: $_" -ForegroundColor Red
+            return @()
+        }
+    }
+
+    if (-not $Force) {
+        Write-Host "[INFO] Scanning $($AllGpos.Count) GPO(s) for $ContentType content..." -ForegroundColor Cyan
+    }
+
+    $Results = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    foreach ($Gpo in $AllGpos) {
+        switch ($ContentType) {
+
+            'Registry' {
+                try {
+                    if ([string]::IsNullOrWhiteSpace($ValueName)) {
+                        $RegValues = @(Get-GPRegistryValue -Name $Gpo.DisplayName -Domain $ResolvedDomain `
+                            -Key $Key -ErrorAction SilentlyContinue)
+                    } else {
+                        $RegValues = @(Get-GPRegistryValue -Name $Gpo.DisplayName -Domain $ResolvedDomain `
+                            -Key $Key -ValueName $ValueName -ErrorAction SilentlyContinue)
+                    }
+                } catch { continue }
+
+                foreach ($RegVal in $RegValues) {
+                    if ($null -eq $RegVal) { continue }
+                    [string]$RvName    = $RegVal.ValueName
+                    [object]$RvActual  = $RegVal.Value
+                    $RvMatches = if ($null -eq $ExpectedValue) { $null } else { $RvActual -eq $ExpectedValue }
+                    $Results.Add([PSCustomObject]@{
+                        GpoName     = $Gpo.DisplayName
+                        GpoId       = $Gpo.Id
+                        ContentType = 'Registry'
+                        Details     = [PSCustomObject]@{
+                            Key          = $Key
+                            ValueName    = $RvName
+                            ActualValue  = $RvActual
+                            Matches      = $RvMatches
+                        }
+                    })
+                }
+            }
+
+            'SecurityTemplate' {
+                $GpoIdStr = $Gpo.Id.ToString('B').ToUpper()
+                $InfPath  = "$SysvolBase\$GpoIdStr\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
+                if (-not (Test-Path $InfPath)) { continue }
+
+                try {
+                    $Sections = ConvertFrom-IniString -Lines (Get-Content -Path $InfPath -Encoding Unicode -ErrorAction Stop)
+                } catch { continue }
+
+                foreach ($S in $Settings) {
+                    if (-not $Sections.Contains($S.Section)) { continue }
+                    if (-not $Sections[$S.Section].Contains($S.Key)) { continue }
+                    $StActual = $Sections[$S.Section][$S.Key]
+                    $Results.Add([PSCustomObject]@{
+                        GpoName     = $Gpo.DisplayName
+                        GpoId       = $Gpo.Id
+                        ContentType = 'SecurityTemplate'
+                        Details     = [PSCustomObject]@{
+                            Section       = $S.Section
+                            Key           = $S.Key
+                            ActualValue   = $StActual
+                            ExpectedValue = $S.ExpectedValue
+                            Matches       = ($StActual -eq $S.ExpectedValue)
+                        }
+                    })
+                }
+            }
+
+            'AdvancedAuditPolicy' {
+                $Entries = Get-GPOAdvancedAuditPolicy -GpoName $Gpo.DisplayName -Domain $ResolvedDomain
+                foreach ($Entry in $Entries) {
+                    if ($Subcategory -and $Entry.Subcategory -ne $Subcategory) { continue }
+                    $Results.Add([PSCustomObject]@{
+                        GpoName     = $Gpo.DisplayName
+                        GpoId       = $Gpo.Id
+                        ContentType = 'AdvancedAuditPolicy'
+                        Details     = [PSCustomObject]@{
+                            Subcategory          = $Entry.Subcategory
+                            InclusionSetting     = $Entry.InclusionSetting
+                            InclusionSettingText = $Entry.InclusionSettingText
+                        }
+                    })
+                }
+            }
+        }
+    }
+
+    return $Results.ToArray()
+}
+
 
 
 # ===========================================================================

@@ -513,7 +513,7 @@ Function Set-HoneypotSettings {
 
 Function Get-HoneypotGPOName {
     # Returns the fixed GPO name used by the Honeypot module for the deny-logon policy.
-    return 'AD-PowerAdmin_HoneypotDenyLogon'
+    return 'ADPA__Honeytoken_DenyLogon'
 }
 
 Function Set-HoneypotGPOUserRights {
@@ -1451,7 +1451,7 @@ Function Remove-HoneypotAccount {
             Step 3: Disables the AD account.
             Step 4: Optionally deletes the account permanently (explicit confirmation required).
             Step 5: Optionally removes the deny-logon group if it has no remaining members.
-            Step 6: Optionally removes the deny-logon GPO (AD-PowerAdmin_HoneypotDenyLogon).
+            Step 6: Optionally removes the deny-logon GPO (ADPA__Honeytoken_DenyLogon).
             Step 7: Clears the honeytoken configuration from AD-PowerAdmin_settings.ps1.
 
             Each destructive step is confirmed interactively before execution.
@@ -2571,7 +2571,7 @@ Function Show-HoneypotHelp {
     Write-Host '  Step 1 -- Install Honeypot Account' -ForegroundColor Green
     Write-Host '    Select "Install Honeypot Account" from this menu.'
     Write-Host '    The wizard provisions the honeytoken account, creates the deny-logon'
-    Write-Host '    security group, creates and links the AD-PowerAdmin_HoneypotDenyLogon'
+    Write-Host '    security group, creates and links the ADPA__Honeytoken_DenyLogon'
     Write-Host '    GPO at the domain root, and creates the central monitoring scheduled task.'
     Write-Host '    No manual GPMC steps are required -- the GPO is fully automated.'
     Write-Host ''
@@ -2611,7 +2611,7 @@ Function Show-HoneypotHelp {
     Write-Host '    Select "Remove Honeypot Account" from this menu.'
     Write-Host '    Removes the central monitoring scheduled task, removes the account from'
     Write-Host '    the deny-logon group, disables or deletes the AD account, removes the'
-    Write-Host '    deny-logon group (if empty), removes the AD-PowerAdmin_HoneypotDenyLogon'
+    Write-Host '    deny-logon group (if empty), removes the ADPA__Honeytoken_DenyLogon'
     Write-Host '    GPO, and clears all configuration from the settings file.'
     Write-Host '    Each destructive step requires explicit confirmation before proceeding.'
     Write-Host ''
@@ -2621,7 +2621,7 @@ Function Show-HoneypotHelp {
     Write-Host '    - Alerts are emailed to the address in $global:ADAdminEmail.'
     Write-Host '    - A 4624 (Successful Logon) is always CRITICAL. The deny-logon GPO must'
     Write-Host '      block all logon types. If a 4624 occurs, escalate immediately and verify'
-    Write-Host '      the AD-PowerAdmin_HoneypotDenyLogon GPO is linked and enforced.'
+    Write-Host '      the ADPA__Honeytoken_DenyLogon GPO is linked and enforced.'
     Write-Host '    - The account username must never appear in any service, scheduled task,'
     Write-Host '      application configuration, or legitimate logon process.'
     Write-Host '    - Run "Verify Account Safety" periodically to confirm no privileges have'

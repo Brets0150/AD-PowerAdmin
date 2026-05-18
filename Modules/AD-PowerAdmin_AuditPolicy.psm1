@@ -396,7 +396,9 @@ Function Show-ADPAuditFindings {
     # Prints non-compliant findings to the console with color coding and word wrapping. Private.
     Param(
         [PSCustomObject[]]$Findings,
-        [string]$ComputerName = $env:COMPUTERNAME
+        [string]$ComputerName = $env:COMPUTERNAME,
+        [Parameter(Mandatory=$false)]
+        [PSCustomObject[]]$GpoConflicts = @()
     )
 
     $Indent = '         '  # 9 spaces -- aligns with text after '[FAIL] '
@@ -432,6 +434,18 @@ Function Show-ADPAuditFindings {
         Write-WrappedText -Label 'Actual:   ' -Text $Finding.ActualValue   -Indent $Indent -ForegroundColor Gray
         if ($Finding.Reason) {
             Write-WrappedText -Label 'Reason:   ' -Text $Finding.Reason -Indent $Indent -ForegroundColor Gray
+        }
+
+        if ($GpoConflicts.Count -gt 0 -and $Finding.Category -eq 'Audit Subcategory') {
+            $Conflicts = @($GpoConflicts | Where-Object { $_.Details.Subcategory -eq $Finding.SettingName })
+            if ($Conflicts.Count -gt 0) {
+                Write-Host "${Indent}Competing GPOs:" -ForegroundColor Yellow
+                foreach ($C in $Conflicts) {
+                    Write-Host "${Indent}  GPO: '$($C.GpoName)' -> $($C.Details.InclusionSettingText)" -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "${Indent}Competing GPOs: None found -- check GPO link, security filter, or WMI filter." -ForegroundColor DarkGray
+            }
         }
     }
 
@@ -543,7 +557,15 @@ Function Start-ADPAuditPolicyCheck {
         $Findings += Test-ADPNtlmAuditSettings -ComputerName $TargetComputer
     }
 
-    Show-ADPAuditFindings -Findings $Findings -ComputerName $TargetComputer
+    # Scan domain GPOs for competing audit subcategory settings, but only when there are
+    # non-compliant subcategory findings. Fully-compliant systems incur no scan overhead.
+    $GpoConflicts = @()
+    if (@($Findings | Where-Object { $_.Status -ne 'Compliant' -and $_.Category -eq 'Audit Subcategory' }).Count -gt 0) {
+        Write-Host "[INFO] Scanning domain GPOs for competing audit policy settings..." -ForegroundColor Cyan
+        $GpoConflicts = Search-GPOContent -ContentType AdvancedAuditPolicy -Force
+    }
+
+    Show-ADPAuditFindings -Findings $Findings -ComputerName $TargetComputer -GpoConflicts $GpoConflicts
 
     if ($Unattended) {
         $NonCompliant = $Findings | Where-Object { $_.Status -ne 'Compliant' }
