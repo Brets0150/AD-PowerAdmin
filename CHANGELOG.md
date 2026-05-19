@@ -4,6 +4,54 @@
 
 ---
 
+### [Security Compliance — Offensive Tool Name Removal]
+
+**Changed:**
+- Source comments and wiki documentation -- replaced all references to specific offensive tool
+  names (credential dumping tools, AD attack path enumeration tools, commercial C2 frameworks,
+  open-source attack frameworks, network attack tools) with generic category-level descriptions.
+  Affected files: `Modules/AD-PowerAdmin_GPOBestPracticesDeployer.psm1`,
+  `AD-PowerAdmin.wiki/Modules/AD-AccessControlRights.md`,
+  `AD-PowerAdmin.wiki/Modules/SYSVOL-Audit-Module.md`,
+  `AD-PowerAdmin.wiki/Modules/Exchange-AD-Security-Audit.md`,
+  `AD-PowerAdmin.wiki/Research/AD_Empty_Password_PasswordNotRequired_Audit_Remediation.md`,
+  `AD-PowerAdmin.wiki/Research/exchange_ad_permission_escalation.md`,
+  `AD-PowerAdmin.wiki/Vulnerabilities/SMB-Admin-Shares-Abuse.md`,
+  `AD-PowerAdmin.wiki/Vulnerabilities/LM-Hash-Storage.md`.
+  Specific tool names in comments and documentation triggered signature-based false-positive
+  alerts in endpoint security products (Arctic Wolf, SentinelOne), causing the script to be
+  blocked. All security meaning is preserved; no logic, functions, or settings were changed.
+
+---
+
+### [AD-PowerAdmin_Honeypot — Configuration Wizard and SPN Bug Fixes]
+
+**Fixed:**
+- `Remove-HoneypotAccount` -- `HoneypotSPN` was not cleared from `AD-PowerAdmin_settings.ps1`
+  when the account was removed. `Set-HoneypotSettings` was called without `-SPN ''`, so the
+  old SPN value persisted in the settings file after decommissioning. Fixed by passing `-SPN ''`
+  explicitly in the removal step.
+- `Set-HoneypotSettings` -- Added post-write verification: after writing the settings file the
+  function re-reads it and checks that `HoneypotSPN` contains the expected value. A mismatch
+  (silent regex-replacement failure) now prints a `[WARN]` with the expected vs. actual value so
+  administrators can identify and manually correct the problem instead of running with stale config.
+
+**Added:**
+- `Edit-HoneypotSettings` -- Interactive post-install configuration wizard. Allows changing
+  four settings without removing and reinstalling the account: `HoneypotAudit` (toggle
+  monitoring on/off), `HoneypotMonitorIntervalMinutes` (change the check interval with
+  automatic scheduled task recreation), `HoneypotSPN` (add, change, or remove the
+  Kerberoasting bait SPN with the corresponding AD `ServicePrincipalNames` update), and
+  `HoneypotMonitorMode` (switch between Centralized and Decentralized). Settings that require
+  account recreation (username, OU, deny-logon group) are intentionally excluded with a
+  note to remove and reinstall. Registered in the Honeytoken Management submenu as
+  "Configure Settings."
+- `Set-HoneypotSettings` -- Added optional `MonitorMode` parameter (`[string]`, default
+  `$null` = leave unchanged) to support persisting `HoneypotMonitorMode` changes from the
+  configuration wizard without a separate file write.
+
+---
+
 ### [AD-PowerAdmin_GPOMgr — Generalized GPO Content Search]
 
 **Added:**

@@ -54,7 +54,7 @@ $script:GPOBestPractices = @(
             'They are cryptographically weak: the password is padded to 14 characters,',
             'split into two 7-character halves, and each half is DES-encrypted independently.',
             'This makes LM hashes trivial to crack offline and exposes every user account',
-            'to pass-the-hash and credential-dumping attacks via tools such as Mimikatz.'
+            'to pass-the-hash and credential-dumping attacks via credential dumping tools.'
         )
         Note           = "Existing LM hashes are removed at each user's next password change. Consider forcing a domain-wide password reset after applying this setting."
         DefaultGpoName = 'CorpSec-Disable-LMHash'

@@ -11,7 +11,7 @@
     RootModule = 'AD-PowerAdmin_Honeypot.psm1'
 
     # Version number of this module.
-    ModuleVersion = '1.0'
+    ModuleVersion = '1.1'
 
     # ID used to uniquely identify this module
     GUID = 'b7e2a3c9-4f1d-4e8b-9a2c-5d0e7f3b1a84'
@@ -36,6 +36,7 @@
 
     Functions included:
     - Install-HoneypotAccount       Wizard: username selection, OU placement, full provisioning
+    - Edit-HoneypotSettings         Post-install configuration wizard (audit, interval, SPN, mode)
     - Test-HoneytokenUserSafety     Validates no SPNs, delegation, or privileged memberships
     - Start-HoneypotMonitor         Unattended hourly monitor; emails alerts on detection
     - Show-HoneypotReport           Interactive log review with optional CSV export
@@ -52,6 +53,7 @@
     # IF YOU DO NOT EXPORT THE FUNCTIONS, THEN THE FUNCTIONS WILL NOT BE AVAILABLE TO THE MAIN SCRIPT.
     FunctionsToExport = @(
         'Install-HoneypotAccount',
+        'Edit-HoneypotSettings',
         'Test-HoneytokenUserSafety',
         'Start-HoneypotMonitor',
         'Show-HoneypotReport',
@@ -97,6 +99,13 @@
             - Start-HoneypotMonitor: hourly unattended monitor across all domain controllers.
             - Show-HoneypotReport: interactive log review with configurable time range and CSV export.
             - Remove-HoneypotAccount: six-step reversible decommissioning workflow.
+
+            v1.1:
+            - Edit-HoneypotSettings: post-install configuration wizard for audit toggle, monitor
+              interval (with scheduled task recreation), Kerberoasting SPN (with AD side effects),
+              and monitor mode without removing and reinstalling the account.
+            - Fixed Remove-HoneypotAccount not clearing HoneypotSPN from the settings file.
+            - Set-HoneypotSettings: added MonitorMode parameter; added post-write SPN verification.
 '@
 
         } # End of PSData hashtable

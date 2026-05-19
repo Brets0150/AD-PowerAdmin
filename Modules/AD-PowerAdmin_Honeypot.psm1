@@ -57,6 +57,11 @@ Function Initialize-Module {
                     Label   = "Install a lightweight local-only monitor on individual domain controllers. Each DC queries its own Security log and alerts independently -- eliminates RPC overhead for resource-constrained DCs. Requires the honeytoken account to be installed first."
                     Command = "Install-HoneypotDecentralized"
                 }
+                'HoneypotConfigure' = @{
+                    Title   = "Configure Settings"
+                    Label   = "Interactively update honeytoken settings (audit enable/disable, monitor interval, Kerberoasting SPN, monitor mode) without reinstalling the account."
+                    Command = "Edit-HoneypotSettings"
+                }
                 'HoneypotDecentralizedRemove' = @{
                     Title   = "Remove Decentralized Monitor"
                     Label   = "Remove the decentralized monitor deployment from selected domain controllers. Removes the scheduled task and optionally the deployment directory."
@@ -466,14 +471,17 @@ Function Set-HoneypotSettings {
     # Updates honeytoken configuration variables in AD-PowerAdmin_settings.ps1 and syncs
     # them into the current session's global scope.
     # $IntervalMinutes = -1 (default) means leave the existing interval unchanged.
-    # This is called only during install and removal -- not during normal operation.
+    # $SPN = $null (default) means leave the existing SPN unchanged.
+    # $MonitorMode = $null (default) means leave the existing monitor mode unchanged.
+    # This is called only during install, removal, and the configuration wizard.
     param(
         [Parameter(Mandatory=$true)][bool]$Audit,
         [Parameter(Mandatory=$true)][AllowEmptyString()][string]$Username,
         [Parameter(Mandatory=$true)][AllowEmptyString()][string]$DenyGroup,
         [Parameter(Mandatory=$true)][AllowEmptyString()][string]$OU,
         [Parameter(Mandatory=$false)][int]$IntervalMinutes = -1,
-        [Parameter(Mandatory=$false)][AllowEmptyString()][string]$SPN = $null
+        [Parameter(Mandatory=$false)][AllowEmptyString()][string]$SPN = $null,
+        [Parameter(Mandatory=$false)][AllowEmptyString()][string]$MonitorMode = $null
     )
 
     [string]$SettingsFile = "$global:ThisScriptDir\AD-PowerAdmin_settings.ps1"
@@ -500,7 +508,22 @@ Function Set-HoneypotSettings {
         $global:HoneypotSPN = $SPN
     }
 
+    if ($null -ne $MonitorMode) {
+        $Content = Set-SettingsFileValue -Content $Content -VarName 'HoneypotMonitorMode' -NewValue $MonitorMode -VarType 'string-single'
+        $global:HoneypotMonitorMode = $MonitorMode
+    }
+
     [System.IO.File]::WriteAllText($SettingsFile, $Content, [System.Text.Encoding]::UTF8)
+
+    # Verify the SPN was written correctly. A silent regex-replacement failure would leave
+    # the old value in the file while the global reflects the new one.
+    if ($null -ne $SPN) {
+        [string]$Verify = Get-Content $SettingsFile -Raw
+        if ($Verify -notmatch [regex]::Escape("[string]`$global:HoneypotSPN = '$SPN'")) {
+            Write-Host "  [WARN] SPN verification failed: the value '$SPN' was not found in the settings file after write." -ForegroundColor Yellow
+            Write-Host "         Check AD-PowerAdmin_settings.ps1 manually and ensure HoneypotSPN is set correctly." -ForegroundColor Yellow
+        }
+    }
 
     # Sync the updated values into the running session so callers see the changes immediately.
     $global:HoneypotAudit     = $Audit
@@ -983,6 +1006,254 @@ Function Install-HoneypotAccount {
     Write-Host 'Recommended follow-up:' -ForegroundColor Yellow
     Write-Host "  1. Allow 5-10 minutes for Group Policy to propagate to all domain controllers." -ForegroundColor Yellow
     Write-Host "  2. Confirm scheduled task 'AD-PowerAdmin_HoneypotMonitor' appears in Task Scheduler." -ForegroundColor Yellow
+    Write-Host ''
+}
+
+Function Edit-HoneypotSettings {
+    <#
+    .SYNOPSIS
+        Interactive wizard to change honeytoken configuration settings post-installation.
+
+    .DESCRIPTION
+        === Configure Honeytoken Settings. ===
+            Allows an administrator to update honeytoken runtime settings without removing
+            and reinstalling the account. Covers four settings that are safe to change
+            at any time:
+
+            - HoneypotAudit                  Enable or disable the monitoring scheduled task.
+            - HoneypotMonitorIntervalMinutes  Change how often the monitor runs (recreates
+                                             the scheduled task automatically).
+            - HoneypotSPN                    Add, change, or remove the Kerberoasting bait
+                                             SPN. Updates both the AD account and settings.
+            - HoneypotMonitorMode            Switch between Centralized and Decentralized.
+
+            Settings that require a full remove + reinstall (username, OU, deny-logon group)
+            are intentionally excluded. Use Remove Honeypot Account then Install Honeypot
+            Account to change those.
+
+    .EXAMPLE
+        Edit-HoneypotSettings
+
+    .NOTES
+        Menu path: Honeytoken Management -> Configure Settings.
+    #>
+
+    if ([string]::IsNullOrWhiteSpace($global:HoneypotUsername)) {
+        Write-Host 'No honeytoken account is configured. Run Install Honeypot Account first.' -ForegroundColor Red
+        return
+    }
+
+    [string]$Divider = '=' * 70
+
+    Write-Host ''
+    Write-Host $Divider -ForegroundColor Cyan
+    Write-Host '  Honeytoken Configuration Wizard' -ForegroundColor Cyan
+    Write-Host $Divider -ForegroundColor Cyan
+    Write-Host ''
+
+    # Display current account identity information (read-only in this wizard).
+    Write-Host 'Current Configuration:' -ForegroundColor White
+    Write-Host ("  Username    : {0}" -f $global:HoneypotUsername) -ForegroundColor Gray
+    Write-Host ("  OU          : {0}" -f $(if ([string]::IsNullOrWhiteSpace($global:HoneypotOU)) { '(not set)' } else { $global:HoneypotOU })) -ForegroundColor Gray
+    Write-Host ("  Deny Group  : {0}" -f $(if ([string]::IsNullOrWhiteSpace($global:HoneypotDenyGroup)) { '(not set)' } else { $global:HoneypotDenyGroup })) -ForegroundColor Gray
+    Write-Host ''
+    Write-Host 'Changeable Settings:' -ForegroundColor White
+    Write-Host ("  Audit Enabled   : {0}" -f $(if ($global:HoneypotAudit) { 'Enabled' } else { 'Disabled' })) -ForegroundColor Gray
+    Write-Host ("  Monitor Interval: {0} minutes" -f $global:HoneypotMonitorIntervalMinutes) -ForegroundColor Gray
+    Write-Host ("  Kerberoast SPN  : {0}" -f $(if ([string]::IsNullOrWhiteSpace($global:HoneypotSPN)) { '(none)' } else { $global:HoneypotSPN })) -ForegroundColor Gray
+    Write-Host ("  Monitor Mode    : {0}" -f $global:HoneypotMonitorMode) -ForegroundColor Gray
+    Write-Host ''
+    Write-Host 'Note: To change Username, OU, or Deny Group use Remove then re-Install.' -ForegroundColor Yellow
+    Write-Host ''
+
+    # Track intended changes; start from current values.
+    [bool]$NewAudit         = $global:HoneypotAudit
+    [int]$NewInterval       = $global:HoneypotMonitorIntervalMinutes
+    [string]$NewSPN         = $global:HoneypotSPN
+    [string]$OldSPN         = $global:HoneypotSPN
+    [string]$NewMonitorMode = $global:HoneypotMonitorMode
+    [bool]$IntervalChanged  = $false
+    [bool]$SpnChanged       = $false
+    [bool]$AnyChange        = $false
+
+    # --- HoneypotAudit ---
+    Write-Host ('-' * 50) -ForegroundColor DarkGray
+    [string]$AuditStatus = if ($global:HoneypotAudit) { 'Enabled' } else { 'Disabled' }
+    Write-Host ("Monitoring is currently: {0}" -f $AuditStatus) -ForegroundColor White
+    $ToggleAudit = Read-Host 'Toggle monitoring on/off? (y/N)'
+    if ($ToggleAudit -match '^[Yy]$') {
+        $NewAudit  = -not $global:HoneypotAudit
+        $AnyChange = $true
+        Write-Host ("  Monitoring will be set to: {0}" -f $(if ($NewAudit) { 'Enabled' } else { 'Disabled' })) -ForegroundColor Cyan
+    }
+    Write-Host ''
+
+    # --- HoneypotMonitorIntervalMinutes ---
+    Write-Host ('-' * 50) -ForegroundColor DarkGray
+    Write-Host ("Monitor interval is currently: {0} minutes" -f $global:HoneypotMonitorIntervalMinutes) -ForegroundColor White
+    $RawInterval = Read-Host 'New interval in minutes (press ENTER to keep current)'
+    if (-not [string]::IsNullOrWhiteSpace($RawInterval)) {
+        [int]$ParsedInterval = 0
+        if ([int]::TryParse($RawInterval.Trim(), [ref]$ParsedInterval) -and $ParsedInterval -gt 0) {
+            if ($ParsedInterval -ne $global:HoneypotMonitorIntervalMinutes) {
+                $NewInterval     = $ParsedInterval
+                $IntervalChanged = $true
+                $AnyChange       = $true
+                Write-Host ("  Interval will change to: {0} minutes" -f $NewInterval) -ForegroundColor Cyan
+            } else {
+                Write-Host '  Interval unchanged (same value).' -ForegroundColor Gray
+            }
+        } else {
+            Write-Host '  Invalid value -- interval unchanged.' -ForegroundColor Yellow
+        }
+    }
+    Write-Host ''
+
+    # --- HoneypotSPN ---
+    Write-Host ('-' * 50) -ForegroundColor DarkGray
+    if ([string]::IsNullOrWhiteSpace($global:HoneypotSPN)) {
+        Write-Host 'Kerberoasting bait SPN: (none currently configured)' -ForegroundColor White
+        $AddSpn = Read-Host 'Add a Kerberoasting bait SPN? (y/N)'
+        if ($AddSpn -match '^[Yy]$') {
+            [string]$DomainFqdn   = (Get-ADDomain).DNSRoot
+            [string]$SpnHostname  = ($global:HoneypotUsername -replace '[_.]', '-') + '.' + $DomainFqdn
+            [string]$SuggestedSpn = "HTTP/$SpnHostname"
+            Write-Host ("  Suggested: {0}" -f $SuggestedSpn) -ForegroundColor Cyan
+            [string]$SpnInput  = Read-Host '  Press ENTER to use suggestion or type a custom SPN'
+            [string]$Candidate = if ([string]::IsNullOrWhiteSpace($SpnInput)) { $SuggestedSpn } else { $SpnInput.Trim() }
+
+            $SpnConflict = Get-ADObject -Filter "servicePrincipalName -eq '$Candidate'" -ErrorAction SilentlyContinue
+            if ($SpnConflict) {
+                Write-Host ("  [WARN] SPN '{0}' is already registered on '{1}'. SPN not added." -f $Candidate, $SpnConflict.Name) -ForegroundColor Yellow
+            } else {
+                try {
+                    Set-ADUser -Identity $global:HoneypotUsername -ServicePrincipalNames @{Add = $Candidate} -ErrorAction Stop
+                    Write-Host ("  [OK] SPN '{0}' added to account." -f $Candidate) -ForegroundColor Green
+                    $NewSPN     = $Candidate
+                    $SpnChanged = $true
+                    $AnyChange  = $true
+                } catch {
+                    Write-Host ("  [FAIL] Could not add SPN '{0}': {1}" -f $Candidate, $_) -ForegroundColor Red
+                }
+            }
+        }
+    } else {
+        Write-Host ("Kerberoasting bait SPN: {0}" -f $global:HoneypotSPN) -ForegroundColor White
+        Write-Host '  Options: (1) Keep  (2) Change  (3) Remove'
+        [string]$SpnChoice = Read-Host '  Selection (press ENTER to keep)'
+        if ($SpnChoice.Trim() -eq '2') {
+            [string]$DomainFqdn   = (Get-ADDomain).DNSRoot
+            [string]$SpnHostname  = ($global:HoneypotUsername -replace '[_.]', '-') + '.' + $DomainFqdn
+            [string]$SuggestedSpn = "HTTP/$SpnHostname"
+            Write-Host ("  Suggested: {0}" -f $SuggestedSpn) -ForegroundColor Cyan
+            [string]$SpnInput  = Read-Host '  Press ENTER to use suggestion or type a custom SPN'
+            [string]$Candidate = if ([string]::IsNullOrWhiteSpace($SpnInput)) { $SuggestedSpn } else { $SpnInput.Trim() }
+
+            if ($Candidate -ne $global:HoneypotSPN) {
+                [string]$AccountDn = (Get-ADUser -Identity $global:HoneypotUsername -ErrorAction SilentlyContinue).DistinguishedName
+                $SpnConflict = Get-ADObject -Filter "servicePrincipalName -eq '$Candidate'" -ErrorAction SilentlyContinue
+                if ($SpnConflict -and $SpnConflict.DistinguishedName -ne $AccountDn) {
+                    Write-Host ("  [WARN] SPN '{0}' is already registered on '{1}'. SPN not changed." -f $Candidate, $SpnConflict.Name) -ForegroundColor Yellow
+                } else {
+                    try {
+                        Set-ADUser -Identity $global:HoneypotUsername `
+                            -ServicePrincipalNames @{Remove = $global:HoneypotSPN; Add = $Candidate} -ErrorAction Stop
+                        Write-Host ("  [OK] SPN changed from '{0}' to '{1}'." -f $global:HoneypotSPN, $Candidate) -ForegroundColor Green
+                        $NewSPN     = $Candidate
+                        $SpnChanged = $true
+                        $AnyChange  = $true
+                    } catch {
+                        Write-Host ("  [FAIL] Could not change SPN: {0}" -f $_) -ForegroundColor Red
+                    }
+                }
+            } else {
+                Write-Host '  SPN unchanged (same value entered).' -ForegroundColor Gray
+            }
+        } elseif ($SpnChoice.Trim() -eq '3') {
+            try {
+                Set-ADUser -Identity $global:HoneypotUsername `
+                    -ServicePrincipalNames @{Remove = $global:HoneypotSPN} -ErrorAction Stop
+                Write-Host ("  [OK] SPN '{0}' removed from account." -f $global:HoneypotSPN) -ForegroundColor Green
+                $NewSPN     = ''
+                $SpnChanged = $true
+                $AnyChange  = $true
+            } catch {
+                Write-Host ("  [FAIL] Could not remove SPN '{0}': {1}" -f $global:HoneypotSPN, $_) -ForegroundColor Red
+            }
+        }
+    }
+    Write-Host ''
+
+    # --- HoneypotMonitorMode ---
+    Write-Host ('-' * 50) -ForegroundColor DarkGray
+    Write-Host ("Monitor mode is currently: {0}" -f $global:HoneypotMonitorMode) -ForegroundColor White
+    [string]$OtherMode = if ($global:HoneypotMonitorMode -eq 'Centralized') { 'Decentralized' } else { 'Centralized' }
+    $SwitchMode = Read-Host ("Switch to {0}? (y/N)" -f $OtherMode)
+    if ($SwitchMode -match '^[Yy]$') {
+        $NewMonitorMode = $OtherMode
+        $AnyChange      = $true
+        Write-Host ("  Monitor mode will change to: {0}" -f $NewMonitorMode) -ForegroundColor Cyan
+        if ($NewMonitorMode -eq 'Decentralized') {
+            Write-Host '  Note: Run Deploy Decentralized Monitor to push the local monitor to each DC.' -ForegroundColor Yellow
+        }
+    }
+    Write-Host ''
+
+    if (-not $AnyChange) {
+        Write-Host 'No changes made.' -ForegroundColor White
+        return
+    }
+
+    # Show summary and require final confirmation before writing.
+    Write-Host ('-' * 50) -ForegroundColor DarkGray
+    Write-Host 'Summary of changes to apply:' -ForegroundColor White
+    if ($NewAudit -ne $global:HoneypotAudit) {
+        Write-Host ("  Audit Enabled   : {0} -> {1}" -f $AuditStatus, $(if ($NewAudit) { 'Enabled' } else { 'Disabled' })) -ForegroundColor White
+    }
+    if ($IntervalChanged) {
+        Write-Host ("  Monitor Interval: {0} -> {1} minutes" -f $global:HoneypotMonitorIntervalMinutes, $NewInterval) -ForegroundColor White
+    }
+    if ($SpnChanged) {
+        [string]$OldSpnDisplay = if ([string]::IsNullOrWhiteSpace($OldSPN)) { '(none)' } else { $OldSPN }
+        [string]$NewSpnDisplay = if ([string]::IsNullOrWhiteSpace($NewSPN)) { '(none)' } else { $NewSPN }
+        Write-Host ("  Kerberoast SPN  : {0} -> {1}" -f $OldSpnDisplay, $NewSpnDisplay) -ForegroundColor White
+    }
+    if ($NewMonitorMode -ne $global:HoneypotMonitorMode) {
+        Write-Host ("  Monitor Mode    : {0} -> {1}" -f $global:HoneypotMonitorMode, $NewMonitorMode) -ForegroundColor White
+    }
+    Write-Host ''
+
+    $Confirm = Read-Host 'Write changes to settings file? (y/N)'
+    if ($Confirm -notmatch '^[Yy]$') {
+        if ($SpnChanged) {
+            Write-Host '[WARN] Settings file update cancelled, but AD SPN changes were already applied.' -ForegroundColor Yellow
+            Write-Host '       Run Configure Settings again to sync the settings file.' -ForegroundColor Yellow
+        } else {
+            Write-Host 'Configuration update cancelled.' -ForegroundColor White
+        }
+        return
+    }
+
+    [int]$WriteInterval = if ($IntervalChanged) { $NewInterval } else { -1 }
+    Set-HoneypotSettings `
+        -Audit           $NewAudit `
+        -Username        $global:HoneypotUsername `
+        -DenyGroup       $global:HoneypotDenyGroup `
+        -OU              $global:HoneypotOU `
+        -IntervalMinutes $WriteInterval `
+        -SPN             $NewSPN `
+        -MonitorMode     $NewMonitorMode
+
+    if ($IntervalChanged) {
+        Write-Host ''
+        Write-Host ("Recreating scheduled task with {0}-minute interval ..." -f $NewInterval) -ForegroundColor White
+        New-HoneypotScheduledTask -ScriptPath $global:ThisScript
+    }
+
+    Write-Host ''
+    Write-Host $Divider -ForegroundColor Green
+    Write-Host '  Configuration updated successfully.' -ForegroundColor Green
+    Write-Host $Divider -ForegroundColor Green
     Write-Host ''
 }
 
@@ -1587,7 +1858,7 @@ Function Remove-HoneypotAccount {
 
     # Step 7: Clear settings.
     Write-Host 'Step 7: Clearing honeytoken configuration from settings file ...' -ForegroundColor White
-    Set-HoneypotSettings -Audit $false -Username '' -DenyGroup 'GG_Honeytoken_DenyLogon' -OU ''
+    Set-HoneypotSettings -Audit $false -Username '' -DenyGroup 'GG_Honeytoken_DenyLogon' -OU '' -SPN ''
 
     Write-Host ''
     Write-Host ('=' * 70) -ForegroundColor Green
