@@ -167,11 +167,14 @@ Function Get-ADUserPasswordAge {
         [string]$UserName
     )
     # Get the user's password last set date
-    [int]$DayOfYearPasswordLastSet = (Get-ADUser -Identity $UserName -Properties PasswordLastSet).PasswordLastSet.DayOfYear
-    # Get the number of days since the user last changed their password
-    [int]$DaysSincePasswordChange = (Get-Date).DayOfYear - $DayOfYearPasswordLastSet
-    # Return the number of days since the user last changed their password
-    return $DaysSincePasswordChange
+    $PasswordLastSet = (Get-ADUser -Identity $UserName -Properties PasswordLastSet).PasswordLastSet
+    # PasswordLastSet is null when "User must change password at next logon" is active or the
+    # account has never had a password set. Treat both as maximally overdue so the flag is applied.
+    if ($null -eq $PasswordLastSet -or $PasswordLastSet -eq [DateTime]::MinValue) {
+        return [int]::MaxValue
+    }
+    # Return the number of whole days since the user last changed their password.
+    return [int]((Get-Date) - $PasswordLastSet).TotalDays
 # End of Get-ADUserPasswordAge function
 }
 
@@ -608,8 +611,8 @@ Function Update-KRBTGTPassword {
             # Update the KRBTGT object variable.
             $KRBTGTObject = Get-ADUser -Filter {sAMAccountName -eq 'krbtgt'} -Properties *
 
-            # check if the password was updated successfully by checking if the PasswordLastSet equal to the current date and time.
-            if ( $KRBTGTObject.PasswordLastSet.DayOfYear -eq (Get-Date).DayOfYear ) {
+            # Check if the password was updated successfully: PasswordLastSet must be on or after midnight today.
+            if ( $KRBTGTObject.PasswordLastSet -ge (Get-Date).Date ) {
                 # If the password was updated successfully, then display a success message.
                 Write-Host "The KRBTGT password was updated successfully." -ForegroundColor Green
 
@@ -812,11 +815,14 @@ function Test-UserUpdatedPassword {
     }
     # Use the Get-ADUserPasswordAge function to get the password age of the user.
     $PasswordAge = Get-ADUserPasswordAge -Username $Username
-    # Check if the $PasswordAge is greater than the $global:PwAuditPwChangeGracePeriod. If it is, then enable the user attribue "User must change password at next logon" for the users AD account.
+    Write-Host "  Checking  : $Username"
+    Write-Host "  Pw age    : $PasswordAge days (grace period: $UpdateGracePeriod days)"
+    # If the user has not updated their password within the grace period, force a change at next logon.
     if ($PasswordAge -gt $UpdateGracePeriod) {
-        # Enable the user attribue "User must change password at next logon" fro the users AD account.
         Set-ADUser -Identity $Username -ChangePasswordAtLogon $true
-        # Output the user name and the date the user will be required to change their password.
+        Write-Host "  [ACTION] Password not updated in time. ChangePasswordAtLogon set for: $Username" -ForegroundColor Yellow
+    } else {
+        Write-Host "  [OK] Password updated within grace period. No action taken for: $Username" -ForegroundColor Green
     }
 # End of the Test-UserUpdatedPassword function.
 }

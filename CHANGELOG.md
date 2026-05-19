@@ -13,6 +13,25 @@
   'JobVar1' is specified more than once", which prevented the follow-up password-change check
   from executing. Command template corrected to `'Test-PwUserFollowup'` so the dispatcher is
   the sole injection point.
+- `Get-ADUserPasswordAge` -- Replaced `DayOfYear` subtraction with proper DateTime arithmetic
+  (`((Get-Date) - $PasswordLastSet).TotalDays`). The old calculation produced a negative result
+  whenever the password was last set on a calendar day later in the year than the current day
+  (e.g., set on day 200 of a prior year, checked on day 139 of the current year gives -61).
+  A negative age is never greater than the grace period, so `ChangePasswordAtLogon` was silently
+  skipped for all such users. Also added a null guard: if `PasswordLastSet` is null or
+  `DateTime::MinValue` (account created with "must change at next logon", or password never set),
+  the function now returns `[int]::MaxValue` so the flag is always applied.
+- `Test-UserUpdatedPassword` -- Added `Write-Host` diagnostic output showing the username being
+  checked, the calculated password age vs. the grace period, and whether `ChangePasswordAtLogon`
+  was set or the password was found to be current. Previously the function ran silently with no
+  transcript visibility, making it impossible to diagnose failures from unattended job logs.
+- `Update-KRBTGTPassword` -- Replaced the post-rotation success check from
+  `PasswordLastSet.DayOfYear -eq (Get-Date).DayOfYear` to
+  `PasswordLastSet -ge (Get-Date).Date`. The DayOfYear comparison fails at year rollover: if
+  rotation runs at 11:59 PM on Dec 31 and any delay pushes the check past midnight, DayOfYear
+  returns 1 while PasswordLastSet is still 365, causing the function to report failure and skip
+  scheduling the mandatory second rotation. The new check compares against midnight of the
+  current day and is immune to year boundaries.
 
 ---
 
