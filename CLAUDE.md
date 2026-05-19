@@ -403,7 +403,7 @@ Function Initialize-Module {
             Module   = "AD-PowerAdmin_MyModule"
             Function = "Start-MyParamJob"
             Daily    = $false
-            Command  = 'Start-MyParamJob -User $JobVar1'  # $JobVar1 from -JobVar1 arg
+            Command  = 'Start-MyParamJob'  # Dispatcher appends: -JobVar1 "value" at runtime
         }
     }
 }
@@ -665,6 +665,8 @@ Adding a new module will increment the computed version automatically.
 11. **Every feature must have a justification.** No audit, test, automation, or feature is added without a clear link to a known vulnerability, weakness, operational best practice, or security requirement. That justification is documented in the wiki.
 
 12. **After any architectural change, update both `CLAUDE.md` and the relevant wiki pages.** These documents are the authoritative reference for contributors and must stay current.
+
+13. **Never name specific offensive security tools in source code, comments, or documentation.** Signature-based endpoint security products (e.g., SentinelOne, Arctic Wolf) flag files containing the names of known attack tools -- even when those names appear in defensive commentary -- and will block the script. Use generic category descriptions instead: "credential dumping tools" instead of a specific tool name, "AD attack path enumeration tools" instead of a graph-based attack tool, "commercial C2 frameworks" instead of a specific C2 product, "open-source attack frameworks" instead of a specific toolkit. This rule applies to all `.ps1`, `.psm1`, `.psd1`, and `.md` files in the repository.
 
 ---
 

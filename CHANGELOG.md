@@ -4,6 +4,18 @@
 
 ---
 
+### [AD-PowerAdmin_PasswordsCtl — PwUserFollowup Job Fix]
+
+**Fixed:**
+- `Initialize-Module` (PwUserFollowup job) -- Removed `-JobVar1 $JobVar1` from the Command
+  template. `Start-Automation` appends `-JobVar1 "value"` to the command string at dispatch
+  time; having it in the template as well caused "Cannot bind parameter because parameter
+  'JobVar1' is specified more than once", which prevented the follow-up password-change check
+  from executing. Command template corrected to `'Test-PwUserFollowup'` so the dispatcher is
+  the sole injection point.
+
+---
+
 ### [Security Compliance — Offensive Tool Name Removal]
 
 **Changed:**

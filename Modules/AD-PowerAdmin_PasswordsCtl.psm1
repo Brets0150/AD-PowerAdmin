@@ -113,7 +113,7 @@ Function Initialize-Module {
             Module   = 'AD-PowerAdmin_PasswordsCtl'
             Function = 'Test-PwUserFollowup'
             Daily    = $false
-            Command  = 'Test-PwUserFollowup -JobVar1 $JobVar1'
+            Command  = 'Test-PwUserFollowup'
         }
         'Start-MonthlyPasswordAudit' = @{
             Title    = 'Password Audit Report & Email'
