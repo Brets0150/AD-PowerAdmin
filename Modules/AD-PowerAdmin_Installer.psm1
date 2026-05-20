@@ -1882,6 +1882,36 @@ function Get-ADPowerAdminLatestReleaseTag {
 # End of the Get-ADPowerAdminLatestReleaseTag function.
 }
 
+function Get-ADPowerAdminLatestPrereleaseTag {
+    <#
+    .SYNOPSIS
+    Queries the GitHub Releases API and returns the tag of the latest pre-release.
+
+    .DESCRIPTION
+    Calls https://api.github.com/repos/Brets0150/AD-PowerAdmin/releases and returns the
+    tag_name of the first entry where prerelease is $true. Returns $null if no pre-release
+    exists or on API failure.
+
+    .NOTES
+    Private helper for the Beta update channel. Not exported.
+    #>
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    try {
+        $ApiUrl     = 'https://api.github.com/repos/Brets0150/AD-PowerAdmin/releases'
+        $Releases   = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing -ErrorAction Stop
+        $Prerelease = $Releases | Where-Object { $_.prerelease -eq $true } | Select-Object -First 1
+        if (-not $Prerelease) {
+            Write-Host "ERROR: No pre-release found on GitHub Releases." -ForegroundColor Red
+            return $null
+        }
+        return $Prerelease.tag_name
+    } catch {
+        Write-Host "ERROR: Failed to query GitHub Releases API. $_" -ForegroundColor Red
+        return $null
+    }
+# End of the Get-ADPowerAdminLatestPrereleaseTag function.
+}
+
 function Get-ADPowerAdminRemoteModuleList {
     <#
     .SYNOPSIS
@@ -2024,6 +2054,14 @@ function Update-ADPowerAdminModules {
     if ($Channel -eq 'Development') {
         [string]$GitRef = 'main'
         Write-Host "Update channel: Development (main branch)" -ForegroundColor Cyan
+    } elseif ($Channel -eq 'Beta') {
+        Write-Host "Update channel: Beta -- querying GitHub for latest pre-release tag..." -ForegroundColor Cyan
+        [string]$GitRef = Get-ADPowerAdminLatestPrereleaseTag
+        if (-not $GitRef) {
+            Write-Host "ERROR: Could not determine the latest pre-release tag. Aborting update." -ForegroundColor Red
+            return
+        }
+        Write-Host "Latest pre-release tag: $GitRef" -ForegroundColor Cyan
     } else {
         Write-Host "Update channel: Release -- querying GitHub for latest release tag..." -ForegroundColor Cyan
         [string]$GitRef = Get-ADPowerAdminLatestReleaseTag
@@ -2200,6 +2238,15 @@ function Update-ADPowerAdminMainScript {
     if ($Channel -eq 'Development') {
         [string]$GitRef = 'main'
         Write-Host "Update channel: Development (main branch)" -ForegroundColor Cyan
+    } elseif ($Channel -eq 'Beta') {
+        Write-Host "Update channel: Beta -- querying GitHub for latest pre-release tag..." -ForegroundColor Cyan
+        [string]$GitRef = Get-ADPowerAdminLatestPrereleaseTag
+        if (-not $GitRef) {
+            Write-Host "ERROR: Could not determine the latest pre-release tag. Aborting update." -ForegroundColor Red
+            $ProgressPreference = $OriginalProgressPreference
+            return
+        }
+        Write-Host "Latest pre-release tag: $GitRef" -ForegroundColor Cyan
     } else {
         Write-Host "Update channel: Release -- querying GitHub for latest release tag..." -ForegroundColor Cyan
         [string]$GitRef = Get-ADPowerAdminLatestReleaseTag
@@ -2466,6 +2513,14 @@ function Update-ADPowerAdminSettingsFile {
         if ($Channel -eq 'Development') {
             $GitRef = 'main'
             Write-Host "Update channel: Development (main branch)" -ForegroundColor Cyan
+        } elseif ($Channel -eq 'Beta') {
+            Write-Host "Update channel: Beta -- querying GitHub for latest pre-release tag..." -ForegroundColor Cyan
+            $GitRef = Get-ADPowerAdminLatestPrereleaseTag
+            if (-not $GitRef) {
+                Write-Host "ERROR: Could not determine the latest pre-release tag. Aborting." -ForegroundColor Red
+                return
+            }
+            Write-Host "Latest pre-release tag: $GitRef" -ForegroundColor Cyan
         } else {
             Write-Host "Update channel: Release -- querying GitHub for latest tag..." -ForegroundColor Cyan
             $GitRef = Get-ADPowerAdminLatestReleaseTag
@@ -2968,12 +3023,12 @@ function Start-SettingsWizard {
     Show-SectionHeader "Optional Module Settings"
 
     Write-Host "  UpdateChannel: Controls which source is used when 'Update Modules' is run." -ForegroundColor DarkGray
-    Write-Host "  'Release' = latest official GitHub release. 'Development' = main branch." -ForegroundColor DarkGray
+    Write-Host "  'Release' = latest official GitHub release. 'Beta' = latest pre-release. 'Development' = main branch." -ForegroundColor DarkGray
     [string]$NewChannel = ''
     while ($true) {
-        $NewChannel = Read-SettingString -Prompt "Update channel (Release/Development)" -Default $global:UpdateChannel
-        if ($NewChannel -eq 'Release' -or $NewChannel -eq 'Development') { break }
-        Write-Host "  Value must be 'Release' or 'Development'." -ForegroundColor Yellow
+        $NewChannel = Read-SettingString -Prompt "Update channel (Release/Beta/Development)" -Default $global:UpdateChannel
+        if ($NewChannel -eq 'Release' -or $NewChannel -eq 'Beta' -or $NewChannel -eq 'Development') { break }
+        Write-Host "  Value must be 'Release', 'Beta', or 'Development'." -ForegroundColor Yellow
     }
     $Changes['UpdateChannel'] = @{ Value = $NewChannel; VarType = 'string-single' }
 

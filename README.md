@@ -31,6 +31,11 @@ AD-PowerAdmin is a tool to help Active Directory administrators secure and manag
 
 ---
 
+## Installation
+[See the Wiki for installation instructions.](https://github.com/Brets0150/AD-PowerAdmin/wiki/Install)
+
+---
+
 ## Features
 
 ### Password and Credential Security
@@ -55,8 +60,3 @@ Searches domain controller Security event logs for account lockout events (4740)
 Installs, tests, and removes AD-PowerAdmin as a Windows scheduled task running under a standalone Managed Service Account (sMSA) for unattended daily execution. Includes a helper to install PowerShell 7 if not already present. An interactive settings configuration wizard guides administrators through every configurable variable section by section, with Active Directory OU search, live DN validation, and automatic settings backup before any change is written.
 
 [Full feature documentation in the wiki](https://github.com/Brets0150/AD-PowerAdmin/wiki)
-
----
-
-## Installation
-[See the Wiki for installation instructions.](https://github.com/Brets0150/AD-PowerAdmin/wiki/Install)

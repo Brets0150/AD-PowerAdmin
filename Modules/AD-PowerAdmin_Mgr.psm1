@@ -34,6 +34,11 @@ Function Initialize-Module {
                     Label   = "Set ms-DS-MachineAccountQuota to 0 to prevent non-administrator users from creating computer accounts in the domain. Eliminates the Machine Account Quota vulnerability."
                     Command = "Set-MachineAccountQuota"
                 }
+                'SetAdAccountRandomPassword' = @{
+                    Title   = "Set Random Password"
+                    Label   = "Assign a cryptographically random 64-character password to an AD user account. Intended for disabled, unused, or non-interactive accounts that must have a password set but should never be used for interactive login."
+                    Command = "Set-AdAccountRandomPassword"
+                }
             }
         }
     }

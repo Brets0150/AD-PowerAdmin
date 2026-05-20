@@ -60,6 +60,7 @@
 # Module update channel. Controls which source is used when "Update Modules" is run from the
 # AD-PowerAdmin Management menu.
 #   'Release'     -- downloads the latest officially released version from GitHub Releases.
+#   'Beta'        -- downloads the latest pre-release version from GitHub Releases.
 #   'Development' -- downloads the current main branch files directly from GitHub.
 [string]$global:UpdateChannel = 'Release'
 

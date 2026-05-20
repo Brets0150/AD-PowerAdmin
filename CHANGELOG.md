@@ -4,6 +4,21 @@
 
 ---
 
+### [AD-PowerAdmin_Installer — Beta Update Channel]
+
+**Added:**
+- `Get-ADPowerAdminLatestPrereleaseTag` -- private helper that queries the GitHub Releases
+  API for the newest entry marked as a pre-release and returns its tag name. Used by the
+  Beta update channel to resolve the correct Git ref before downloading files.
+- Beta update channel (`$global:UpdateChannel = 'Beta'`) -- a new channel between Release
+  and Development that downloads from the latest GitHub pre-release package rather than the
+  stable release or raw main branch. Gives users access to tested pre-release builds without
+  pulling uncommitted development code. Supported across all three update functions
+  (`Update-ADPowerAdminModules`, `Update-ADPowerAdminMainScript`,
+  `Update-ADPowerAdminSettingsFile`) and selectable via the Configure Settings Wizard.
+
+---
+
 ### [AD-PowerAdmin — Unattended Job Log Concurrency Fix]
 
 **Fixed:**
