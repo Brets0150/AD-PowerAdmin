@@ -11,7 +11,7 @@
     RootModule = 'AD-PowerAdmin_Mgr.psm1'
 
     # Version number of this module.
-    ModuleVersion = '1.1'
+    ModuleVersion = '1.2'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -33,8 +33,9 @@
     AD-PowerAdmin_Mgr is a module that allows you to manage AD accounts and domain security settings.
 
     Functions included:
-    - Unregister-AdUser        Decommission an AD user account (remove groups, rotate password, disable, move to disabled OU).
-    - Set-MachineAccountQuota  Set ms-DS-MachineAccountQuota to 0 to eliminate the Machine Account Quota vulnerability.
+    - Unregister-AdUser             Decommission an AD user account (remove groups, rotate password, disable, move to disabled OU).
+    - Set-MachineAccountQuota       Set ms-DS-MachineAccountQuota to 0 to eliminate the Machine Account Quota vulnerability.
+    - Set-AdAccountRandomPassword   Assign a cryptographically random 64-character password to an AD user account to lock unused or non-interactive accounts.
 '@
 
     # Minimum version of the Windows PowerShell engine required by this module
@@ -74,7 +75,7 @@
     # NestedModules = @()
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-    FunctionsToExport = @('Initialize-Module', 'Unregister-AdUser', 'Set-MachineAccountQuota')
+    FunctionsToExport = @('Initialize-Module', 'Unregister-AdUser', 'Set-MachineAccountQuota', 'Set-AdAccountRandomPassword')
     # IF YOU DO NOT EXPORT THE FUNCTIONS, THEN THE FUNCTIONS WILL NOT BE AVAILABLE TO THE MAIN SCRIPT.
 
     # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
@@ -127,6 +128,11 @@
             - Refactored Initialize-Module to use a sub-menu (MgrMenu) instead of a direct main menu entry.
             - Added Set-MachineAccountQuota: reads the current ms-DS-MachineAccountQuota via Get-ADObject,
               confirms with the user, sets the value to 0 via Set-ADDomain -Replace, and verifies the change.
+            - Added Set-AdAccountRandomPassword: searches for an AD user account (enabled or disabled),
+              requires explicit YES confirmation, then assigns a 64-character cryptographically random
+              password via Set-ADAccountPassword -Reset. The password is discarded after being applied.
+              Intended for locking distribution-list mailboxes, legacy service accounts, and other
+              user objects that must have a password set but should never be used for interactive login.
 '@
 
         } # End of PSData hashtable
