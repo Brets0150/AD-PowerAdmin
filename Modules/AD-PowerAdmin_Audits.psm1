@@ -1315,7 +1315,7 @@ Function Test-ADSecurityBestPractices {
         - AD Password Policy review.
         - Audit AD objects that pose a risk of DCSync attack.
         - Find, w/ option to fix, unprivileged accounts with "adminCount=1" attribute set.
-            REF Link: https://cybergladius.social/@CyberGladius/109649278142902592
+            REF Link: https://social.cybergladius.com/@CyberGladius/109649278142902592
         - Users and computers with non-default Primary Group IDs(A method of hiding backdoor accounts).
         - Disabled accounts with Group Membership other than 'Domain Users' group.
         - Computers in the default "Computers" folder. Unsorted computers will likely be missing GPOs.

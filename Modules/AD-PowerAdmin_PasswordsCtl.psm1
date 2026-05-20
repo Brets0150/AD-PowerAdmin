@@ -447,7 +447,7 @@ Function Get-PasswordAuditAdminReport {
 
             - If non-user accounts have the warrning 'These administrative accounts are allowed to be
                 delegated to a service' then itmay be a false positive. See my post here
-                for more details: https://cybergladius.social/@CyberGladius/109649278142902592
+                for more details: https://social.cybergladius.com/@CyberGladius/109649278142902592
 
     .PARAMETER AdPwTestData
     The $AdPwTestData object to use to create the report. If this parameter is not used, then the Get-PasswordAudit function will be used to get the $AdPwTestData.
