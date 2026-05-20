@@ -4,6 +4,25 @@
     </div>
 </div>
 
+## Table of Contents
+- [Overview](#ad-poweradmin-overview)
+- [Mission](#mission)
+- [Installation](#installation)
+- [Signature Features](#signature-features)
+  - [Breached and Weak Password Auditing](#breached-and-weak-password-auditing)
+  - [Honeytoken Decoy Account](#honeytoken-decoy-account)
+  - [Active Directory ACL Auditing](#active-directory-acl-auditing)
+- [Features](#features)
+  - [Password and Credential Security](#password-and-credential-security)
+  - [Security Auditing](#security-auditing)
+  - [Group Policy Management](#group-policy-management)
+  - [SYSVOL and Infrastructure Security](#sysvol-and-infrastructure-security)
+  - [Account Lifecycle Management](#account-lifecycle-management)
+  - [Event Log Analysis and Monitoring](#event-log-analysis-and-monitoring)
+  - [Installation and Configuration](#installation-and-configuration)
+
+---
+
 ## AD-PowerAdmin Overview
 AD-PowerAdmin is a tool to help Active Directory administrators secure and manage their AD environment. It automates daily security checks -- user and computer lifecycle management, password auditing, misconfiguration detection, and more -- and emails alerts when issues are found. The core philosophy is to encode best practices directly into scripts so that security checks run consistently, every time, without manual intervention. This tool focuses on the common weaknesses and attack vectors adversaries exploit and defends against them.
 
