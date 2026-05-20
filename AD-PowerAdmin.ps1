@@ -68,7 +68,7 @@ Param (
 $host.UI.RawUI.WindowTitle = "AD-PowerAdmin - CyberGladius.com"
 
 # Version of this script.
-[System.Version]$global:Version = "1.2.0"
+[System.Version]$global:Version = "1.2.1"
 
 # Max character length of the menu options.
 [int]$global:OptionsMaxTextLength = 82
@@ -148,32 +148,27 @@ function Initialize-UnattendedLog {
     <#
     .SYNOPSIS
     Ensures the dedicated unattended-task log transcript is running.
-    Idempotent: if the unattended log is already the active transcript, does nothing.
-    If a different transcript is running (e.g., the debug log), stops it quietly and
-    starts the unattended log. If no transcript is running, starts the unattended log.
-    No-op when $global:UnattendedLog is $false.
+    Idempotent: if the requested log path is already the active transcript in this process,
+    does nothing. No-op when $global:UnattendedLog is $false.
+
+    .PARAMETER LogPath
+    Full path to the transcript file. Defaults to the static fallback path when not supplied.
+    Pass a per-invocation unique path to avoid concurrent-process file collisions.
     #>
+    param(
+        [string]$LogPath = "$global:ReportsPath\AD-PowerAdmin_Unattended.log"
+    )
     if (-not $global:UnattendedLog) { return }
 
-    $currentTranscript = $null
-    try {
-        $currentTranscript = Get-Transcript
-    } catch { }
+    # Idempotency via script-scope variable. Get-Transcript does not exist in Windows
+    # PowerShell 5.1 and always throws, making a Get-Transcript-based check unreliable.
+    if ($script:UnattendedLogPath -eq $LogPath) { return }
 
-    # If the unattended log is already the active transcript, nothing to do.
-    if ($currentTranscript -and ($currentTranscript -like "*AD-PowerAdmin_Unattended.log")) {
-        return
-    }
-
-    # Always stop any running transcript before starting the unattended log.
-    # The $currentTranscript guard above is unreliable in PS 5.1 because
-    # Get-Transcript does not exist in that version and always throws, leaving
-    # $currentTranscript as $null even when a transcript IS active.
-    # Stop-AllTranscripts is a silent no-op when nothing is running (Fix 1).
+    # Stop any running transcript before starting the new log.
     Stop-AllTranscripts | Out-Null
 
-    # Start the dedicated unattended log.
-    Start-Transcript -Path "$global:ReportsPath\AD-PowerAdmin_Unattended.log" -Append -Force | Out-Null
+    Start-Transcript -Path $LogPath -Append -Force | Out-Null
+    $script:UnattendedLogPath = $LogPath
 # End of Initialize-UnattendedLog function.
 }
 
@@ -787,10 +782,20 @@ function Start-Automation {
     # with literal single-quote characters. Strip any surrounding quotes before matching.
     $JobName = $JobName.Trim("'").Trim('"')
 
+    # Compute a per-invocation unique log path so concurrent jobs do not share a transcript file.
+    # All files land in Reports\UnattendedJobLogs\ to keep the main Reports\ folder uncluttered.
+    [string]$UnattendedJobLogsPath = "$global:ReportsPath\UnattendedJobLogs"
+    if (-not (Test-Path $UnattendedJobLogsPath)) {
+        New-Item -ItemType Directory -Path $UnattendedJobLogsPath -Force | Out-Null
+    }
+    [string]$SafeJobVar1 = ($JobVar1 -replace '[^\w-]', '_').Trim('_')
+    [string]$LogSuffix   = if ($SafeJobVar1) { "${JobName}_${SafeJobVar1}" } else { $JobName }
+    [string]$ThisJobLog  = "$UnattendedJobLogsPath\AD-PowerAdmin_Unattended_${LogSuffix}_$(Get-Date -Format 'yyyyMMdd_HHmmss')_$PID.log"
+
     # Start the dedicated unattended log (always on when $global:UnattendedLog is $true).
     # Initialize-Debug is only called as a fallback when the unattended log is disabled;
     # calling both when $global:UnattendedLog is $true causes transcript competition in PS 5.1.
-    Initialize-UnattendedLog
+    Initialize-UnattendedLog -LogPath $ThisJobLog
     if (-not $global:UnattendedLog) { Initialize-Debug }
 
     # Write a timestamped boundary marker so individual runs are identifiable in the log.
@@ -850,7 +855,7 @@ function Start-Automation {
             }
         }
 
-        Initialize-UnattendedLog
+        Initialize-UnattendedLog -LogPath $ThisJobLog
         if (-not $global:UnattendedLog) { Initialize-Debug }
         Write-Host "=== Unattended Run End: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
         Stop-AllTranscripts | Out-Null
@@ -886,7 +891,7 @@ function Start-Automation {
         Write-Host "         Registered job names: $(($UnattendedJobObjects | Select-Object -ExpandProperty JobName) -join ', ')"
     }
 
-    Initialize-UnattendedLog
+    Initialize-UnattendedLog -LogPath $ThisJobLog
     if (-not $global:UnattendedLog) { Initialize-Debug }
     Write-Host "=== Unattended Run End: $JobName | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
     Stop-AllTranscripts | Out-Null

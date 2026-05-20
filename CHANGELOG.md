@@ -4,6 +4,25 @@
 
 ---
 
+### [AD-PowerAdmin — Unattended Job Log Concurrency Fix]
+
+**Fixed:**
+- `Initialize-UnattendedLog` -- Replaced the static `AD-PowerAdmin_Unattended.log` transcript
+  path with an optional `[string]$LogPath` parameter (default retains the static fallback for
+  backward compatibility). Replaced the `Get-Transcript`-based idempotency guard with a
+  script-scope variable `$script:UnattendedLogPath`; `Get-Transcript` does not exist in Windows
+  PowerShell 5.1 and always throws, so the old guard was never True and every call restarted the
+  transcript, splitting each run into two separate transcript sections.
+- `Start-Automation` -- Computes a per-invocation unique log path
+  (`Reports\UnattendedJobLogs\AD-PowerAdmin_Unattended_<JobName>_<JobVar1>_<timestamp>_<PID>.log`)
+  and passes it to all three `Initialize-UnattendedLog` call sites. The `UnattendedJobLogs`
+  subdirectory is created automatically if absent. Previously, all concurrent unattended processes
+  wrote to the same static file; when multiple follow-up tasks fired simultaneously (e.g., all
+  `PwUserFollowup` tasks scheduled at the same time), only the process that won the file-lock race
+  produced a complete transcript -- the rest recorded only the "End" marker or nothing.
+
+---
+
 ### [AD-PowerAdmin_PasswordsCtl — PwUserFollowup Job Fix]
 
 **Fixed:**

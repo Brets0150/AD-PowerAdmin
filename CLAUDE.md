@@ -12,7 +12,7 @@ Automation here is not simply about saving time. It is about enforcing secure, r
 - **Author:** Bret.s (CyberGladius)
 - **License:** MIT
 - **Repo:** https://github.com/Brets0150/AD-PowerAdmin
-- **Current Script Version:** 1.2.0
+- **Current Script Version:** 1.2.1
 
 ---
 
@@ -174,7 +174,7 @@ The main script detects the running PowerShell version at startup. If a module's
 | `$global:ThisScriptsName` | string | Script filename |
 | `$global:ModulesPath` | string | Path to Modules/ folder |
 | `$global:ReportsPath` | string | Path to Reports/ folder |
-| `$global:Version` | System.Version | Script version (1.2.0) |
+| `$global:Version` | System.Version | Script version (1.2.1) |
 | `$global:OptionsMaxTextLength` | int | Menu display width (82 chars) |
 | `$global:Menu` | PSCustomObject | Hashtable of all menu items (populated by modules) |
 | `$global:UnattendedJobs` | PSCustomObject | Hashtable of all scheduled jobs (populated by modules) |
@@ -626,7 +626,7 @@ Add a bullet to the Features list for every user-visible AD capability the new m
 
 Overall version is computed dynamically:
 
-- Base: script version `1.2.0`
+- Base: script version `1.2.1`
 - Minor component sums all module `ModuleVersion` minor numbers
 - Patch component sums all module `ModuleVersion` patch numbers
 - Channel = lowest across all modules: `Alpha < Beta < Production`
