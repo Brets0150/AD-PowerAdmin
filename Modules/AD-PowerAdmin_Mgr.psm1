@@ -154,7 +154,20 @@ Function Unregister-AdUser {
     if (-not $AdUserToDisable) {
         [System.Object]$AdUserToDisable = Search-SingleAdObject
     }
-    $AdUserToDisable = Get-ADUser -Identity $($AdUserToDisable).samAccountName -Properties "*"
+    if (-not $AdUserToDisable) {
+        Write-Host "[FAIL] No user account was selected or found. Operation cancelled." -ForegroundColor Red
+        return
+    }
+    try {
+        $AdUserToDisable = Get-ADUser -Identity $($AdUserToDisable).samAccountName -Properties "*"
+    } catch {
+        Write-Host "[FAIL] Could not retrieve the selected account from AD: $_" -ForegroundColor Red
+        return
+    }
+    if (-not $AdUserToDisable) {
+        Write-Host "[FAIL] Get-ADUser returned no result. Operation cancelled." -ForegroundColor Red
+        return
+    }
 
     # Prompt the user to confirm the account to decommission.
     [string]$Prompt = "Are you sure you want to update the AD User `"$($($AdUserToDisable).DistinguishedName)`" with a new random pasword, remove all groups, disable and move the AD object to the disabled OU? (y/N)"

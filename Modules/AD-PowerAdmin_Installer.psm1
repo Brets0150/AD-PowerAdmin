@@ -756,6 +756,10 @@ function Install-ADPowerAdmin {
     # Install the DSInternals PowerShell module.
     Install-DSInternals
 
+    Write-Host ""
+    Write-Host "  [Post-install] Configuring HIBP auto-update schedule..." -ForegroundColor Cyan
+    Invoke-HibpScheduleInstallPrompt
+
     # Test the AD-PowerAdmin install.
     Write-Host ""
     Write-Host "  [Post-install] Validating installation..." -ForegroundColor Cyan
@@ -768,6 +772,71 @@ function Install-ADPowerAdmin {
         Write-Host "  Installation validation FAILED. Review the output above for errors." -ForegroundColor Red
     }
 # End of the Install-ADPowerAdmin function.
+}
+
+Function Invoke-HibpScheduleInstallPrompt {
+    <#
+    .SYNOPSIS
+        Prompt the user during installation to configure the HIBP auto-update schedule.
+
+    .DESCRIPTION
+        Asks the administrator whether the daily scheduled task should automatically refresh
+        the Have I Been Pwned NTLM hash database on a Monthly or Weekly basis, or not at all.
+        Persists the choice to AD-PowerAdmin_settings.ps1 and updates the running session.
+
+        The HIBP download can take many hours on first run. Subsequent runs use incremental
+        ETag-based updates and are much faster. The daily AD-PowerAdmin task runs at 9:00 AM;
+        on the configured day, Start-HibpAutoUpdate will execute the download automatically.
+    #>
+
+    [string]$Sep = "  " + ("-" * 58)
+
+    Write-Host $Sep -ForegroundColor DarkGray
+    Write-Host "  The HIBP hash database download can take several hours on" -ForegroundColor White
+    Write-Host "  the first run (~70 GB). Subsequent runs download only new" -ForegroundColor White
+    Write-Host "  or changed files (incremental updates)." -ForegroundColor White
+    Write-Host ""
+    Write-Host "  The daily scheduled task runs at 9:00 AM. On the day you" -ForegroundColor White
+    Write-Host "  choose, it will automatically trigger the HIBP update." -ForegroundColor White
+    Write-Host ""
+    Write-Host "  [M] Monthly  -- Run on the 1st of each month (recommended)" -ForegroundColor White
+    Write-Host "  [W] Weekly   -- Run every Monday" -ForegroundColor White
+    Write-Host "  [D] Disabled -- No automatic updates; trigger manually from the menu" -ForegroundColor White
+    Write-Host ""
+
+    [string]$Choice = ''
+    while ($Choice -notin @('M','W','D')) {
+        $Raw = (Read-Host "  HIBP auto-update schedule [M/W/D] (default: D)").Trim().ToUpper()
+        if ($Raw -eq '') { $Raw = 'D' }
+        $Choice = $Raw
+        if ($Choice -notin @('M','W','D')) {
+            Write-Host "  Invalid input. Enter M, W, or D." -ForegroundColor Yellow
+        }
+    }
+
+    [string]$NewValue = switch ($Choice) {
+        'M' { 'Monthly'  }
+        'W' { 'Weekly'   }
+        'D' { 'Disabled' }
+    }
+
+    [string]$SettingsFile = Join-Path $global:InstallDirectory 'AD-PowerAdmin_settings.ps1'
+    if (Test-Path $SettingsFile) {
+        try {
+            [string]$Content = Get-Content -Path $SettingsFile -Raw
+            [string]$Updated = Set-SettingsFileValue -Content $Content -VarName 'HibpAutoUpdateSchedule' -NewValue $NewValue -VarType 'string-single'
+            Write-FileUtf8Crlf -Path $SettingsFile -Content $Updated
+        }
+        catch {
+            Write-Host "  WARNING: Could not write schedule to settings file: $_" -ForegroundColor Yellow
+            Write-Host "  Set HibpAutoUpdateSchedule manually in AD-PowerAdmin_settings.ps1." -ForegroundColor Yellow
+        }
+    }
+
+    $global:HibpAutoUpdateSchedule = $NewValue
+    Write-Host "  HIBP auto-update schedule set to: $NewValue" -ForegroundColor Green
+    Write-Host $Sep -ForegroundColor DarkGray
+# End of the Invoke-HibpScheduleInstallPrompt function.
 }
 
 Function Install-DSInternals {

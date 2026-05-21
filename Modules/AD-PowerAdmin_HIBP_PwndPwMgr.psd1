@@ -11,7 +11,7 @@
     RootModule = 'AD-PowerAdmin_HIBP_PwndPwMgr.psm1'
 
     # Version number of this module.
-    ModuleVersion = '1.1'
+    ModuleVersion = '1.2'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -77,7 +77,9 @@
         'Get-WeakPasswordsList',
         'Test-HibpToolsInstalled',
         'Uninstall-HibpTools',
-        'Show-HibpTroubleshootingGuide'
+        'Show-HibpTroubleshootingGuide',
+        'Start-HibpAutoUpdate',
+        'Set-HibpAutoUpdateSchedule'
     )
     # IF YOU DO NOT EXPORT THE FUNCTIONS, THEN THE FUNCTIONS WILL NOT BE AVAILABLE TO THE MAIN SCRIPT.
 
@@ -120,7 +122,24 @@
             Channel = 'Production'
 
             # ReleaseNotes of this module
+            # Runtime dependencies on other AD-PowerAdmin modules (not enforced by PS loader).
+            RequiredADPAModules = @('AD-PowerAdmin_Utils')
+
             ReleaseNotes = @'
+            v1.2 Production:
+            - Added Start-HibpAutoUpdate: schedule-aware daily-task wrapper. Checks
+              $global:HibpAutoUpdateSchedule ('Monthly', 'Weekly', 'Disabled') and runs
+              Get-HibpPasswordHashesFiles + Get-WeakPasswordsList only on the configured
+              day (1st of month or Monday). No-op on all other days or when Disabled.
+            - Added Set-HibpAutoUpdateSchedule: interactive function to configure the
+              HIBP auto-update schedule from the HIBP submenu; persists the choice to
+              AD-PowerAdmin_settings.ps1 via Set-SettingsFileValue.
+            - Added HibpConfigSchedule submenu item in Initialize-Module.
+            - Changed HibpUpdateHashes unattended job: Daily changed from $false to
+              $true; Command changed to Start-HibpAutoUpdate. Job now participates in
+              the daily scheduled task run.
+            - Removed HibpUpdateWeakPw unattended job: weak password list update is
+              now bundled inside Start-HibpAutoUpdate.
             v1.1 Production:
             - Promoted from Beta to Production. Pure PowerShell HIBP downloader validated
               through real-world operation. No functional changes from v1.1 Beta.

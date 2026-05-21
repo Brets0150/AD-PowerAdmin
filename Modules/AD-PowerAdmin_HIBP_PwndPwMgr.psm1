@@ -48,26 +48,26 @@ Function Initialize-Module {
                     Label   = "Display a step-by-step guide for diagnosing and resolving HIBP downloader failures, including configuration and single-file vs directory mode explanation."
                     Command = "Show-HibpTroubleshootingGuide"
                 }
+                'HibpConfigSchedule' = @{
+                    Title   = "Configure Auto-Update"
+                    Label   = "Set the automatic HIBP hash database update schedule: Monthly (1st of each month), Weekly (every Monday), or Disabled (manual updates only). The daily scheduled task will run the update on matching days."
+                    Command = "Set-HibpAutoUpdateSchedule"
+                }
             }
         }
     }
 
+    # Remove stale job keys from previous module versions.
+    $global:UnattendedJobs.Remove('HibpUpdateWeakPw')
+
     $global:UnattendedJobs += @{
         'HibpUpdateHashes' = @{
-            Title    = "Update HIBP Database"
-            Label    = "Weekly refresh of the HIBP NTLM hash database and weak password list. Incremental after the first full download."
+            Title    = "HIBP Auto-Update"
+            Label    = "Schedule-aware HIBP database update. Runs Get-HibpPasswordHashesFiles and Get-WeakPasswordsList only on the day configured in HibpAutoUpdateSchedule (Monthly = 1st of month, Weekly = Monday). No-op on all other days or when Disabled."
             Module   = "AD-PowerAdmin_HIBP_PwndPwMgr"
-            Function = "Get-HibpPasswordHashesFiles"
-            Daily    = $false
-            Command  = "Get-HibpPasswordHashesFiles"
-        }
-        'HibpUpdateWeakPw' = @{
-            Title    = "Update Weak Passwords List"
-            Label    = "Weekly download of the latest weak password list from weakpasswords.net."
-            Module   = "AD-PowerAdmin_HIBP_PwndPwMgr"
-            Function = "Get-WeakPasswordsList"
-            Daily    = $false
-            Command  = "Get-WeakPasswordsList"
+            Function = "Start-HibpAutoUpdate"
+            Daily    = $true
+            Command  = "Start-HibpAutoUpdate"
         }
     }
 }
@@ -1715,5 +1715,127 @@ Function Show-HibpTroubleshootingGuide {
     Write-Host $Sep  -ForegroundColor Cyan
     Write-Host "  End of troubleshooting guide." -ForegroundColor Cyan
     Write-Host $Sep  -ForegroundColor Cyan
+    Write-Host ""
+}
+
+# ==============================================================
+# SCHEDULE-AWARE UNATTENDED UPDATE FUNCTIONS
+# ==============================================================
+
+Function Start-HibpAutoUpdate {
+    <#
+    .SYNOPSIS
+        Schedule-aware entry point for the HIBP database update unattended job.
+
+    .DESCRIPTION
+        Called daily by the AD-PowerAdmin_Daily scheduled task via the HibpUpdateHashes
+        unattended job. Checks $global:HibpAutoUpdateSchedule to decide whether today is
+        the right day to run the download:
+
+          'Monthly'  -- Proceeds only when (Get-Date).Day -eq 1 (1st of the month).
+          'Weekly'   -- Proceeds only when today is Monday.
+          'Disabled' -- Always skips; returns without downloading anything.
+
+        On a matching day, calls Get-HibpPasswordHashesFiles followed by
+        Get-WeakPasswordsList. The function is a no-op on all non-matching days so it
+        is safe to register with Daily = $true in the unattended job table.
+
+    .OUTPUTS
+        [bool] $true if the update ran and both downloads succeeded; $false if the update
+        ran but one or both downloads failed; $null if the schedule check caused a skip.
+    #>
+
+    [string]$Schedule = $global:HibpAutoUpdateSchedule
+
+    if ($Schedule -eq 'Disabled') {
+        Write-Host "HIBP auto-update is Disabled. Skipping." -ForegroundColor DarkGray
+        return
+    }
+
+    if ($Schedule -eq 'Monthly') {
+        if ((Get-Date).Day -ne 1) {
+            Write-Host "HIBP auto-update is Monthly. Today is not the 1st -- skipping." -ForegroundColor DarkGray
+            return
+        }
+        Write-Host "HIBP auto-update: Monthly run triggered (1st of month)." -ForegroundColor Cyan
+    }
+    elseif ($Schedule -eq 'Weekly') {
+        if ((Get-Date).DayOfWeek -ne 'Monday') {
+            Write-Host "HIBP auto-update is Weekly. Today is not Monday -- skipping." -ForegroundColor DarkGray
+            return
+        }
+        Write-Host "HIBP auto-update: Weekly run triggered (Monday)." -ForegroundColor Cyan
+    }
+    else {
+        Write-Host "HIBP auto-update: unrecognized schedule value '$Schedule'. Skipping." -ForegroundColor Yellow
+        return
+    }
+
+    [bool]$HashOk = Get-HibpPasswordHashesFiles
+    [bool]$WeakOk = Get-WeakPasswordsList
+    return ($HashOk -and $WeakOk)
+}
+
+Function Set-HibpAutoUpdateSchedule {
+    <#
+    .SYNOPSIS
+        Interactively configure the HIBP database auto-update schedule.
+
+    .DESCRIPTION
+        Prompts the user to choose between Monthly (1st of each month), Weekly (every
+        Monday), or Disabled (manual updates only). Persists the choice to
+        AD-PowerAdmin_settings.ps1 via Set-SettingsFileValue and updates the running
+        session variable immediately.
+
+    .NOTES
+        Requires the AD-PowerAdmin_Installer module to be loaded (provides
+        Set-SettingsFileValue).
+    #>
+
+    [string]$Current = $global:HibpAutoUpdateSchedule
+    [string]$Sep = "-" * 60
+
+    Write-Host ""
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host "  Configure HIBP Database Auto-Update Schedule" -ForegroundColor Cyan
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  The HIBP hash database download can take many hours on first run."
+    Write-Host "  Subsequent runs are incremental and much faster."
+    Write-Host ""
+    Write-Host "  Current schedule: $Current" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  [M] Monthly  -- Run on the 1st of each month (recommended)"
+    Write-Host "  [W] Weekly   -- Run every Monday"
+    Write-Host "  [D] Disabled -- No automatic updates (manual trigger only)"
+    Write-Host ""
+
+    [string]$Choice = ''
+    while ($Choice -notin @('M','W','D')) {
+        $Choice = (Read-Host "  Enter choice [M/W/D]").Trim().ToUpper()
+        if ($Choice -eq '') { $Choice = 'D' }
+        if ($Choice -notin @('M','W','D')) {
+            Write-Host "  Invalid input. Enter M, W, or D." -ForegroundColor Yellow
+        }
+    }
+
+    [string]$NewValue = switch ($Choice) {
+        'M' { 'Monthly' }
+        'W' { 'Weekly'  }
+        'D' { 'Disabled' }
+    }
+
+    # Persist to settings file.
+    [string]$SettingsFile = Join-Path $global:ThisScriptDir 'AD-PowerAdmin_settings.ps1'
+    [string]$Content = Get-Content -Path $SettingsFile -Raw
+    [string]$Updated = Set-SettingsFileValue -Content $Content -VarName 'HibpAutoUpdateSchedule' -NewValue $NewValue -VarType 'string-single'
+    [System.IO.File]::WriteAllText($SettingsFile, $Updated, [System.Text.Encoding]::UTF8)
+
+    # Update running session.
+    $global:HibpAutoUpdateSchedule = $NewValue
+
+    Write-Host ""
+    Write-Host "  HIBP auto-update schedule set to: $NewValue" -ForegroundColor Green
+    Write-Host $Sep -ForegroundColor Cyan
     Write-Host ""
 }

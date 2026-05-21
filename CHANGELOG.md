@@ -4,6 +4,86 @@
 
 ---
 
+### [AD-PowerAdmin_HIBP_PwndPwMgr — Auto-Update Schedule]
+
+**Added:**
+- `Start-HibpAutoUpdate` -- schedule-aware entry point for the `HibpUpdateHashes` unattended
+  job. Reads `$global:HibpAutoUpdateSchedule` each time the daily task fires and decides
+  whether today is the right day to run the download:
+  - `'Monthly'` -- proceeds only when `(Get-Date).Day -eq 1` (1st of the month).
+  - `'Weekly'` -- proceeds only when today is Monday.
+  - `'Disabled'` -- always skips; returns without downloading anything.
+  On a matching day, calls `Get-HibpPasswordHashesFiles` followed by `Get-WeakPasswordsList`.
+  A no-op on all other days, making it safe to register with `Daily = $true`.
+
+- `Set-HibpAutoUpdateSchedule` -- interactive function in the Manage HIBP Database submenu.
+  Prompts the administrator to choose Monthly, Weekly, or Disabled; persists the choice to
+  `AD-PowerAdmin_settings.ps1` via `Set-SettingsFileValue`; updates `$global:HibpAutoUpdateSchedule`
+  in the running session immediately.
+
+- `HibpConfigSchedule` submenu item -- exposes `Set-HibpAutoUpdateSchedule` in the Manage
+  HIBP Database submenu so the schedule can be changed at any time without re-running the
+  installer.
+
+**Changed:**
+- `HibpUpdateHashes` unattended job: `Daily` changed from `$false` to `$true`; `Command`
+  changed to `Start-HibpAutoUpdate`. The job now participates in the daily scheduled task run
+  and self-gates on the configured schedule day.
+
+**Removed:**
+- `HibpUpdateWeakPw` unattended job: weak password list update is now bundled inside
+  `Start-HibpAutoUpdate`, which calls both `Get-HibpPasswordHashesFiles` and
+  `Get-WeakPasswordsList` on the same schedule day. Removing the separate job prevents
+  the two updates from running on different days.
+
+---
+
+### [AD-PowerAdmin_settings.ps1 — HibpAutoUpdateSchedule Setting]
+
+**Added:**
+- `$global:HibpAutoUpdateSchedule` -- controls the day-of-run check in `Start-HibpAutoUpdate`.
+  Valid values: `'Monthly'` (1st of each month), `'Weekly'` (every Monday), `'Disabled'` (no
+  automatic run). Default is `'Disabled'` so the multi-hour download does not start
+  unexpectedly after installation. Configure via the HIBP submenu or the installer wizard.
+
+---
+
+### [AD-PowerAdmin_Installer — HIBP Schedule Prompt]
+
+**Added:**
+- `Invoke-HibpScheduleInstallPrompt` -- private helper called during `Install-ADPowerAdmin`.
+  Explains the HIBP download scope, prompts for the desired update schedule (Monthly / Weekly /
+  Disabled), writes the choice to the installed `AD-PowerAdmin_settings.ps1` via
+  `Set-SettingsFileValue`, and updates `$global:HibpAutoUpdateSchedule` for the current session.
+
+- Post-install step in `Install-ADPowerAdmin` that calls `Invoke-HibpScheduleInstallPrompt`
+  after the DSInternals installation and before the final validation pass. This ensures every
+  new installation captures the administrator's intent for HIBP auto-updates.
+
+---
+
+### [AD-PowerAdmin_Mgr — Unregister-AdUser Null-Identity Safety Fix]
+
+**Fixed:**
+- `Unregister-AdUser` -- added a null guard and try/catch around the user-lookup block to
+  prevent the decommission workflow from continuing when no account is found.
+
+  Previously, if `Search-SingleAdObject` returned `$null` (user not found or search cancelled),
+  execution fell through to `Get-ADUser -Identity $null.samAccountName`, which threw a
+  non-terminating exception. PowerShell continued running, the confirmation prompt appeared
+  with an empty `DistinguishedName`, and a careless `y` would have invoked
+  `Remove-ADGroupMember`, `Set-ADAccountPassword`, `Disable-ADAccount`, and `Move-ADObject`
+  with a null identity -- undefined and potentially dangerous behavior.
+
+  The fix inserts two hard stops: (1) an explicit `$null` check immediately after
+  `Search-SingleAdObject` returns, printing `[FAIL]` and returning before any AD mutation
+  can occur; (2) a try/catch around the `Get-ADUser -Properties "*"` refresh call so that
+  any AD error (e.g., account deleted between search and confirmation) also produces a clean
+  message and an immediate return. The confirmation prompt is now unreachable unless a fully
+  resolved, non-null `ADUser` object is in hand.
+
+---
+
 ### [README — Mission Statement]
 
 **Added:**

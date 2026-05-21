@@ -248,6 +248,15 @@
 # Example: [string]$global:PasswordQualityTestSearchOUbase = ''
 [string]$global:PasswordQualityTestSearchOUbase = ''
 
+# HIBP database automatic update schedule.
+# Controls on which days the daily scheduled task will refresh the HIBP hash database and
+# weak password list. The download can take many hours; 'Disabled' skips automatic updates
+# so they can be triggered manually from the HIBP submenu.
+#   'Monthly'  -- Run on the 1st of each month.
+#   'Weekly'   -- Run every Monday.
+#   'Disabled' -- No automatic schedule; update manually from the menu only.
+[string]$global:HibpAutoUpdateSchedule = 'Disabled'
+
 # Enable CC the AD Admins on the password audit alert email. When a user is found with a breached
 # or weak password, the user will receive an email with the message above. The AD Admins will
 # also receive a copy of the email.
