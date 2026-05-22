@@ -162,32 +162,81 @@ Function Get-HoneypotEventsBatch {
     [double]$QuerySec = ((Get-Date) - $QueryStart).TotalSeconds
 
     [string]$QueryMode = if ($IsLocal) { 'local' } else { 'remote' }
-    [int]$RawCount = if ($RawEvents) { $RawEvents.Count } else { 0 }
-    Write-Host ("    [DC-DATA] {0}: {1} event(s) for '{2}' returned in {3:N1}s ({4} filter)" -f $ComputerName, $RawCount, $Username, $QuerySec, $QueryMode) -ForegroundColor DarkGray
+    [int]$FirstQueryCount = if ($RawEvents) { $RawEvents.Count } else { 0 }
+    Write-Host ("    [DC-DATA] {0}: {1} event(s) for '{2}' returned in {3:N1}s ({4} filter)" -f $ComputerName, $FirstQueryCount, $Username, $QuerySec, $QueryMode) -ForegroundColor DarkGray
 
     # Second query: Kerberos service ticket requests (Event 4769) when a bait SPN is configured.
     # Event 4769 identifies the target by ServiceName (= the honeytoken sAMAccountName),
     # not TargetUserName, so it requires a separate query.
+    #
+    # Performance note: Event 4769 fires for every Kerberos TGS request on the DC -- potentially
+    # hundreds of thousands of events in a short window on a busy domain. Two strategies are used
+    # to avoid processing that full volume:
+    #
+    # Local queries (decentralized mode): Use -FilterXPath with a ServiceName predicate so the
+    # Event Log service filters before returning events. No UTC conversion issue applies here
+    # because local queries read the log file directly (no RPC layer). This reduces retrieved
+    # events from potentially hundreds of thousands to near zero in normal operation.
+    #
+    # Remote queries (centralized mode): -FilterHashtable is kept for safe datetime handling
+    # (see the note on UTC above), but a Properties[2] pre-filter is applied immediately after
+    # retrieval. Properties[2].Value is ServiceName for Event 4769 (third EventData field).
+    # This avoids XML-parsing tens of thousands of non-matching events.
     if (-not [string]::IsNullOrWhiteSpace($global:HoneypotSPN)) {
-        [hashtable]$Filter4769 = @{
-            LogName   = 'Security'
-            Id        = @(4769)
-            StartTime = $StartTime
-            EndTime   = $EndTime
-        }
-        try {
-            [array]$Kerberos4769 = if ($IsLocal) {
-                Get-WinEvent -FilterHashtable $Filter4769 -ErrorAction SilentlyContinue
-            } else {
-                Get-WinEvent -ComputerName $ComputerName -FilterHashtable $Filter4769 -ErrorAction SilentlyContinue
+        [datetime]$Query4769Start = Get-Date
+        [array]$Kerberos4769 = @()
+
+        if ($IsLocal) {
+            # XPath pushes the ServiceName filter into the Event Log query engine.
+            # ToString("o") produces the ISO-8601 UTC format Windows XPath expects.
+            [string]$StartUtc   = $StartTime.ToUniversalTime().ToString("o")
+            [string]$EndUtc     = $EndTime.ToUniversalTime().ToString("o")
+            [string]$XPath4769  = (
+                "*[System[(EventID=4769) and " +
+                "(TimeCreated[@SystemTime >= '$StartUtc'] and TimeCreated[@SystemTime <= '$EndUtc'])] " +
+                "and EventData[(Data[@Name='ServiceName'] = '$Username' " +
+                "or starts-with(Data[@Name='ServiceName'], '${Username}@'))]]"
+            )
+            try {
+                $Kerberos4769 = @(Get-WinEvent -LogName 'Security' -FilterXPath $XPath4769 -ErrorAction SilentlyContinue)
+            } catch { $Kerberos4769 = @() }
+            [double]$Query4769Sec = ((Get-Date) - $Query4769Start).TotalSeconds
+            Write-Host ("    [DC-4769] {0}: {1} matching 4769 event(s) via XPath in {2:N1}s" -f $ComputerName, $Kerberos4769.Count, $Query4769Sec) -ForegroundColor DarkGray
+        } else {
+            # Remote query: -FilterHashtable handles UTC safely, then Properties[2] pre-filters
+            # by ServiceName before any XML parsing occurs.
+            [hashtable]$Filter4769 = @{
+                LogName   = 'Security'
+                Id        = @(4769)
+                StartTime = $StartTime
+                EndTime   = $EndTime
             }
-        } catch { $Kerberos4769 = @() }
-        if ($Kerberos4769) { $RawEvents = @($RawEvents) + @($Kerberos4769) }
+            [array]$Raw4769 = @()
+            try {
+                $Raw4769 = @(Get-WinEvent -ComputerName $ComputerName -FilterHashtable $Filter4769 -ErrorAction SilentlyContinue)
+            } catch { $Raw4769 = @() }
+            [double]$Query4769Sec = ((Get-Date) - $Query4769Start).TotalSeconds
+
+            # Properties[2].Value = ServiceName for Event 4769 (EventData field index 2).
+            # This pre-filter runs before ToXml() so non-matching events cost nothing.
+            if ($Raw4769.Count -gt 0) {
+                $Kerberos4769 = @($Raw4769 | Where-Object {
+                    $_.Properties.Count -gt 2 -and
+                    ([string]$_.Properties[2].Value).Split('@')[0] -eq $Username
+                })
+            }
+            Write-Host ("    [DC-4769] {0}: {1} raw / {2} matched 4769 event(s) in {3:N1}s (remote pre-filter)" -f $ComputerName, $Raw4769.Count, $Kerberos4769.Count, $Query4769Sec) -ForegroundColor DarkGray
+        }
+
+        if ($Kerberos4769.Count -gt 0) { $RawEvents = @($RawEvents) + $Kerberos4769 }
     }
 
     if (-not $RawEvents) { return @() }
 
     # Events are returned only when activity exists in the window -- parse and enrich them.
+    # $RawEvents at this point contains only the first-query events plus any 4769 events that
+    # already passed the ServiceName pre-filter above, so XML parsing is minimal.
+    [int]$RawCount = if ($RawEvents) { $RawEvents.Count } else { 0 }
     [datetime]$ParseStart = Get-Date
     $Enriched = @()
     foreach ($Evt in $RawEvents) {
