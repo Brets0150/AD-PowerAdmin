@@ -1225,19 +1225,19 @@ function Search-AD {
     # If the user wants to search for a computer, then search for the computer.
     if ($SearchType -eq 'C' -or $SearchType -eq 'c') {
         # Search for the given Computer in Active Directory.
-        [Object]$SearchResults = Get-AdComputer -Filter "(Name -like '*$AdObect*') -and (Enabled -eq 'True')" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
+        [Object]$SearchResults = Get-AdComputer -Filter "(Name -like '*$AdObect*') -and (Enabled -eq 'True')" -Properties * | Select-Object Name,@{Name='ObjectType';Expression={'computer'}},Enabled,UserPrincipalName,DistinguishedName
     }
 
     # If the user wants to search for a user, then search for the user.
     if ($SearchType -eq 'U' -or $SearchType -eq 'u') {
         # Search for the given User in Active Directory.
-        [Object]$SearchResults = Get-AdUser -Filter "(Name -like '*$AdObect*') -and (Enabled -eq 'True')" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
+        [Object]$SearchResults = Get-AdUser -Filter "(Name -like '*$AdObect*') -and (Enabled -eq 'True')" -Properties * | Select-Object Name,@{Name='ObjectType';Expression={'user'}},Enabled,UserPrincipalName,DistinguishedName
     }
 
     # If the user wants to search for all objects, then search for the object.
     if ($SearchType -eq 'A' -or $SearchType -eq 'a') {
         # Search for the given Object in Active Directory.
-        [Object]$SearchResults = Get-AdObject -Filter "(Name -like '*$AdObect*')" -Properties * | Select-Object Name,Enabled,UserPrincipalName,DistinguishedName
+        [Object]$SearchResults = Get-AdObject -Filter "(Name -like '*$AdObect*')" -Properties * | Select-Object Name,@{Name='ObjectType';Expression={$_.ObjectClass}},@{Name='Enabled';Expression={if ($_.ObjectClass -in @('user','computer')) { $_.Enabled } else { 'N/A' }}},@{Name='UserPrincipalName';Expression={if ($_.ObjectClass -eq 'user') { $_.UserPrincipalName } else { 'N/A' }}},DistinguishedName
     }
 
     # Check if the $SearchResults variable is empty.

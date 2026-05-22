@@ -4,6 +4,13 @@
 
 ---
 
+### [AD-PowerAdmin_Audits — Search-AD Output Improvements]
+
+**Changed:**
+- `Search-AD` -- Added `ObjectType` field to search results output, showing the AD object class (user, computer, group, organizationalUnit, etc.). Fields that do not apply to a given object type now display `N/A` instead of blank: `Enabled` is shown as `N/A` for any object class other than `user` or `computer`; `UserPrincipalName` is shown as `N/A` for any object class other than `user`. This makes mixed-type results from the "All Objects" search unambiguous and eliminates the appearance of missing data for distribution lists, OUs, contacts, and other non-user objects.
+
+---
+
 ### [AD-PowerAdmin_PasswordsCtl — Password Audit Search Scope Prompt]
 
 **Changed:**
