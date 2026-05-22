@@ -4,6 +4,31 @@
 
 ---
 
+### [AD-PowerAdmin_PasswordsCtl — Password Audit Search Scope Prompt]
+
+**Changed:**
+- `Get-PasswordAuditAdminReport` -- Added an interactive prompt before the DSInternals password audit runs. The prompt displays the currently configured OU search scope from `$global:PasswordQualityTestSearchOUbase` and asks whether to expand the search to all of Active Directory. Pressing Enter or any non-yes input uses the configured scope (default: No). Entering `y` or `yes` overrides the OU filter and audits all user accounts in the domain. This change applies to the interactive "Password Audit Report" and "Password Audit Report and Email" menu options only; the automated `Start-MonthlyPasswordAudit` job is unaffected and continues to use the configured scope.
+
+---
+
+### [New-ReleasePackage.ps1 — Channel-Filtered Packaging]
+
+**Changed:**
+- Added `-Beta` switch parameter. When specified, modules with `Channel = 'Beta'` are included
+  in the release package alongside Production modules. Without the flag, only Production modules
+  are included.
+- Module inclusion is now determined by reading the `Channel` field from each `.psd1` manifest
+  before staging. Alpha modules are never included in any release package. Modules with no
+  `Channel` field are also excluded.
+- The output zip filename now includes a `-beta` suffix when `-Beta` is used (e.g.
+  `ADPowerAdmin_V1.2.14-beta.zip`) to clearly distinguish beta packages from production packages.
+- Version and channel calculations now operate only on the filtered (included) module set, so
+  the version number and channel label in the package accurately reflect what is bundled.
+- Excluded modules are printed to the console during packaging so the operator can see what was
+  omitted and why.
+
+---
+
 ### [AD-PowerAdmin_HIBP_PwndPwMgr — Auto-Update Schedule]
 
 **Added:**

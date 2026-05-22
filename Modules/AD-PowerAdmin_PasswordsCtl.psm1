@@ -471,7 +471,18 @@ Function Get-PasswordAuditAdminReport {
 
     # If the $AdPwTestData is empty, then use the Get-PasswordAudit function to get the $AdPwTestData.
     if ($null -eq $AdPwTestData) {
-        [object]$AdPwTestData = Get-PasswordAudit -SearchOUbase $global:PasswordQualityTestSearchOUbase -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile -NtlmHashDataDir $global:NtlmHashDataDir
+        if ($global:PasswordQualityTestSearchOUbase -ne '') {
+            Write-Host "  Configured search scope: $global:PasswordQualityTestSearchOUbase" -ForegroundColor Cyan
+        } else {
+            Write-Host "  Configured search scope: All of Active Directory (no OU filter configured)" -ForegroundColor Cyan
+        }
+        [string]$ScopeAnswer = Read-Host "  Expand search to all of Active Directory? [y/N] (default: No = use configured scope)"
+        if ($ScopeAnswer -eq 'y' -or $ScopeAnswer -eq 'Y' -or $ScopeAnswer -eq 'yes' -or $ScopeAnswer -eq 'Yes' -or $ScopeAnswer -eq 'YES') {
+            [string]$AuditSearchScope = ''
+        } else {
+            [string]$AuditSearchScope = $global:PasswordQualityTestSearchOUbase
+        }
+        [object]$AdPwTestData = Get-PasswordAudit -SearchOUbase $AuditSearchScope -WeakPassDictFile $global:WeakPassDictFile -NtlmHashDataFile $global:NtlmHashDataFile -NtlmHashDataDir $global:NtlmHashDataDir
     }
     # Convert the $ADPasswordTestData to an output string.
     $ADPasswordTestDataString = $AdPwTestData | Out-String

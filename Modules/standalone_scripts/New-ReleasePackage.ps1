@@ -10,10 +10,16 @@
       AD-PowerAdmin.ps1
       AD-PowerAdmin_settings.ps1  (skipped with a warning if the file is absent)
       README.md
-      Modules\  (direct files only -- no subdirectories)
+      Modules\  (filtered by channel -- see -Beta below)
       MANIFEST.txt  (SHA256 hash of every included file, sha256sum-compatible)
 
+    By default only modules with Channel = 'Production' are included.
+    Use -Beta to also include modules with Channel = 'Beta'.
+    Modules with Channel = 'Alpha' are never included in any release package.
+    Modules with no Channel field are also excluded.
+
     Output: <ProjectRoot>\Releases\ADPowerAdmin_V<version>.zip
+            <ProjectRoot>\Releases\ADPowerAdmin_V<version>-beta.zip  (when -Beta)
 
     The Releases\ folder is created at the project root if it does not exist.
     If a zip with the same version name already exists, the script prompts before
@@ -21,8 +27,15 @@
 
     Run this script whenever a release is ready to be packaged for GitHub.
 
+.PARAMETER Beta
+    Include modules marked Channel = 'Beta' in addition to Production modules.
+    The output zip filename will include a -beta suffix.
+
 .EXAMPLE
     pwsh -File .\Modules\standalone_scripts\New-ReleasePackage.ps1
+
+.EXAMPLE
+    pwsh -File .\Modules\standalone_scripts\New-ReleasePackage.ps1 -Beta
 
 .NOTES
     Author:  CyberGladius
@@ -30,6 +43,10 @@
     Can be run from any working directory -- all paths are resolved from the
     script's own location.
 #>
+
+param(
+    [switch]$Beta
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -65,8 +82,43 @@ if (-not $ModulePsd1Files) {
     exit 1
 }
 
+# ---------------------------------------------------------------------------
+# Channel filtering -- determine which modules to include
+# Alpha is never included. Beta is included only when -Beta is specified.
+# ---------------------------------------------------------------------------
+$AllowedChannels = @('Production')
+if ($Beta) { $AllowedChannels += 'Beta' }
+
+$FilteredPsd1Files = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+$ExcludedModules   = [System.Collections.Generic.List[string]]::new()
+
+foreach ($Psd1 in $ModulePsd1Files) {
+    $ChannelLine = Get-Content $Psd1.FullName |
+        Select-String -Pattern 'Channel\s*=' | Select-Object -First 1
+    $ModChannel = if ($ChannelLine) {
+        ($ChannelLine.ToString() -split '=')[1].Trim().Trim("'")
+    } else { 'Unknown' }
+
+    if ($ModChannel -in $AllowedChannels) {
+        $FilteredPsd1Files.Add($Psd1)
+    } else {
+        $ExcludedModules.Add("$($Psd1.BaseName) [$ModChannel]")
+    }
+}
+
+if ($FilteredPsd1Files.Count -eq 0) {
+    Write-Error "No modules matched the selected channels: $($AllowedChannels -join ', ')"
+    exit 1
+}
+
+if ($ExcludedModules.Count -gt 0) {
+    Write-Host "Excluded modules (channel not in this release):"
+    $ExcludedModules | ForEach-Object { Write-Host "  Skipped : $_" }
+    Write-Host ""
+}
+
 [float]$VersionAccumulator = 0
-Get-Content -Path $ModulePsd1Files.FullName |
+Get-Content -Path ($FilteredPsd1Files | Select-Object -ExpandProperty FullName) |
     Select-String -Pattern 'ModuleVersion' | ForEach-Object {
         $VersionAccumulator += ($_.ToString()).Split('=')[1].Trim().Trim("'")
     }
@@ -77,10 +129,10 @@ $CumulativeVersion = [System.Version]$VersionAccumulator
     ($BaseVersion.Build + $CumulativeVersion.Minor)
 
 # ---------------------------------------------------------------------------
-# Channel calculation -- Alpha < Beta < Production
+# Channel calculation -- Alpha < Beta < Production (from filtered set only)
 # ---------------------------------------------------------------------------
 $OverallChannel = 'Unknown'
-Get-Content -Path $ModulePsd1Files.FullName |
+Get-Content -Path ($FilteredPsd1Files | Select-Object -ExpandProperty FullName) |
     Select-String -Pattern 'Channel' | Select-String -Pattern '=' | ForEach-Object {
         $Channel = ($_.ToString()).Split('=')[1].Trim().Trim("'")
         if ($Channel -eq 'Alpha') {
@@ -106,7 +158,8 @@ if (-not (Test-Path -LiteralPath $ReleasesDir)) {
     Write-Host "Created Releases\ directory at project root."
 }
 
-$ZipName = "ADPowerAdmin_V$OverallVersion.zip"
+$BetaSuffix = if ($Beta) { '-beta' } else { '' }
+$ZipName    = "ADPowerAdmin_V$OverallVersion$BetaSuffix.zip"
 $ZipPath = Join-Path $ReleasesDir $ZipName
 
 if (Test-Path -LiteralPath $ZipPath) {
@@ -140,8 +193,13 @@ try {
         }
     }
 
-    # Module files -- direct children only, no subdirectories
-    Get-ChildItem -Path $ModulesPath -File | ForEach-Object {
+    # Module files -- only include .psd1/.psm1 pairs for channel-filtered modules
+    $IncludedModuleNames = $FilteredPsd1Files |
+        ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Name) }
+
+    Get-ChildItem -Path $ModulesPath -File | Where-Object {
+        [System.IO.Path]::GetFileNameWithoutExtension($_.Name) -in $IncludedModuleNames
+    } | ForEach-Object {
         $DestFile = Join-Path (Join-Path $StagingDir 'Modules') $_.Name
         Copy-Item -LiteralPath $_.FullName -Destination $DestFile -Force
         $StagedCount++
