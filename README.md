@@ -7,6 +7,7 @@
 ## Table of Contents
 - [Overview](#ad-poweradmin-overview)
 - [Mission](#mission)
+- [Sponsorship](#sponsorship)
 - [Installation](#installation)
 - [Signature Features](#signature-features)
   - [Breached and Weak Password Auditing](#breached-and-weak-password-auditing)
@@ -43,6 +44,26 @@ This project is not a theoretical hardening guide translated into code. It is a 
 **Auditability and accountability** are equally central to the project. Running a security check once is not enough. AD-PowerAdmin is designed so that audits execute on a schedule, produce structured reports, and maintain a clear record of what was checked, when, and what was found. That record serves both operational and compliance purposes -- it is the evidence you can produce when asked to demonstrate that your environment is being actively monitored and maintained.
 
 This project is for administrators who are not content to assume their environment is secure. It is for those who want to know.
+
+## Sponsorship
+
+AD-PowerAdmin is and will remain free and open source. If it has been useful in your environment, please consider supporting its continued development.
+
+**Why sponsorship matters for this project:**
+
+The next phase of AD-PowerAdmin development includes full code signing for all production releases. Code signing gives administrators confidence that the scripts they are running have not been tampered with and originate from a verified source -- a meaningful security control for a tool that operates with Domain Admin privileges. Maintaining a trusted code signing certificate carries a real recurring monthly cost, as do the secure development and auditing tools used to review the codebase before each release.
+
+I have covered these costs personally since the project began. Expanding the framework into signed production releases and additional security features requires sustained financial support to do it properly and without cutting corners on the security controls themselves.
+
+Sponsorship contributions go directly toward:
+
+- Recurring code signing certificate fees (monthly)
+- Secure development and static analysis tooling
+- Infrastructure supporting continued feature development and release quality
+
+If AD-PowerAdmin saves you time, helps you catch a real vulnerability, or gives you confidence that your environment is being actively monitored, a sponsorship is the most direct way to keep that work going.
+
+[Sponsor this project on GitHub Sponsors](https://github.com/sponsors/Brets0150)
 
 ---
 
