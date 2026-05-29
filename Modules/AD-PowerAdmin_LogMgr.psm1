@@ -45,6 +45,11 @@ Function Initialize-Module {
                     Label   = "Query all domain controllers for NTLM v1 and v2 authentication events. Identifies source systems, users, and NTLM versions still in use. Requires the NTLM audit GPO to be applied to domain controllers first."
                     Command = "Show-NTLMAuthEvents"
                 }
+                'LockoutLogArchitecture' = @{
+                    Title   = "Lockout Log Architecture"
+                    Label   = "Explain where Windows stores account lockout log data and why multiple systems must be reviewed to trace the source of repeated bad password attempts."
+                    Command = "Show-LockoutLogArchitecture"
+                }
             }
         }
     }
@@ -223,6 +228,127 @@ Function Get-LockOutEventExplaination {
     $Message += '-------------------------------------------------------------------------------------------------------------------------------' + "`n"
     Write-Host $Message -ForegroundColor White
 }
+
+Function Show-LockoutLogArchitecture {
+    <#
+    .SYNOPSIS
+        Show-LockoutLogArchitecture
+    .DESCRIPTION
+        Displays a plain-language explanation and ASCII diagram of how Windows distributes
+        account lockout log data across multiple systems. Covers what each system logs,
+        and how to correlate event timestamps to trace the source of repeated bad password attempts.
+    .EXAMPLE
+        Show-LockoutLogArchitecture
+    .NOTES
+    #>
+    $Sep = '=' * 94
+
+    Write-Host ""
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host "  WHERE WINDOWS STORES ACCOUNT LOCKOUT LOG DATA" -ForegroundColor Cyan
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "OVERVIEW" -ForegroundColor Yellow
+    Write-Host "  Windows does not record all account lockout information in one place."
+    Write-Host "  When an account is locked out, the domain controller records event ID 4740."
+    Write-Host "  However, the failed login attempts (event ID 4625) are logged on the logon"
+    Write-Host "  TARGET -- the server, VPN gateway, RDP host, or application that received"
+    Write-Host "  the authentication attempt, not the domain controller and not the user's machine."
+    Write-Host ""
+    Write-Host "  The 4740 event tells you WHICH account locked out and WHICH DC processed it."
+    Write-Host "  It names the Caller Computer -- the logon target that forwarded the failed"
+    Write-Host "  authentication to the DC. Event 4625 (failed logon) is also logged on that target."
+    Write-Host ""
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host "  LOCKOUT EVENT FLOW DIAGRAM" -ForegroundColor Cyan
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host ""
+
+    $Message  = '                                     +------------------------------+' + "`n"
+    $Message += '                                     |   Lockout Event ID: 4740     |' + "`n"
+    $Message += '                                     |------------------------------|' + "`n"
+    $Message += '                                     | A user account was locked out|' + "`n"
+    $Message += '                                     |                              |' + "`n"
+    $Message += '                                     | Subject:                     |' + "`n"
+    $Message += '                                     |   Security ID: SYSTEM        |' + "`n"
+    $Message += '                                     |   Account Name: AdServer01$  |' + "`n"
+    $Message += '                                     |   Account Domain: ACME       |' + "`n"
+    $Message += '                                     |   Logon ID: 0x3e7            |' + "`n"
+    $Message += '                                     |                              |' + "`n"
+    $Message += '                                     | Account That Was Locked Out: |' + "`n"
+    $Message += '                                     |   Security ID: ACME\bret     |' + "`n"
+    $Message += '                                     |   Account Name: bret         |' + "`n"
+    $Message += '                                     |                              |' + "`n"
+    $Message += '                                     | Additional Information:      |' + "`n"
+    $Message += '                                     |   Caller Computer Name: PC01 |' + "`n"
+    $Message += '                                     +------------------------------+' + "`n"
+    $Message += '                                                     ^'               + "`n"
+    $Message += '                                                     |'               + "`n"
+    $Message += '                                                     |'               + "`n"
+    $Message += '                                             +---------------+'       + "`n"
+    $Message += '+-----------------------+                    |               |'       + "`n"
+    $Message += '| Name: PC01            |                    |               |'       + "`n"
+    $Message += '| Role: Calling Computer|                    |               |'       + "`n"
+    $Message += '| Logged: Nothing       |                    |               |'       + "`n"
+    $Message += '+-----------------------+                    |               |'       + "`n"
+    $Message += '             |                                \             /'        + "`n"
+    $Message += '             |                                 \           /'         + "`n"
+    $Message += '             |                                  \         /'          + "`n"
+    $Message += '         RDP | Connection                        \       /'           + "`n"
+    $Message += '             |                                    \     /'            + "`n"
+    $Message += '             |                                     \   /'             + "`n"
+    $Message += '             |                                      \ /'              + "`n"
+    $Message += '             v                                       v'               + "`n"
+    $Message += '+-------------------------+    Authentication Request    +------------------------+' + "`n"
+    $Message += '| Name: Server01         | ----------------------------> | Name: AdServer01       |' + "`n"
+    $Message += '| Role: Logon Target     |                               | Role: Active Directory |' + "`n"
+    $Message += '| Logged: Failed Logon   |                               | Logged: Lockout Event  |' + "`n"
+    $Message += '| EventID: 4625          |                               |         ID: 4740       |' + "`n"
+    $Message += '+------------------------+                               +------------------------+' + "`n"
+    Write-Host $Message -ForegroundColor White
+
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host "  WHAT EACH SYSTEM LOGS" -ForegroundColor Cyan
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Domain Controller (Active Directory)" -ForegroundColor Yellow
+    Write-Host "    Event 4740 -- Account lockout. Records the locked account name, the DC"
+    Write-Host "    that processed it, and the Caller Computer Name (the last machine that"
+    Write-Host "    sent a bad password). This is logged on the DC, not the source machine."
+    Write-Host ""
+    Write-Host "  Logon Target (server, VPN gateway, RDP host, application -- Server01 in diagram)" -ForegroundColor Yellow
+    Write-Host "    Event 4625 -- Failed logon. Records the username, logon type, source IP,"
+    Write-Host "    failure reason, and timestamp. Logged on the TARGET that received the"
+    Write-Host "    authentication attempt. Not logged on the DC or the user's calling machine."
+    Write-Host ""
+    Write-Host "  Calling Computer (PC01 in the diagram)" -ForegroundColor Yellow
+    Write-Host "    Windows typically logs nothing about the lockout on the initiating machine."
+    Write-Host "    The failed authentications appear on the system the connection targeted"
+    Write-Host "    (Server01 in the diagram), not on the machine the user was sitting at."
+    Write-Host ""
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host "  TROUBLESHOOTING APPROACH" -ForegroundColor Cyan
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  1. Search the domain controller for event 4740 to identify the locked account"
+    Write-Host "     and the Caller Computer Name field."
+    Write-Host ""
+    Write-Host "  2. Note the timestamp of the 4740 event on the DC."
+    Write-Host ""
+    Write-Host "  3. Query the Caller Computer (or logon target server) for event 4625 events"
+    Write-Host "     within the same time window. Correlate by timestamp and username."
+    Write-Host ""
+    Write-Host "  4. If the source is a VPN, RDP gateway, or application, retrieve logs from"
+    Write-Host "     that system. The 4625 event may not exist on a Windows host -- check"
+    Write-Host "     application-specific logs instead."
+    Write-Host ""
+    Write-Host "  5. Repeat if multiple Caller Computers appear or if lockouts recur after unlock."
+    Write-Host ""
+    Write-Host $Sep -ForegroundColor Cyan
+    Write-Host ""
+    Read-Host "Press Enter to return to the menu"
+}
+
 Function Get-CurrentLockedoutUsers {
     <#
     .SYNOPSIS

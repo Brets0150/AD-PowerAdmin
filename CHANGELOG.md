@@ -4,6 +4,37 @@
 
 ---
 
+### [AD-PowerAdmin_Mgr -- Unregister-AdUser Disabled-OU Resolution Fix]
+
+**Fixed:**
+- `Unregister-AdUser` -- corrected disabled-OU resolution when `$global:InactiveUsersLocations`
+  is configured as an array of multiple search-scope hashtables.
+
+  The previous code interpolated the entire array object into a string, causing PowerShell to
+  join all `DisabledOULocal` values with a space (e.g., `"OU=Disabled... OU=Disabled..."`),
+  which is not a valid distinguished name. The OU existence check additionally used
+  `-Filter "Name -eq '<full DN>'"`, which is structurally wrong -- the `Name` attribute of an
+  OU is the short CN only, so the check always failed even when the OU existed, and
+  `Move-ADObject` was never reached.
+
+  The fix resolves the target OU before the confirmation prompt by collecting all unique
+  `DisabledOULocal` values from the configuration array. If all values are identical, that
+  single OU is used automatically. If distinct values exist, the operator is presented with a
+  numbered list and must choose before proceeding. The resolved OU is validated with
+  `Get-ADOrganizationalUnit -Identity` (full DN lookup, not a name filter) and any failure
+  produces a `[FAIL]` message and aborts before any AD changes are made. The confirmation
+  prompt now includes the target OU path so the operator knows exactly where the account will
+  land.
+
+---
+
+### [AD-PowerAdmin_LogMgr]
+
+**Added:**
+- `Show-LockoutLogArchitecture` -- Displays a text diagram and plain-language explanation of how Windows distributes account lockout data across the domain controller (event 4740) and authentication source systems (event 4625). Helps administrators understand that the DC records which account was locked out and which machine last sent the bad password, while the failed logon details reside on the authentication source -- which may be a workstation, server, VPN gateway, RDP host, or application. Includes a step-by-step troubleshooting approach for correlating timestamps across systems. Registered as "Lockout Log Architecture" in the Event Log Manager submenu.
+
+---
+
 ### [AD-PowerAdmin_Audits — Search-AD Output Improvements]
 
 **Changed:**

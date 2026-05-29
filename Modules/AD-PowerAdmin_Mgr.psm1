@@ -169,8 +169,40 @@ Function Unregister-AdUser {
         return
     }
 
+    # Resolve the target disabled OU from the InactiveUsersLocations configuration array.
+    [array]$UniqueDisabledOUs = @(
+        $global:InactiveUsersLocations | ForEach-Object { $_.DisabledOULocal } | Sort-Object -Unique
+    )
+    [string]$TargetDisabledOU = $null
+    if ($UniqueDisabledOUs.Count -eq 0) {
+        Write-Host "[FAIL] No DisabledOULocal is configured in InactiveUsersLocations. Cannot move account." -ForegroundColor Red
+        return
+    } elseif ($UniqueDisabledOUs.Count -eq 1) {
+        $TargetDisabledOU = $UniqueDisabledOUs[0]
+    } else {
+        Write-Host "Multiple distinct disabled OUs are configured. Select the OU to move this account into:" -ForegroundColor Cyan
+        for ($i = 0; $i -lt $UniqueDisabledOUs.Count; $i++) {
+            Write-Host "$($i + 1). $($UniqueDisabledOUs[$i])"
+        }
+        [int]$OUSelection = 0
+        while ($OUSelection -lt 1 -or $OUSelection -gt $UniqueDisabledOUs.Count) {
+            [string]$RawOUInput = Read-Host "Select the number of the target OU"
+            if ($RawOUInput -match "^\d+$") { $OUSelection = [int]$RawOUInput }
+        }
+        $TargetDisabledOU = $UniqueDisabledOUs[$OUSelection - 1]
+    }
+
+    # Validate the resolved OU exists in AD before making any changes.
+    try {
+        $null = Get-ADOrganizationalUnit -Identity $TargetDisabledOU -ErrorAction Stop
+    } catch {
+        Write-Host "[FAIL] Target disabled OU '$TargetDisabledOU' does not exist in AD." -ForegroundColor Red
+        Write-Host "       Update the DisabledOULocal setting in 'AD-PowerAdmin_settings.ps1'." -ForegroundColor Yellow
+        return
+    }
+
     # Prompt the user to confirm the account to decommission.
-    [string]$Prompt = "Are you sure you want to update the AD User `"$($($AdUserToDisable).DistinguishedName)`" with a new random pasword, remove all groups, disable and move the AD object to the disabled OU? (y/N)"
+    [string]$Prompt = "Are you sure you want to decommission AD User `"$($AdUserToDisable.SamAccountName)`", remove all groups, rotate the password, disable the account, and move it to '$TargetDisabledOU'? (y/N)"
     $Confirm = Read-Host -Prompt $Prompt
 
     # If the user don't confirm, exit the function.
@@ -204,15 +236,8 @@ Function Unregister-AdUser {
         # Set the User Account objects description to the new description.
         Set-ADUser -Identity $AdUserToDisable -Description $AdUserToDisableDescription
 
-        # Confirm the "$($global:InactiveUsersLocations).DisabledOULocal" OU exist in AD.
-        if (-not (Get-ADOrganizationalUnit -Filter "Name -eq '$($global:InactiveUsersLocations).DisabledOULocal'")) {
-            Write-Host "The OU $($($global:InactiveUsersLocations).DisabledOULocal) does not exist in AD." -ForegroundColor Red
-            Write-Host "Update the global:InactiveUsersLocations setting in 'AD-PowerAdmin_settings.ps1"  -ForegroundColor Red
-            Write-Host "Leaving Disabled user account in the current OU."  -ForegroundColor Yellow
-            return
-        }
-        # Move the account to the Decommissioned OU.
-        Move-ADObject -Identity $AdUserToDisable -TargetPath "$($global:InactiveUsersLocations).DisabledOULocal"
+        # Move the account to the resolved and pre-validated disabled OU.
+        Move-ADObject -Identity $AdUserToDisable -TargetPath $TargetDisabledOU
     }
 # End of Unregister-AdUser function
 }
