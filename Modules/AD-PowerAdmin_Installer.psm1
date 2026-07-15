@@ -23,6 +23,11 @@ Function Initialize-Module {
             Title       = "AD-PowerAdmin Management"
             HelpCommand = "Show-InstallHelp"
             Items = @{
+                'InstallDependencies' = @{
+                    Title   = "Install Dependencies"
+                    Label   = "Install only the supporting software AD-PowerAdmin needs to run: the ActiveDirectory and GroupPolicy RSAT modules and the DSInternals module. Reports what is present or missing, installs only what is missing, and makes no changes to Active Directory."
+                    Command = "Install-ADPowerAdminDependencies"
+                }
                 'InstallADPowerAdmin' = @{
                     Title   = "Install AD-PowerAdmin"
                     Label   = "Install AD-PowerAdmin to run daily tasks as a scheduled task using a managed service account."
@@ -913,6 +918,450 @@ Function Install-PowerShell7 {
 
     # Check if PowerShell 7 is installed.
     Test-PowerShell7-Installed
+}
+
+# ===========================================================================
+# Dependency Management
+#
+# These functions install ONLY the third-party software AD-PowerAdmin depends
+# on. They deliberately do not touch AD-PowerAdmin's own installation (sMSA
+# account, scheduled task, GPO, ACLs) -- that remains Install-ADPowerAdmin.
+# ===========================================================================
+
+Function Install-ADPAGalleryModule {
+    <#
+    .SYNOPSIS
+        Private. Installs a module from the PowerShell Gallery and returns a success boolean.
+
+    .DESCRIPTION
+        Shared PowerShell Gallery installation routine used by Install-DSInternals and by
+        Install-ADPowerAdminDependencies. Attempts a plain Install-Module first. If that
+        fails, it falls back to bootstrapping the prerequisites that are commonly missing
+        on a freshly built Windows Server:
+          1. Force TLS 1.2, which older Windows builds do not negotiate by default and
+             which the PowerShell Gallery requires.
+          2. Install the NuGet package provider.
+          3. Re-register the PSGallery repository if it has been removed.
+        Unlike Install-DSInternals, this function never exits the script; it returns $false
+        so an interactive caller can report the failure and continue.
+
+    .PARAMETER Name
+        The PowerShell Gallery module name to install (for example, 'DSInternals').
+
+    .OUTPUTS
+        [bool] $true if the module is available after the attempt; $false otherwise.
+
+    .EXAMPLE
+        if (-not (Install-ADPAGalleryModule -Name 'DSInternals')) { Write-Host 'Failed.' }
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Name
+    )
+
+    # Already present, nothing to do.
+    if ( $null -ne (Get-Module -ListAvailable -Name $Name) ) { return $true }
+
+    # First attempt: a straight install. Silenced because the fallback below handles failure.
+    Install-Module -Name $Name -Force -ErrorAction SilentlyContinue
+
+    # Second attempt: bootstrap TLS 1.2, the NuGet provider, and the PSGallery repository.
+    if ( $null -eq (Get-Module -ListAvailable -Name $Name) ) {
+        Write-Host "[WARN] The $Name module did not install. Retrying with the NuGet bootstrap..." -ForegroundColor Yellow
+        try {
+            # TLS 1.2 must be enabled on older versions of Windows.
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+            # Download the NuGet package manager binary.
+            Install-PackageProvider -Name NuGet -Force -ErrorAction Stop | Out-Null
+            # Register the PowerShell Gallery as a package repository if it is missing for any reason.
+            if ( $null -eq (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue) ) {
+                Register-PSRepository -Default -ErrorAction Stop
+            }
+            Install-Module -Name $Name -Force -ErrorAction Stop
+        } catch {
+            Write-Host "[FAIL] Installing '$Name' from the PowerShell Gallery failed: $($_.Exception.Message)" -ForegroundColor Red
+            return $false
+        }
+    }
+
+    return ( $null -ne (Get-Module -ListAvailable -Name $Name) )
+# End of Install-ADPAGalleryModule function
+}
+
+Function Test-ADPAIsServerOs {
+    <#
+    .SYNOPSIS
+        Private. Determines whether the local machine is a Windows Server SKU.
+
+    .DESCRIPTION
+        RSAT components install differently depending on the SKU. Windows Server uses
+        Install-WindowsFeature; Windows 10/11 clients use Add-WindowsCapability. This
+        function reads Win32_OperatingSystem.ProductType to tell them apart:
+          1 = Workstation, 2 = Domain Controller, 3 = Member Server.
+        If the query fails, it assumes Server, which is the expected host for AD-PowerAdmin.
+
+    .OUTPUTS
+        [bool] $true for a Domain Controller or Member Server; $false for a workstation.
+
+    .EXAMPLE
+        if (Test-ADPAIsServerOs) { Install-WindowsFeature -Name GPMC }
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    try {
+        [int]$ProductType = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).ProductType
+        return ($ProductType -ne 1)
+    } catch {
+        # Assume Server: AD-PowerAdmin is designed to run on a Domain Controller.
+        return $true
+    }
+# End of Test-ADPAIsServerOs function
+}
+
+Function Install-ADPARsatComponent {
+    <#
+    .SYNOPSIS
+        Private. Installs an RSAT component that provides a required PowerShell module.
+
+    .DESCRIPTION
+        Installs an RSAT feature using the correct mechanism for the local SKU, then
+        confirms the resulting PowerShell module is available:
+          - Windows Server: Install-WindowsFeature -Name <ServerFeature> -IncludeManagementTools
+          - Windows 10/11 : Add-WindowsCapability -Online -Name <capability>
+        The client capability is resolved with a wildcard lookup rather than a hardcoded
+        version string, because the capability name carries a build-specific version suffix
+        (for example, Rsat.GroupPolicy.Management.Tools~~~~0.0.1.0).
+
+        A restart requirement reported by either mechanism is surfaced to the caller as a
+        warning; the module may not be importable until that restart is completed.
+
+    .PARAMETER ModuleName
+        The PowerShell module the component provides (for example, 'GroupPolicy'). Used to
+        verify the install actually delivered what AD-PowerAdmin needs.
+
+    .PARAMETER ServerFeature
+        The Windows Server feature name (for example, 'RSAT-AD-PowerShell').
+
+    .PARAMETER ClientCapabilityPattern
+        A wildcard pattern matching the Windows client capability name
+        (for example, 'Rsat.ActiveDirectory.DS-LDS.Tools*').
+
+    .OUTPUTS
+        [bool] $true if the module is available after the attempt; $false otherwise.
+
+    .EXAMPLE
+        Install-ADPARsatComponent -ModuleName 'GroupPolicy' -ServerFeature 'GPMC' -ClientCapabilityPattern 'Rsat.GroupPolicy.Management.Tools*'
+
+    .NOTES
+        Requires local administrator rights.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ModuleName,
+
+        [Parameter(Mandatory=$true)]
+        [string]$ServerFeature,
+
+        [Parameter(Mandatory=$true)]
+        [string]$ClientCapabilityPattern
+    )
+
+    # Already present, nothing to do.
+    if ( $null -ne (Get-Module -ListAvailable -Name $ModuleName) ) { return $true }
+
+    if (Test-ADPAIsServerOs) {
+        # ---- Windows Server path ----
+        try {
+            Import-Module ServerManager -ErrorAction Stop
+        } catch {
+            Write-Host "[FAIL] The ServerManager module is unavailable, so '$ServerFeature' cannot be installed automatically." -ForegroundColor Red
+            return $false
+        }
+        try {
+            $FeatureResult = Install-WindowsFeature -Name $ServerFeature -IncludeManagementTools -ErrorAction Stop
+            if ($FeatureResult.RestartNeeded -eq 'Yes') {
+                Write-Host "[WARN] A restart is required to finish installing '$ServerFeature'." -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "[FAIL] Install-WindowsFeature -Name $ServerFeature failed: $($_.Exception.Message)" -ForegroundColor Red
+            return $false
+        }
+    } else {
+        # ---- Windows 10/11 client path ----
+        try {
+            $Capability = Get-WindowsCapability -Online -Name $ClientCapabilityPattern -ErrorAction Stop |
+                Select-Object -First 1
+        } catch {
+            Write-Host "[FAIL] Could not query Windows capabilities for '$ClientCapabilityPattern': $($_.Exception.Message)" -ForegroundColor Red
+            return $false
+        }
+        if ($null -eq $Capability) {
+            Write-Host "[FAIL] No Windows capability matching '$ClientCapabilityPattern' is available on this system." -ForegroundColor Red
+            return $false
+        }
+        if ($Capability.State -ne 'Installed') {
+            try {
+                $CapabilityResult = Add-WindowsCapability -Online -Name $Capability.Name -ErrorAction Stop
+                if ($CapabilityResult.RestartNeeded) {
+                    Write-Host "[WARN] A restart is required to finish installing '$($Capability.Name)'." -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "[FAIL] Add-WindowsCapability -Name $($Capability.Name) failed: $($_.Exception.Message)" -ForegroundColor Red
+                return $false
+            }
+        }
+    }
+
+    return ( $null -ne (Get-Module -ListAvailable -Name $ModuleName) )
+# End of Install-ADPARsatComponent function
+}
+
+Function Get-ADPADependencyList {
+    <#
+    .SYNOPSIS
+        Private. Returns the table of third-party software AD-PowerAdmin depends on.
+
+    .DESCRIPTION
+        Single source of truth for AD-PowerAdmin's external dependencies. Each entry carries
+        its own detection and installation logic as script blocks, so adding a future
+        dependency means adding one entry here rather than changing Install-ADPowerAdminDependencies.
+
+        Each object exposes:
+          Name     - Display name shown in the status report.
+          Required - $true if the codebase cannot run without it; $false if optional.
+          Purpose  - Why AD-PowerAdmin needs it, and which module consumes it.
+          Test     - Script block returning [bool]; $true when the dependency is present.
+          Install  - Script block returning [bool]; performs the install. $null for entries
+                     that are reported but never installed automatically.
+          Manual   - The command an administrator can run by hand if the install fails.
+
+    .OUTPUTS
+        [PSCustomObject[]] The dependency descriptors.
+
+    .EXAMPLE
+        Get-ADPADependencyList | Where-Object { $_.Required }
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param()
+
+    return @(
+        [PSCustomObject]@{
+            Name     = 'ActiveDirectory module (RSAT)'
+            Required = $true
+            Purpose  = 'Core AD cmdlets. Declared by "#Requires -Modules ActiveDirectory" in the main script and used by every audit and management module.'
+            Test     = { $null -ne (Get-Module -ListAvailable -Name ActiveDirectory) }
+            Install  = { Install-ADPARsatComponent -ModuleName 'ActiveDirectory' -ServerFeature 'RSAT-AD-PowerShell' -ClientCapabilityPattern 'Rsat.ActiveDirectory.DS-LDS.Tools*' }
+            Manual   = 'Server: Install-WindowsFeature -Name RSAT-AD-PowerShell   |   Windows 10/11: Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0'
+        }
+        [PSCustomObject]@{
+            Name     = 'GroupPolicy module (RSAT/GPMC)'
+            Required = $true
+            Purpose  = 'GPO read, backup, and deployment cmdlets used by the GPO Manager, GPO Best Practices Deployer, Audit Policy, Honeypot, and SYSVOL audit modules.'
+            Test     = { $null -ne (Get-Module -ListAvailable -Name GroupPolicy) }
+            Install  = { Install-ADPARsatComponent -ModuleName 'GroupPolicy' -ServerFeature 'GPMC' -ClientCapabilityPattern 'Rsat.GroupPolicy.Management.Tools*' }
+            Manual   = 'Server: Install-WindowsFeature -Name GPMC   |   Windows 10/11: Add-WindowsCapability -Online -Name Rsat.GroupPolicy.Management.Tools~~~~0.0.1.0'
+        }
+        [PSCustomObject]@{
+            Name     = 'DSInternals module'
+            Required = $true
+            Purpose  = 'Reads password hashes via Get-ADReplAccount and grades them with Test-PasswordQuality. Required by the weak/breached password audit in AD-PowerAdmin_PasswordsCtl.'
+            Test     = { $null -ne (Get-Module -ListAvailable -Name DSInternals) }
+            Install  = { Install-ADPAGalleryModule -Name 'DSInternals' }
+            Manual   = 'Install-Module -Name DSInternals -Force'
+        }
+        [PSCustomObject]@{
+            Name     = 'PowerShell 7 (optional)'
+            Required = $false
+            Purpose  = 'Not required by any currently shipped module. Only modules whose manifest declares PowerShellVersion 7.0 or higher need it; those are skipped with a warning banner when running under Windows PowerShell 5.1.'
+            Test     = { $null -ne (Get-Command pwsh -ErrorAction SilentlyContinue) }
+            Install  = $null
+            Manual   = 'Use the "Install PowerShell 7" option in this menu, or: winget install --id Microsoft.PowerShell --source winget'
+        }
+    )
+# End of Get-ADPADependencyList function
+}
+
+Function Install-ADPowerAdminDependencies {
+    <#
+    .SYNOPSIS
+        Detects and installs only the third-party software AD-PowerAdmin requires to run.
+
+    .DESCRIPTION
+        === Dependency Installation ===
+        Installs the supporting software the AD-PowerAdmin codebase depends on, and nothing
+        else. This is deliberately separate from Install-ADPowerAdmin: it makes no changes to
+        Active Directory, creates no sMSA account, registers no scheduled task, deploys no GPO,
+        and does not copy the script to the install directory. It only makes the machine
+        capable of running the code.
+
+        Why this exists:
+        Before this option, a missing dependency surfaced as a failure at the point of use.
+        A missing ActiveDirectory module produced a raw "#Requires" parse error from
+        PowerShell with no remediation guidance, and a missing GroupPolicy module produced a
+        [FAIL] message that told the administrator what to run but did not run it. Only
+        DSInternals could be installed from the tool, and only as a side effect of the full
+        installation. This option makes dependency provisioning explicit, inspectable, and
+        repeatable on a freshly built Domain Controller or admin workstation.
+
+        Behavior:
+        1. Reports the status of every dependency (present or missing, required or optional).
+        2. Exits early with no changes if all required dependencies are present.
+        3. Lists exactly what is missing and why it is needed, then prompts for confirmation.
+        4. Installs only the missing REQUIRED dependencies. Optional dependencies are
+           reported but never installed automatically.
+        5. Re-verifies each dependency and prints a final report. Anything that could not be
+           installed is listed with the manual command to run.
+
+        Dependencies covered are defined in Get-ADPADependencyList.
+
+    .EXAMPLE
+        Install-ADPowerAdminDependencies
+
+    .INPUTS
+        None. Install-ADPowerAdminDependencies does not take pipeline input.
+
+    .OUTPUTS
+        None. All results are written to the console via Write-Host.
+
+    .NOTES
+        Requires local administrator rights. RSAT installation may require a restart; if a
+        restart is reported, re-run this option after rebooting to confirm the result.
+
+        Menu path: AD-PowerAdmin Management -> Install Dependencies
+    #>
+    [CmdletBinding()]
+    param()
+
+    [string]$Bar  = '=' * $global:OptionsMaxTextLength
+    [string]$Bar2 = '-' * $global:OptionsMaxTextLength
+
+    Write-Host ""
+    Write-Host $Bar -ForegroundColor Cyan
+    Write-Host "  AD-PowerAdmin Dependency Installation" -ForegroundColor Cyan
+    Write-Host $Bar -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  This installs ONLY the supporting software AD-PowerAdmin needs to run." -ForegroundColor White
+    Write-Host "  It does not install AD-PowerAdmin itself, create the sMSA account, deploy" -ForegroundColor White
+    Write-Host "  a GPO, or register a scheduled task. Use 'Install AD-PowerAdmin' for that." -ForegroundColor White
+    Write-Host ""
+
+    # ---- Stage 1: report current status ----
+    [array]$Dependencies = Get-ADPADependencyList
+
+    Write-Host "  Current dependency status:" -ForegroundColor Yellow
+    Write-Host $Bar2 -ForegroundColor DarkGray
+    foreach ($Dep in $Dependencies) {
+        [bool]$IsPresent = $false
+        try { $IsPresent = [bool](& $Dep.Test) } catch { $IsPresent = $false }
+        $Dep | Add-Member -NotePropertyName 'Installed' -NotePropertyValue $IsPresent -Force
+
+        [string]$Tag = if ($IsPresent) { '[OK]     ' } else { '[MISSING]' }
+        [string]$Tier = if ($Dep.Required) { 'Required' } else { 'Optional' }
+        [System.ConsoleColor]$Color = if ($IsPresent) { 'Green' } elseif ($Dep.Required) { 'Red' } else { 'Yellow' }
+        Write-Host ("  {0} {1,-32} {2}" -f $Tag, $Dep.Name, $Tier) -ForegroundColor $Color
+    }
+    Write-Host ""
+
+    [array]$MissingRequired = @($Dependencies | Where-Object { $_.Required -and -not $_.Installed })
+    [array]$MissingOptional = @($Dependencies | Where-Object { -not $_.Required -and -not $_.Installed })
+
+    # Optional dependencies are reported only. They are never installed by this option.
+    foreach ($Opt in $MissingOptional) {
+        Write-Host "  [INFO] $($Opt.Name) is not installed. It is not required." -ForegroundColor Cyan
+        Write-Host "         $($Opt.Manual)" -ForegroundColor DarkGray
+    }
+    if ($MissingOptional.Count -gt 0) { Write-Host "" }
+
+    # ---- Stage 2: exit early when there is nothing to do ----
+    if ($MissingRequired.Count -eq 0) {
+        Write-Host "  [OK] All required dependencies are installed. No action taken." -ForegroundColor Green
+        Write-Host ""
+        return
+    }
+
+    # ---- Stage 3: explain what is missing and confirm ----
+    Write-Host "  The following REQUIRED dependencies are missing:" -ForegroundColor Yellow
+    Write-Host $Bar2 -ForegroundColor DarkGray
+    foreach ($Dep in $MissingRequired) {
+        Write-Host "  $($Dep.Name)" -ForegroundColor Yellow
+        Write-Host "      Needed for: $($Dep.Purpose)" -ForegroundColor Gray
+        Write-Host ""
+    }
+    Write-Host "  RSAT components are installed from Windows; the DSInternals module is" -ForegroundColor White
+    Write-Host "  downloaded from the PowerShell Gallery. A restart may be required." -ForegroundColor White
+    Write-Host ""
+
+    [string]$Confirm = Read-Host "Install the $($MissingRequired.Count) missing required dependencies listed above? (y/N)"
+    if ($Confirm -ne 'y' -and $Confirm -ne 'Y') {
+        Write-Host "Operation cancelled. No changes were made." -ForegroundColor Yellow
+        return
+    }
+    Write-Host ""
+
+    # ---- Stage 4: install ----
+    foreach ($Dep in $MissingRequired) {
+        Write-Host "  Installing: $($Dep.Name) ..." -ForegroundColor Cyan
+        [bool]$InstallOk = $false
+        if ($null -eq $Dep.Install) {
+            $InstallOk = $false
+        } else {
+            try {
+                $InstallOk = [bool](& $Dep.Install)
+            } catch {
+                Write-Host "  [FAIL] $($Dep.Name) installation threw an error: $($_.Exception.Message)" -ForegroundColor Red
+                $InstallOk = $false
+            }
+        }
+        if ($InstallOk) {
+            Write-Host "  [OK] $($Dep.Name) is now installed." -ForegroundColor Green
+        } else {
+            Write-Host "  [FAIL] $($Dep.Name) could not be installed automatically." -ForegroundColor Red
+        }
+        Write-Host ""
+    }
+
+    # ---- Stage 5: re-verify and report ----
+    Write-Host $Bar -ForegroundColor Cyan
+    Write-Host "  Final dependency status" -ForegroundColor Cyan
+    Write-Host $Bar -ForegroundColor Cyan
+    Write-Host ""
+
+    [array]$StillMissing = @()
+    foreach ($Dep in $Dependencies) {
+        if (-not $Dep.Required) { continue }
+        [bool]$IsPresent = $false
+        try { $IsPresent = [bool](& $Dep.Test) } catch { $IsPresent = $false }
+        if ($IsPresent) {
+            Write-Host "  [OK]   $($Dep.Name)" -ForegroundColor Green
+        } else {
+            Write-Host "  [FAIL] $($Dep.Name)" -ForegroundColor Red
+            $StillMissing += $Dep
+        }
+    }
+    Write-Host ""
+
+    if ($StillMissing.Count -eq 0) {
+        Write-Host "  [OK] All required dependencies are installed. AD-PowerAdmin is ready to run." -ForegroundColor Green
+        Write-Host "       Restart AD-PowerAdmin so the newly installed modules are loaded." -ForegroundColor Yellow
+    } else {
+        Write-Host "  [WARN] $($StillMissing.Count) required dependency(s) could not be installed." -ForegroundColor Yellow
+        Write-Host "         If a restart was reported above, reboot and re-run this option." -ForegroundColor Yellow
+        Write-Host "         Otherwise, install them manually with:" -ForegroundColor Yellow
+        Write-Host ""
+        foreach ($Dep in $StillMissing) {
+            Write-Host "  $($Dep.Name)" -ForegroundColor Yellow
+            Write-Host "      $($Dep.Manual)" -ForegroundColor Cyan
+        }
+    }
+    Write-Host ""
+# End of Install-ADPowerAdminDependencies function
 }
 
 function New-ADPowerAdminSmsaAccount {

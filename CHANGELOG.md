@@ -4,6 +4,93 @@
 
 ---
 
+### [AD-PowerAdmin_Installer -- Dependency Installation]
+
+**Added:**
+- `Install-ADPowerAdminDependencies` -- new **Install Dependencies** option in the AD-PowerAdmin
+  Management submenu. Reports the status of every dependency the codebase requires, lists what is
+  missing and why it is needed, prompts for confirmation, installs only the missing required
+  items, then re-verifies and reports. Anything that could not be installed is printed with the
+  manual command to run instead.
+
+  Covers the `ActiveDirectory` module (RSAT), the `GroupPolicy` module (RSAT/GPMC), and the
+  `DSInternals` module. PowerShell 7 is reported but never installed automatically: no module
+  currently shipped in `Modules/` declares `PowerShellVersion = '7.0'`, so nothing in the codebase
+  requires it, and it remains available through the existing **Install PowerShell 7** option.
+
+  **Why:** This addresses an operational best practice -- an administrative tool should provision
+  its own prerequisites and fail with actionable guidance rather than an unexplained error. The
+  three dependencies were previously handled three different ways, and two of them failed badly.
+  `AD-PowerAdmin.ps1` declares `#Requires -Modules ActiveDirectory`, so on a host without RSAT
+  PowerShell refused to launch the script and emitted its own parse error before any AD-PowerAdmin
+  code ran -- the tool had no opportunity to explain the problem or offer to fix it. A missing
+  `GroupPolicy` module produced a `[FAIL]` message that told the administrator what command to run
+  but did not run it. Only `DSInternals` was installed automatically, and only as a side effect of
+  the full `Install-ADPowerAdmin` flow -- so an administrator who wanted a one-off password audit
+  had to either run the full installer, creating an sMSA, a GPO, and a scheduled task they did not
+  want, or install the module by hand. Dependency provisioning and product installation were
+  coupled when they should not have been.
+
+  **Impact:** Dependency provisioning is now explicit, inspectable, repeatable, and decoupled from
+  AD-PowerAdmin's own installation. The option makes no changes to Active Directory: no sMSA, no
+  GPO, no scheduled task, no ACL or audit policy changes, and no file copy. It is safe to run on an
+  admin workstation that will never host AD-PowerAdmin. Existing behavior is unchanged for every
+  current caller; this is purely additive.
+
+- `Get-ADPADependencyList` (private) -- single source of truth for the dependency table. Returns
+  one descriptor per dependency carrying its own `Test` and `Install` script blocks, the `Purpose`
+  text explaining why AD-PowerAdmin needs it, and the `Manual` fallback command.
+
+  **Why:** `Install-ADPowerAdminDependencies` iterates this table and holds no per-dependency
+  knowledge of its own. Adding a future dependency is one new entry here -- the status report,
+  confirmation prompt, install loop, re-verification pass, and manual-fallback output all pick it
+  up with no further code changes. An `Install` value of `$null` marks an entry as report-only,
+  which is how PowerShell 7 is handled.
+
+- `Install-ADPARsatComponent` (private) -- installs an RSAT feature using the correct mechanism for
+  the host SKU, then confirms the resulting PowerShell module is actually available.
+
+  **Why:** RSAT installs differently per SKU. The SKU is read from `Win32_OperatingSystem.ProductType`
+  (1 = workstation, 2 = domain controller, 3 = member server); Windows Server uses
+  `Install-WindowsFeature -IncludeManagementTools`, Windows 10/11 uses `Add-WindowsCapability`. The
+  client capability is resolved with a wildcard lookup rather than a hardcoded name, because the
+  capability name carries a build-specific version suffix (for example,
+  `Rsat.GroupPolicy.Management.Tools~~~~0.0.1.0`) and hardcoding it would break the install on
+  Windows builds that ship a different suffix. A pending-restart result from either mechanism is
+  surfaced as a `[WARN]` and repeated in the final report.
+
+- `Test-ADPAIsServerOs` (private) -- distinguishes Windows Server from client SKUs. Assumes Server
+  when the CIM query fails, since AD-PowerAdmin is designed to run on a Domain Controller.
+
+- `Install-ADPAGalleryModule` (private) -- shared PowerShell Gallery installation routine. Attempts
+  `Install-Module`, and on failure bootstraps the prerequisites commonly missing on a freshly built
+  server: forces TLS 1.2 (older Windows builds do not negotiate it by default and the Gallery
+  requires it), installs the NuGet package provider, and re-registers `PSGallery` if it has been
+  removed. Returns `$true`/`$false` and never exits the script.
+
+  **Why:** Extracted from `Install-DSInternals` so the gallery bootstrap exists once rather than
+  being duplicated into the new dependency installer. NuGet and PSGallery are install-time
+  prerequisites rather than runtime dependencies, so they are bootstrapped silently here instead of
+  appearing as separate rows in the status report.
+
+**Changed:**
+- `Install-DSInternals` -- now delegates its PowerShell Gallery logic to `Install-ADPAGalleryModule`
+  instead of carrying its own copy of the TLS 1.2 / NuGet / PSGallery fallback.
+
+  **What changed and why:** The function is still exported and still called by `Install-ADPowerAdmin`
+  and by the password audit in `AD-PowerAdmin_PasswordsCtl`, and its `Exit 1`-on-failure behavior is
+  intentionally preserved -- those callers treat a missing DSInternals as fatal. Only the duplicated
+  install logic moved. `Install-ADPowerAdminDependencies` deliberately does **not** call this
+  function; it calls `Install-ADPAGalleryModule` directly and handles the `$false` return itself,
+  because an interactive menu option must never terminate the operator's session, and must continue
+  to the next dependency so the operator gets one complete report rather than discovering failures
+  one reboot at a time.
+
+  **Impact:** No behavior change for any existing caller. The two entry points now share one
+  implementation while keeping the failure semantics each one needs.
+
+---
+
 ### [AD-PowerAdmin_Audits -- Inactive Account Search Scope When OUs Are Unconfigured]
 
 **Added:**
