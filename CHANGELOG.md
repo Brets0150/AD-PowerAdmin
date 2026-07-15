@@ -4,7 +4,34 @@
 
 ---
 
-### [AD-PowerAdmin_Mgr -- Unregister-AdUser Disabled-OU Resolution Fix]
+### [AD-PowerAdmin_Utils -- Missing Manifest Exports Break AD Security Check]
+
+**Fixed:**
+- `AD-PowerAdmin_Utils.psd1` -- added `Convert-TimeDurationString` and `Get-DatePickerGui` to
+  `FunctionsToExport`. Both functions are defined in `AD-PowerAdmin_Utils.psm1` and called from
+  other modules, but neither was listed in the manifest, so PowerShell never exported them and
+  every cross-module call failed with `CommandNotFoundException`.
+
+  This was a regression introduced when `FunctionsToExport` was changed from the `'*'` wildcard
+  to an explicit list. Under the wildcard every function was exported automatically; the
+  hand-written replacement list omitted these two.
+
+  **Impact -- `Convert-TimeDurationString` (reported):** `Test-ADSecurityBestPractices` calls it
+  at four points in the password policy audit. The failure was not fail-safe. PowerShell coerces
+  `$null` to `0` in numeric comparisons, so a failed call silently degraded each check to a
+  comparison against zero and the audit continued printing verdicts that looked authoritative but
+  were computed from nothing. `MaxPasswordAge` was the dangerous case: `$null -le 90` evaluates
+  to `$true`, so a 365-day maximum password age was reported as "Good!" -- a false pass on a real
+  policy weakness. `MinPasswordAge` inverted the other way (`$null -ge 1` is `$false`), telling
+  operators to set a 1-day minimum that was already correctly set. An administrator reading the
+  report would have been misled about the true state of the domain password policy.
+
+  **Impact -- `Get-DatePickerGui` (latent, found while fixing the above):** called from
+  `AD-PowerAdmin_LogMgr.psm1` at three sites for event log start/end time selection. Same
+  `CommandNotFoundException` failure, not yet reported.
+
+  Verified by parsing every `.psm1` in `Modules/` and cross-checking each module's declared
+  exports against every cross-module call site; no other unexported-but-called functions remain.
 
 **Fixed:**
 - `Unregister-AdUser` -- corrected disabled-OU resolution when `$global:InactiveUsersLocations`
