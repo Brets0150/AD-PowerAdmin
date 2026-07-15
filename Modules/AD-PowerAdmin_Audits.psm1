@@ -615,6 +615,104 @@ Function Search-ADUserNonDefaultPrimaryGroup {
  # End of Search-ADUserNonDefaultPrimaryGroup function
 }
 
+Function Resolve-InactiveSearchScope {
+    <#
+    .SYNOPSIS
+    Private helper. Decides the AD search scope for an inactive account search.
+
+    .DESCRIPTION
+    Central decision point for both Search-InactiveUsers and Search-InactiveComputers. It answers
+    one question: given a SearchOUbase that may be unset or wrong, what should the search do?
+
+    The answer depends entirely on whether the caller is reporting or making changes:
+
+        Report only ($ReportOnly = $true)
+            A report changes nothing, so a bad search base is a configuration gap, not a hazard.
+            The operator is asked whether to search the entire domain instead (default Yes). This
+            is what makes the AD Security Audit useful on a fresh install where the OU settings
+            have never been filled in.
+
+        Disable mode ($ReportOnly = $false)
+            A domain-wide fallback here would disable, strip group membership from, and relocate
+            every inactive account in the domain based on a typo in a settings file. There is no
+            prompt and no fallback -- an unset or invalid SearchOUbase is always fatal.
+
+    .PARAMETER SearchOUbase
+    The configured search base DistinguishedName. May be empty or invalid.
+
+    .PARAMETER ObjectType
+    'user' or 'computer'. Used only for message wording.
+
+    .PARAMETER ReportOnly
+    $true when the caller is only reporting; $false when the caller will disable accounts.
+
+    .EXAMPLE
+    $Scope = Resolve-InactiveSearchScope -SearchOUbase 'OU=Bad,DC=EXAMPLE,DC=COM' -ObjectType 'user' -ReportOnly $true
+
+    .OUTPUTS
+    [hashtable] with these keys:
+        Proceed         [bool]   $false means the caller must return without searching.
+        SearchAllDomain [bool]   $true means search the whole domain (do not pass -SearchBase).
+        SearchOUbase    [string] The search base to use when SearchAllDomain is $false.
+        ScopeText       [string] Human-readable scope description for console output.
+
+    .NOTES
+    This function is private to AD-PowerAdmin_Audits and is not listed in FunctionsToExport.
+    #>
+    [OutputType([hashtable])]
+    Param(
+        [Parameter(Mandatory=$true,Position=1)]
+        [AllowEmptyString()]
+        [string]$SearchOUbase,
+        [Parameter(Mandatory=$true,Position=2)]
+        [ValidateSet('user','computer')]
+        [string]$ObjectType,
+        [Parameter(Mandatory=$true,Position=3)]
+        [bool]$ReportOnly
+    )
+
+    [hashtable]$Scope = @{
+        Proceed         = $false
+        SearchAllDomain = $false
+        SearchOUbase    = $SearchOUbase
+        ScopeText       = $SearchOUbase
+    }
+
+    # Label used in the messages below. 'user' -> 'User', 'computer' -> 'Computer'.
+    [string]$TypeLabel = if ($ObjectType -eq 'user') { 'User' } else { 'Computer' }
+    [string]$TypePlural = if ($ObjectType -eq 'user') { 'users' } else { 'computers' }
+
+    # A configured search base that exists in AD is always honored as-is.
+    if ( Test-AdContainerPath -DistinguishedName $SearchOUbase ) {
+        $Scope.Proceed = $true
+        return $Scope
+    }
+
+    # From here the search base is unset or does not resolve in AD.
+    if (-not $ReportOnly) {
+        Write-Host "Error: The $TypeLabel OU specified in the SearchOUbase($SearchOUbase) does not exist in the Active Directory Domain." -ForegroundColor Red
+        Write-Host "       Accounts will NOT be disabled. A domain-wide search is never used when disabling accounts." -ForegroundColor Red
+        Write-Host "       Please update your 'AD-PowerAdmin_settings.ps1' file with the details that match your environment." -ForegroundColor Red
+        return $Scope
+    }
+
+    # Report-only mode: offer the domain-wide fallback.
+    Write-Host "Warning: The $TypeLabel SearchOUbase($SearchOUbase) is not set or does not exist in the Active Directory Domain." -ForegroundColor Yellow
+    Write-Host "         This usually means the $TypeLabel OU settings in 'AD-PowerAdmin_settings.ps1' have not been configured." -ForegroundColor Yellow
+
+    if ( Get-ConfirmYesNo -Question "         Search ALL of Active Directory for inactive $TypePlural for this report?" -DefaultYes $true ) {
+        $Scope.Proceed         = $true
+        $Scope.SearchAllDomain = $true
+        $Scope.ScopeText       = 'Entire Domain'
+        return $Scope
+    }
+
+    Write-Host "         Skipping the inactive $TypePlural check." -ForegroundColor Yellow
+    Write-Host "         Update the $TypeLabel SearchOUbase in 'AD-PowerAdmin_settings.ps1' to scope this check." -ForegroundColor Yellow
+    return $Scope
+# End of Resolve-InactiveSearchScope function
+}
+
 Function Search-InactiveComputers {
     <#
     .SYNOPSIS
@@ -650,8 +748,10 @@ Function Search-InactiveComputers {
     # Parameters for this function.
     Param(
         [Parameter(Mandatory=$true,Position=1)]
+        [AllowEmptyString()]
         [string]$SearchOUbase,
         [Parameter(Mandatory=$true,Position=2)]
+        [AllowEmptyString()]
         [string]$DisabledOULocal,
         [Parameter(Mandatory=$true,Position=3)]
         [string]$InactiveDays,
@@ -662,25 +762,31 @@ Function Search-InactiveComputers {
     # $time variable converts $DaysInactive to LastLogonTimeStamp property format for the -Filter switch to work
     $InactiveDate = (Get-Date).Adddays(-($InactiveDays))
 
-    # Check if the OU specified in the $SearchOUbase parameter exists in the Active Directory Domain.
-    if ( $null -eq (Get-ADOrganizationalUnit -Filter {distinguishedName -eq $SearchOUbase} -Properties * ) ) {
-        # If the OU specified in the $SearchOUbase parameter does not exist in the Active Directory Domain, then display an error message.
-        Write-Host "Error: The Computer OU specified in the SearchOUbase parameter does not exist in the Active Directory Domain." -ForegroundColor Red
-        Write-Host "       Please update your 'AD-PowerAdmin_settings.ps1' file with the details that match your environment." -ForegroundColor Red
+    # Resolve the search scope. In report-only mode an unset or invalid SearchOUbase can fall back
+    # to a domain-wide search with the operator's consent; in disable mode it is always fatal.
+    $SearchScope = Resolve-InactiveSearchScope -SearchOUbase $SearchOUbase -ObjectType 'computer' -ReportOnly $ReportOnly
+    if (-not $SearchScope.Proceed) {
         return
     }
 
-    # Check if the OU specified in the $DisabledOULocal parameter exists in the Active Directory Domain.
-    if ( $null -eq (Get-ADOrganizationalUnit -Filter {distinguishedName -eq $DisabledOULocal} -Properties * ) ) {
-        # If the OU specified in the $DisabledOULocal parameter does not exist in the Active Directory Domain, then display an error message.
-        Write-Host "Error: The Computer OU specified in the DisabledOULocal parameter does not exist in the Active Directory Domain." -ForegroundColor Red
-        Write-Host "       Please update your 'AD-PowerAdmin_settings.ps1' file with the details that match your environment." -ForegroundColor Red
-        return
+    # DisabledOULocal is only used to move disabled objects. A report makes no changes, so its
+    # value is irrelevant there and must not block the report from running.
+    if (-not $ReportOnly) {
+        if ( -not (Test-AdContainerPath -DistinguishedName $DisabledOULocal) ) {
+            Write-Host "Error: The Computer OU specified in the DisabledOULocal($DisabledOULocal) does not exist in the Active Directory Domain." -ForegroundColor Red
+            Write-Host "       Please update your 'AD-PowerAdmin_settings.ps1' file with the details that match your environment." -ForegroundColor Red
+            return
+        }
     }
 
     # Search for Computers that have been inactive for more than X days.
-    $InactiveComputerObjects = Get-ADComputer -SearchBase $SearchOUbase -Filter {LastLogonTimeStamp -lt $InactiveDate -and Enabled -eq $true} `
-    -ResultPageSize 2000 -resultSetSize $null -Properties Name, OperatingSystem, SamAccountName, DistinguishedName, LastLogonDate
+    if ($SearchScope.SearchAllDomain) {
+        $InactiveComputerObjects = Get-ADComputer -Filter {LastLogonTimeStamp -lt $InactiveDate -and Enabled -eq $true} `
+        -ResultPageSize 2000 -resultSetSize $null -Properties Name, OperatingSystem, SamAccountName, DistinguishedName, LastLogonDate
+    } else {
+        $InactiveComputerObjects = Get-ADComputer -SearchBase $SearchScope.SearchOUbase -Filter {LastLogonTimeStamp -lt $InactiveDate -and Enabled -eq $true} `
+        -ResultPageSize 2000 -resultSetSize $null -Properties Name, OperatingSystem, SamAccountName, DistinguishedName, LastLogonDate
+    }
 
     # Check if $InactiveComputerObjects is empty. If it is, then no computers are inactive.
     if ($null -ne $InactiveComputerObjects) {
@@ -688,7 +794,7 @@ Function Search-InactiveComputers {
         # If $ReportOnly is true, then display the inactive computer objects and exit the function.
         if ($ReportOnly) {
             # Display the inactive computer objects.
-            Write-Host "Inactive Computer Objects in: $SearchOUbase" -ForegroundColor Red
+            Write-Host "Inactive Computer Objects in: $($SearchScope.ScopeText)" -ForegroundColor Red
             $InactiveComputerObjects | Select-Object Name, OperatingSystem, DistinguishedName, LastLogonDate | Format-Table -AutoSize
             return
         }
@@ -730,10 +836,10 @@ Function Search-InactiveComputers {
 
     # Check if $InactiveComputerObjects is empty. If it is, Output that no computers are inactive.
     if ($null -eq $InactiveComputerObjects) {
-        Write-Host "No inactive computers were found in the `"$SearchOUbase`" search path." -ForegroundColor Green
+        Write-Host "No inactive computers were found in the `"$($SearchScope.ScopeText)`" search path." -ForegroundColor Green
     } else {
         # Output the number of inactive computers found.
-        Write-Host "Found $($InactiveComputerObjects.Count) inactive computers in the `"$SearchOUbase`" search path." -ForegroundColor Red 
+        Write-Host "Found $(@($InactiveComputerObjects).Count) inactive computers in the `"$($SearchScope.ScopeText)`" search path." -ForegroundColor Red
     }
 # End of Search-InactiveComputers function
 }
@@ -779,9 +885,32 @@ Function Search-MultipleInactiveComputers {
         [bool]$ReportOnly
     )
 
-    # Foreach hashtable in the $InactiveComputersLocations array, run the Search-InactiveComputers function.
+    # In report-only mode, when NOT ONE configured location resolves in AD, the whole setting is
+    # unconfigured. Ask once for the entire check and run a single domain-wide search, rather than
+    # asking once per location and scanning the domain repeatedly for identical results.
+    if ($ReportOnly) {
+        [array]$ValidLocations = @($InactiveComputersLocations | Where-Object { Test-AdContainerPath -DistinguishedName $_.SearchOUbase })
+
+        if ($ValidLocations.Count -eq 0) {
+            Search-InactiveComputers -SearchOUbase '' -DisabledOULocal '' -InactiveDays $InactiveDays -ReportOnly $true
+            return
+        }
+
+        # At least one location is valid, so a scope is configured. Report on the valid locations
+        # and name the broken ones instead of widening the search over the top of a real config.
+        $InactiveComputersLocations | Where-Object { $_ -notin $ValidLocations } | ForEach-Object {
+            Write-Host "Warning: Skipping Computer SearchOUbase($($_.SearchOUbase)) -- it does not exist in the Active Directory Domain." -ForegroundColor Yellow
+        }
+
+        $ValidLocations | ForEach-Object {
+            Search-InactiveComputers -SearchOUbase $_.SearchOUbase -DisabledOULocal $_.DisabledOULocal -InactiveDays $InactiveDays -ReportOnly $true
+        }
+        return
+    }
+
+    # Disable mode. Each location is validated individually and a bad one is fatal for that entry.
     $InactiveComputersLocations | ForEach-Object {
-        Search-InactiveComputers -SearchOUbase $_.SearchOUbase -DisabledOULocal $_.DisabledOULocal -InactiveDays $InactiveDays -ReportOnly $ReportOnly
+        Search-InactiveComputers -SearchOUbase $_.SearchOUbase -DisabledOULocal $_.DisabledOULocal -InactiveDays $InactiveDays -ReportOnly $false
     }
 #End of Search-MultipleInactiveComputers function
 }
@@ -821,8 +950,10 @@ Function Search-InactiveUsers {
     # Parameters for this function.
     Param(
         [Parameter(Mandatory=$true,Position=1)]
+        [AllowEmptyString()]
         [string]$SearchOUbase,
         [Parameter(Mandatory=$true,Position=2)]
+        [AllowEmptyString()]
         [string]$DisabledOULocal,
         [Parameter(Mandatory=$true,Position=3)]
         [string]$InactiveDays,
@@ -833,27 +964,35 @@ Function Search-InactiveUsers {
     # $time variable converts $DaysInactive to LastLogonTimeStamp property format for the -Filter switch to work
     $InactiveDate = (Get-Date).Adddays(-($InactiveDays))
 
-    # Check if the $DisabledOULocal is a valid OU. If not, then exit the function.
-    if ( $null -eq (Get-ADOrganizationalUnit -Filter {distinguishedName -eq $DisabledOULocal} -Properties * ) ) {
-        Write-Host "Error: The User OU specified in the DisabledOULocal($DisabledOULocal) does not exist in the AD." -ForegroundColor Red
-        Write-Host "       Please update your 'AD-PowerAdmin_settings.ps1' file with the details that match your environment." -ForegroundColor Red
+    # Resolve the search scope. In report-only mode an unset or invalid SearchOUbase can fall back
+    # to a domain-wide search with the operator's consent; in disable mode it is always fatal.
+    $SearchScope = Resolve-InactiveSearchScope -SearchOUbase $SearchOUbase -ObjectType 'user' -ReportOnly $ReportOnly
+    if (-not $SearchScope.Proceed) {
         return
     }
 
-    # Check if the SearchOUbase is a valid OU. If not, then exit the function.
-    if ( $null -eq (Get-ADOrganizationalUnit -Filter {distinguishedName -eq $SearchOUbase} -Properties * ) ) {
-        Write-Host "Warning: The given SearchOUbase($SearchOUbase) does not exist or is not set. Scanning entire AD..." -ForegroundColor Yellow
+    # DisabledOULocal is only used to move disabled objects. A report makes no changes, so its
+    # value is irrelevant there and must not block the report from running.
+    if (-not $ReportOnly) {
+        if ( -not (Test-AdContainerPath -DistinguishedName $DisabledOULocal) ) {
+            Write-Host "Error: The User OU specified in the DisabledOULocal($DisabledOULocal) does not exist in the AD." -ForegroundColor Red
+            Write-Host "       Please update your 'AD-PowerAdmin_settings.ps1' file with the details that match your environment." -ForegroundColor Red
+            return
+        }
+    }
+
+    # Search for Users that have been inactive for more than X days.
+    if ($SearchScope.SearchAllDomain) {
         $InactiveUserObjects = Get-ADUser -Filter {LastLogonTimeStamp -lt $InactiveDate -and Enabled -eq $true} -Properties Name, SamAccountName, DistinguishedName, LastLogonDate
     } else {
-        # Search for Users that have been inactive for more than X days.
-        $InactiveUserObjects = Get-ADUser -Filter {LastLogonTimeStamp -lt $InactiveDate -and Enabled -eq $true} -SearchBase $SearchOUbase -Properties Name, SamAccountName, DistinguishedName, LastLogonDate
+        $InactiveUserObjects = Get-ADUser -Filter {LastLogonTimeStamp -lt $InactiveDate -and Enabled -eq $true} -SearchBase $SearchScope.SearchOUbase -Properties Name, SamAccountName, DistinguishedName, LastLogonDate
     }
 
     # Check if $InactiveUserObjects is empty. If it is, then no users are inactive.
     if ($null -ne $InactiveUserObjects) {
         # If $DisplayOnly is true, then display the SamName and last login date of the inactive users.
         if ($ReportOnly -eq $true) {
-            Write-Host "Inactive User Accounts in: `'$SearchOUbase`'" -ForegroundColor Yellow
+            Write-Host "Inactive User Accounts in: `'$($SearchScope.ScopeText)`'" -ForegroundColor Yellow
             # For each inactive user, display the SamName and last login date.
             $InactiveUserObjects | ForEach-Object {
                 # Display the SamName and last login date.
@@ -901,7 +1040,7 @@ Function Search-InactiveUsers {
 
     # Check if $InactiveUserObjects is empty. If it is, Output that no users are inactive.
     if ($null -eq $InactiveUserObjects) {
-        Write-Host "No inactive users were found in $SearchOUbase" -ForegroundColor Green
+        Write-Host "No inactive users were found in $($SearchScope.ScopeText)" -ForegroundColor Green
     }
 # End of Search-InactiveUsers function
 }
@@ -946,14 +1085,32 @@ Function Search-MultipleInactiveUsers {
         [bool]$ReportOnly
     )
 
-    # Foreach hashtable in the $InactiveUsersLocations array, run the Search-InactiveComputers function.
-    $InactiveUsersLocations | ForEach-Object {
-        #If $_.SearchOUbase is empty, then SearchOUbase equals $null.
-        if ($_.SearchOUbase -eq '') {
-            Search-InactiveUsers -SearchOUbase 'NA' -DisabledOULocal $_.DisabledOULocal -InactiveDays $InactiveDays -ReportOnly $ReportOnly
-        } else {
-            Search-InactiveUsers -SearchOUbase $_.SearchOUbase -DisabledOULocal $_.DisabledOULocal -InactiveDays $InactiveDays -ReportOnly $ReportOnly
+    # In report-only mode, when NOT ONE configured location resolves in AD, the whole setting is
+    # unconfigured. Ask once for the entire check and run a single domain-wide search, rather than
+    # asking once per location and scanning the domain repeatedly for identical results.
+    if ($ReportOnly) {
+        [array]$ValidLocations = @($InactiveUsersLocations | Where-Object { Test-AdContainerPath -DistinguishedName $_.SearchOUbase })
+
+        if ($ValidLocations.Count -eq 0) {
+            Search-InactiveUsers -SearchOUbase '' -DisabledOULocal '' -InactiveDays $InactiveDays -ReportOnly $true
+            return
         }
+
+        # At least one location is valid, so a scope is configured. Report on the valid locations
+        # and name the broken ones instead of widening the search over the top of a real config.
+        $InactiveUsersLocations | Where-Object { $_ -notin $ValidLocations } | ForEach-Object {
+            Write-Host "Warning: Skipping User SearchOUbase($($_.SearchOUbase)) -- it does not exist in the Active Directory Domain." -ForegroundColor Yellow
+        }
+
+        $ValidLocations | ForEach-Object {
+            Search-InactiveUsers -SearchOUbase $_.SearchOUbase -DisabledOULocal $_.DisabledOULocal -InactiveDays $InactiveDays -ReportOnly $true
+        }
+        return
+    }
+
+    # Disable mode. Each location is validated individually and a bad one is fatal for that entry.
+    $InactiveUsersLocations | ForEach-Object {
+        Search-InactiveUsers -SearchOUbase $_.SearchOUbase -DisabledOULocal $_.DisabledOULocal -InactiveDays $InactiveDays -ReportOnly $false
     }
 # End of Search-MultipleInactiveUsers function
 }

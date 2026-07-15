@@ -858,26 +858,12 @@ Function Install-DSInternals {
 
     #>
 
-    # Check if the DSInternals PowerShell module is installed. If not, then install it.
-    if ( $null -eq (Get-Module -ListAvailable -Name DSInternals) ) {
-        # Install the DSInternals PowerShell module.
-        Install-Module -Name DSInternals -Force -ErrorAction SilentlyContinue
-    }
-    # Checkc if the DSInternals PowerShell module is installed. Try again to install it.
-    if ( $null -eq (Get-Module -ListAvailable -Name DSInternals) ) {
-        Write-Host "Warning: The DSInternals PowerShell module failed to install. Trying another method...." -ForegroundColor Yellow
-        # TLS 1.2 must be enabled on older versions of Windows.
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-        # Download the NuGet package manager binary.
-        Install-PackageProvider -Name NuGet -Force
-        # Register the PowerShell Gallery as package repository if it is missing for any reason.
-        if($null -eq (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) { Register-PSRepository -Default }
-        # Download the DSInternals PowerShell module.
-        Install-Module -Name DSInternals -Force
-    }
-
-    # confrim that the DSInternals PowerShell module is installed. If not, then output an error and exit the script.
-    if ( $null -eq (Get-Module -ListAvailable -Name DSInternals) ) {
+    # Install the module via the shared PowerShell Gallery installer, which handles the
+    # TLS 1.2, NuGet provider, and PSGallery registration fallbacks.
+    # Note: this function exits the script on failure. Callers that must stay alive
+    # (for example, the interactive dependency installer) call Install-ADPAGalleryModule
+    # directly and handle the $false return themselves.
+    if ( -not (Install-ADPAGalleryModule -Name 'DSInternals') ) {
         Write-Host "Error: The DSInternals PowerShell module is not installed. Please install it and try again." -ForegroundColor Red
         Exit 1
     }

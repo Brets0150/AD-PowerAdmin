@@ -12,7 +12,7 @@
     RootModule = 'AD-PowerAdmin_Utils.psm1'
 
     # Version number of this module.
-    ModuleVersion = '1.4'
+    ModuleVersion = '1.5'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -90,6 +90,8 @@
         'New-RandomPassword',
         'Set-SettingsFileValue',
         'Get-ResolvedDomain',
+        'Get-ConfirmYesNo',
+        'Test-AdContainerPath',
         'Assert-ADPAModuleDependency'
     )
 
@@ -171,6 +173,15 @@
               or the session default ($env:USERDNSDOMAIN). Migrated from AD-PowerAdmin_GPOMgr (was private
               there) to make domain resolution available framework-wide.
             - Replaced wildcard FunctionsToExport with explicit list for performance and predictability.
+
+            v1.5:
+            - Added Get-ConfirmYesNo -- framework-wide Yes/No prompt helper with an explicit default.
+              Returns the default without prompting when the session is non-interactive, so unattended
+              scheduled runs never block on input.
+            - Added Test-AdContainerPath -- validates that a DistinguishedName exists and is a
+              container-type object (organizationalUnit, container, domainDNS, builtinDomain). Replaces
+              OU-only existence checks that incorrectly rejected the domain root and default containers
+              such as CN=Computers.
 '@
 
         } # End of PSData hashtable

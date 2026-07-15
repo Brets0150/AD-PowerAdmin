@@ -4,6 +4,110 @@
 
 ---
 
+### [AD-PowerAdmin_Audits -- Inactive Account Search Scope When OUs Are Unconfigured]
+
+**Added:**
+- `Resolve-InactiveSearchScope` (private) -- single decision point used by both
+  `Search-InactiveUsers` and `Search-InactiveComputers` to resolve the AD search scope when
+  `SearchOUbase` is unset or does not resolve in the domain.
+
+  In **report-only** mode it prompts the operator: *"Search ALL of Active Directory for inactive
+  users/computers for this report?"* with a default of **Yes**. In **disable** mode it always
+  fails with an error and never offers a fallback.
+
+  **Why:** The inactive user and inactive computer settings ship with placeholder OU values
+  (`OU=Desktops,DC=EXAMPLE,DC=COM` and similar). On a fresh install both checks aborted with a
+  configuration error, so the AD Security Audit -- a purely informational report and typically the
+  first thing an administrator runs -- silently reported nothing for stale enabled accounts. Stale
+  enabled accounts are standing, unwatched credentials and a well-established initial-access and
+  persistence foothold; an audit that omits the check entirely gives the operator no signal that it
+  did not run.
+
+  **Impact:** The AD Security Audit now returns a real inactive-account count on an unconfigured
+  install instead of two configuration errors. The report/disable asymmetry is deliberate: a
+  domain-wide fallback costs a longer LDAP query when reporting, but when disabling it would
+  disable, strip group memberships from, and relocate every inactive account in the domain --
+  including service, break-glass, and infrequently used machine accounts -- on the strength of a
+  typo in a settings file.
+
+**Fixed:**
+- `Search-InactiveUsers` -- removed a domain-wide fallback that applied in **disable** mode.
+
+  **What was broken:** When `SearchOUbase` did not resolve, the function printed
+  `"Warning: ... does not exist or is not set. Scanning entire AD..."` and then scanned the entire
+  domain **regardless of `$ReportOnly`**. Because `Start-DailyInactiveUserAudit` runs with
+  `-ReportOnly $false`, a domain with the shipped default user OU settings would have every
+  inactive user in the domain disabled, stripped of group membership, and moved -- from a
+  configuration value that was never filled in.
+
+  **How it was corrected:** Scope resolution now branches on `$ReportOnly`. Disable mode refuses
+  outright with an error and makes no changes. The domain-wide fallback exists only in report mode
+  and only with the operator's consent.
+
+**Fixed:**
+- `Search-InactiveUsers`, `Search-InactiveComputers` -- `DisabledOULocal` is now validated only in
+  disable mode.
+
+  **What was broken:** Both functions validated `DisabledOULocal` before running, and returned
+  early if it did not resolve. `DisabledOULocal` is only used as the move target for disabled
+  objects, so in report-only mode it is never read. An unconfigured move target aborted a report
+  that would never have moved anything. This was the direct cause of the
+  `"Error: The User OU specified in the DisabledOULocal(...) does not exist in the AD."` message in
+  the AD Security Audit output.
+
+  **Impact:** Reports no longer depend on a setting they do not use. Validation is unchanged in
+  disable mode, where the value is actually consumed.
+
+**Changed:**
+- `Search-MultipleInactiveUsers`, `Search-MultipleInactiveComputers` -- in report-only mode, the
+  location list is evaluated as a whole before delegating.
+
+  If **no** configured location resolves, the setting is treated as unconfigured: the operator is
+  asked once and a single domain-wide search runs. Previously each location was processed
+  independently, which for the shipped two-entry computer configuration (Desktops and Servers)
+  produced two identical errors -- and would have produced two prompts and two redundant
+  domain-wide scans.
+
+  If **at least one** location resolves, a scope is genuinely configured. The valid locations are
+  reported on and each unresolvable one is named in a warning, rather than widening the search over
+  the top of a real configuration and double-counting.
+
+  **Impact:** One prompt per check instead of one per configured OU; no redundant domain-wide scans;
+  a partially broken configuration surfaces the specific broken entry instead of being silently
+  replaced by a domain-wide search.
+
+- `Search-MultipleInactiveUsers` -- removed the `SearchOUbase -eq ''` special case that substituted
+  the literal string `'NA'`. Empty and invalid values now follow the same scope-resolution path.
+
+- Console output in both functions now reports the scope actually searched (`Entire Domain` when the
+  fallback is used) instead of echoing a `SearchOUbase` value that was not used.
+
+### [AD-PowerAdmin_Utils]
+
+**Added:**
+- `Get-ConfirmYesNo` -- framework-wide Yes/No prompt helper with an explicit default; pressing Enter
+  accepts the default and invalid input re-prompts. Returns the default **without prompting** when
+  the session is non-interactive, so unattended scheduled runs never block waiting on input that
+  will never arrive. Introduced because the Yes/No prompt pattern was being open-coded with
+  `Read-Host` at several sites; per the project's code reusability standards it belongs in Utils.
+
+**Added:**
+- `Test-AdContainerPath` -- validates that a DistinguishedName exists in AD and is a container-type
+  object (`organizationalUnit`, `container`, `domainDNS`, or `builtinDomain`).
+
+  **Why:** The existence checks it replaces used `Get-ADOrganizationalUnit`, which only matches OUs.
+  A valid search base is not always an OU -- the domain root (`DC=EXAMPLE,DC=COM`, the shipped
+  default for `$global:InactiveUsersLocations`) and the default `CN=Computers` container are both
+  legitimate values that an OU-only lookup reports as non-existent.
+
+  **Impact:** A correctly configured domain-root search scope is no longer misreported as a
+  misconfiguration and no longer triggers the unconfigured-OU prompt.
+
+- `AD-PowerAdmin_Utils.psd1` -- bumped `ModuleVersion` to `1.5`; added `Get-ConfirmYesNo` and
+  `Test-AdContainerPath` to `FunctionsToExport`.
+
+---
+
 ### [AD-PowerAdmin_Utils -- Missing Manifest Exports Break AD Security Check]
 
 **Fixed:**

@@ -1298,6 +1298,117 @@ Function Get-ResolvedDomain {
     return $env:USERDNSDOMAIN
 }
 
+Function Get-ConfirmYesNo {
+    <#
+    .SYNOPSIS
+        Prompts the user with a Yes/No question and returns the answer as a boolean.
+
+    .DESCRIPTION
+        Displays a Yes/No prompt with an explicit default. Pressing Enter accepts the default.
+        Any input other than y/yes/n/no is rejected and the prompt is repeated.
+
+        When the session is not interactive (for example, a scheduled task running under the sMSA
+        account), no prompt is displayed and the default answer is returned immediately. Callers
+        must therefore only use this function for choices where the default is safe to apply
+        without a human present.
+
+    .PARAMETER Question
+        The question text to display. The "(Default:Y, Y/n)" hint is appended automatically.
+
+    .PARAMETER DefaultYes
+        $true (default) makes Yes the default answer; $false makes No the default answer.
+
+    .EXAMPLE
+        if (Get-ConfirmYesNo -Question "Search all of Active Directory instead?") { ... }
+
+    .EXAMPLE
+        if (Get-ConfirmYesNo -Question "Delete the report file?" -DefaultYes $false) { ... }
+
+    .OUTPUTS
+        [bool] $true for Yes, $false for No.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory=$true,Position=1)]
+        [string]$Question,
+        [Parameter(Mandatory=$false,Position=2)]
+        [bool]$DefaultYes = $true
+    )
+
+    # Non-interactive sessions cannot answer a prompt. Return the default so unattended runs
+    # never block waiting on input that will never arrive.
+    if (-not [Environment]::UserInteractive) {
+        return $DefaultYes
+    }
+
+    [string]$Hint = if ($DefaultYes) { '(Default:Y, Y/n)' } else { '(Default:N, y/N)' }
+
+    while ($true) {
+        [string]$Answer = Read-Host "$Question $Hint"
+        $Answer = $Answer.Trim()
+
+        if ($Answer -eq '') { return $DefaultYes }
+
+        switch -Regex ($Answer) {
+            '^(y|yes)$' { return $true }
+            '^(n|no)$'  { return $false }
+            default     { Write-Host "  Invalid response. Enter 'y' or 'n', or press Enter for the default." -ForegroundColor Yellow }
+        }
+    }
+# End of Get-ConfirmYesNo function
+}
+
+Function Test-AdContainerPath {
+    <#
+    .SYNOPSIS
+        Tests whether a DistinguishedName exists in AD and can hold user/computer objects.
+
+    .DESCRIPTION
+        Returns $true only when the given DistinguishedName resolves to an object that can act as
+        a search base or a move target: an organizationalUnit, a container (such as CN=Computers),
+        the domain root (domainDNS), or the Builtin container.
+
+        This is used instead of a bare Get-ADOrganizationalUnit lookup because a valid, correctly
+        configured search base is not always an OU. The domain root ('DC=EXAMPLE,DC=COM') and the
+        default 'CN=Computers' container are both legitimate values, and an OU-only check reports
+        them as non-existent.
+
+        An empty or whitespace-only path returns $false, which is how an unconfigured setting is
+        distinguished from a configured but incorrect one by the caller.
+
+    .PARAMETER DistinguishedName
+        The DistinguishedName to test. May be empty.
+
+    .EXAMPLE
+        if (Test-AdContainerPath -DistinguishedName 'OU=Desktops,DC=EXAMPLE,DC=COM') { ... }
+
+    .OUTPUTS
+        [bool] $true if the path exists and is a container-type object; otherwise $false.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory=$true,Position=1)]
+        [AllowEmptyString()]
+        [AllowNull()]
+        [string]$DistinguishedName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DistinguishedName)) { return $false }
+
+    try {
+        $AdObject = Get-ADObject -Identity $DistinguishedName -Properties objectClass -ErrorAction Stop
+    } catch {
+        return $false
+    }
+
+    if ($null -eq $AdObject) { return $false }
+
+    return ($AdObject.objectClass -in @('organizationalUnit', 'container', 'domainDNS', 'builtinDomain'))
+# End of Test-AdContainerPath function
+}
+
 Function Assert-ADPAModuleDependency {
     <#
     .SYNOPSIS
