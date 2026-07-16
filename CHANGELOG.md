@@ -4,6 +4,112 @@
 
 ---
 
+### [AD-PowerAdmin_Audits -- Security Best Practices Now Includes High-Privilege Account Audit]
+
+**Added:**
+- `Get-ADAdminAuditData` (private) -- returns the high-privilege AD accounts from `Get-ADAdmins`
+  with each object's `LastLogonDate` and `Enabled` state expanded. Introduced so the account
+  detail-expansion logic can be shared instead of duplicated. Not exported.
+
+**Changed:**
+- `Test-ADSecurityBestPractices` -- now audits high-privilege account membership (Domain Admins,
+  Enterprise Admins, and the other high-value target groups) as its first section, displaying a
+  formatted table of each account with its enabled state and last logon. Previously the aggregate
+  security report omitted the admin account audit entirely, so an operator running the single
+  "AD Security Check" had no visibility into who held privileged group membership -- the most
+  security-relevant question in the domain -- without running a separate menu item. Justification:
+  excessive or stale membership in these groups is the primary target-selection and
+  privilege-escalation surface in Active Directory; surfacing it in the standing report is an
+  operational security requirement.
+
+  The report reuses the existing in-module `Get-ADAdminAuditData` helper and displays the results
+  with `Format-Table`. It deliberately does not call `Get-ADAdminAudit`, because that function
+  prompts interactively for CSV export and returns raw objects -- both wrong inside an unattended
+  aggregate report. The scope of this section is limited to audits that already live in the
+  Audits module; it does not reach into other modules, to avoid creating an inter-module
+  dependency in the aggregate report.
+
+- `Get-ADAdminAudit` -- refactored to obtain its data from the new `Get-ADAdminAuditData` helper
+  rather than inlining the gather-and-expand loop. Behavior is unchanged: it still prompts for CSV
+  export and returns the same object set. This removes the duplicated expansion logic per the
+  project's Code Reusability Standards.
+
+---
+
+### [AD-PowerAdmin_Audits -- Inactive User Report Prints Malformed DistinguishedName]
+
+**Fixed:**
+- `Search-MultipleInactiveUsers` -- the report-only output line printed every DistinguishedName
+  with a literal `.DistinguishedName` appended, e.g.
+  `'CN=Network Administrator,OU=ServiceAccounts,DC=gly,DC=com.DistinguishedName'`.
+
+  The line was written as an unquoted `Write-Host` argument with backtick-escaped quotes
+  (`` `'$_.DistinguishedName`' ``). Because that token starts with an escaped quote rather than
+  `$`, PowerShell parses it as an expandable string instead of an expression. Inside an
+  expandable string only the bare variable `$_` is substituted and the trailing `.Property` is
+  emitted as literal text. `$_` is an ADUser, whose `ToString()` returns the DistinguishedName,
+  so the output looked almost correct and the defect survived review. The neighbouring
+  `$_.SamAccountName` and `$_.LastLogonDate` tokens were unaffected because they begin with `$`
+  and are parsed in argument mode, where property access does work -- which is why only the DN
+  field was wrong.
+
+  Rewritten as a single quoted string using `$(...)` subexpressions for all three fields.
+
+  **Impact:** the emitted DN was not a valid DistinguishedName. Anyone copying it out of the
+  report into a follow-up query or a remediation script would get a "cannot find an object with
+  identity" failure. Report text only; no AD object was modified using the malformed value.
+
+---
+
+### [AD-PowerAdmin_Utils / AD-PowerAdmin_Audits / AD-PowerAdmin_Mgr -- Group Membership Resolution]
+
+**Added:**
+- `Get-AdObjectGroupMembership` (Utils) -- returns the direct group memberships of an AD principal,
+  tolerating objects that `Get-ADPrincipalGroupMembership` cannot process. Keeps the native cmdlet
+  as the fast path, then falls back to reading the `memberOf` attribute directly when it throws.
+  Unresolvable individual groups are skipped rather than discarding the whole set.
+
+  **Why:** `Get-ADPrincipalGroupMembership` asks the DC to resolve every membership SID for a
+  principal. If any single SID cannot be resolved, the entire call throws `The server was unable to
+  process the request due to an internal error.` and the caller receives **nothing** for that
+  account. This is triggered by conditions that are common in real domains: a membership that
+  references a Foreign Security Principal, an orphaned SID left behind by a deleted or external
+  domain, a group reached through a broken or unavailable trust, or a `primaryGroupID` pointing at
+  an unresolvable group. `memberOf` is a plain DN-valued attribute requiring no SID resolution, so
+  it is unaffected by any of these.
+
+  The fallback also reconstructs the primary group from `primaryGroupID` and the account's own
+  domain SID, because `memberOf` does not include it. Beyond restoring parity with the native
+  cmdlet, this closes a real blind spot: an account's primary group can be set to a privileged
+  group to hide that membership from `memberOf`.
+
+  **Impact:** Addresses an audit-integrity weakness and a silent failure of a security control.
+  Accounts that previously errored are now reported and processed correctly. Behavior is unchanged
+  for accounts the native cmdlet already handled -- the fallback only engages on failure.
+
+**Fixed:**
+- `Search-DisabledADAccountWithGroupMembership` (Audits) -- the `Get-ADPrincipalGroupMembership`
+  call ran with the default `-ErrorAction Continue`, so an account whose memberships could not be
+  resolved printed a raw .NET error and was **silently skipped** while the loop continued. The
+  audit exists to find disabled accounts that still hold group memberships, so a skipped account
+  was a false negative: a disabled account retaining privileged group membership would never be
+  reported. Now routed through `Get-AdObjectGroupMembership`.
+
+- `Search-InactiveUsers` and `Search-InactiveComputers` (Audits) -- both resolved
+  group memberships before stripping them during the disable/move workflow. When the call threw,
+  the membership variable was left null, the group-removal loop iterated over nothing, and the
+  account was still disabled, re-described, and moved to the disabled OU. The account was reported
+  as successfully processed while **retaining every group membership** -- the exact access the
+  decommission is meant to revoke. Now routed through `Get-AdObjectGroupMembership`.
+
+- `Unregister-AdUser` (Mgr) -- same failure mode in the interactive user decommission path. A
+  throw meant no groups were removed, yet the account was still disabled, re-described, and moved,
+  and the "Former groups:" description recorded an empty list -- destroying the audit record of
+  what access the account had held. Now routed through `Get-AdObjectGroupMembership`. The call also
+  changed from pipeline input to an explicit `-Identity` argument.
+
+---
+
 ### [AD-PowerAdmin_Installer -- Dependency Installation]
 
 **Added:**

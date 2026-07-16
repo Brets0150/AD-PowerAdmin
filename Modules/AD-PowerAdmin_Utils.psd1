@@ -12,7 +12,7 @@
     RootModule = 'AD-PowerAdmin_Utils.psm1'
 
     # Version number of this module.
-    ModuleVersion = '1.5'
+    ModuleVersion = '1.6'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
@@ -92,6 +92,7 @@
         'Get-ResolvedDomain',
         'Get-ConfirmYesNo',
         'Test-AdContainerPath',
+        'Get-AdObjectGroupMembership',
         'Assert-ADPAModuleDependency'
     )
 
@@ -182,6 +183,16 @@
               container-type object (organizationalUnit, container, domainDNS, builtinDomain). Replaces
               OU-only existence checks that incorrectly rejected the domain root and default containers
               such as CN=Computers.
+
+            v1.6:
+            - Added Get-AdObjectGroupMembership -- framework-wide replacement for direct
+              Get-ADPrincipalGroupMembership calls. The native cmdlet throws "The server was unable to
+              process the request due to an internal error" and returns nothing when any single
+              membership SID cannot be resolved (Foreign Security Principals, orphaned SIDs, broken
+              trusts, unresolvable primaryGroupID). This helper keeps the native cmdlet as the fast
+              path and falls back to reading memberOf directly, reconstructing the primary group from
+              primaryGroupID and the account domain SID. Unresolvable individual groups are skipped
+              rather than discarding the whole set.
 '@
 
         } # End of PSData hashtable

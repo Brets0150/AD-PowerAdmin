@@ -192,6 +192,55 @@ Function Get-ADAdmins {
 # End of Get-ADAdmins function
 }
 
+Function Get-ADAdminAuditData {
+    <#
+    .SYNOPSIS
+    Returns the high-privilege AD accounts from Get-ADAdmins with each object's details expanded.
+
+    .DESCRIPTION
+    Private helper shared by Get-ADAdminAudit (menu/CSV export) and Test-ADSecurityBestPractices
+    (aggregate security report). Get-ADAdmins returns group membership only; this function looks
+    up each account's LastLogonDate and Enabled status so callers can present a complete picture
+    without duplicating the expansion logic. This function performs no output and asks no
+    questions; it only returns data.
+
+    .OUTPUTS
+    An array of PSCustomObjects with Name, SamAccountName, DistinguishedName, ObjectClass,
+    GroupMembership, LastLogonDate, and Enabled.
+
+    .NOTES
+    Private to AD-PowerAdmin_Audits; not listed in FunctionsToExport.
+    #>
+
+    $ADAdmins = Get-ADAdmins
+    # Loop through each AD Admin object and expand its details.
+    return $ADAdmins | ForEach-Object {
+        # unset the $TempAdminData variable
+        Clear-Variable -Name TempAdminData -ErrorAction:SilentlyContinue
+        # Test if $_ is a AD User, Computer, or Group Managed Service Account.
+        if ($_.ObjectClass -eq "user") {
+            # Get the AD User's details
+            $TempAdminData = Get-ADUser -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
+        } elseif ($_.ObjectClass -eq "computer") {
+            # Get the AD Computer's details
+            $TempAdminData = Get-ADComputer -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
+        } elseif ($_.ObjectClass -like '*ManagedServiceAccount') {
+            # Get the AD Group Managed Service Account's details
+            $TempAdminData = Get-ADServiceAccount -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
+        }
+        [PSCustomObject]@{
+            Name              = $_.Name
+            SamAccountName    = $_.SamAccountName
+            DistinguishedName = $_.DistinguishedName
+            ObjectClass       = $_.ObjectClass
+            GroupMembership   = $_.GroupMembership
+            LastLogonDate     = $TempAdminData.LastLogonDate
+            Enabled           = $TempAdminData.Enabled
+        }
+    }
+# End of Get-ADAdminAuditData function
+}
+
 Function Get-ADAdminAudit {
     <#
     .SYNOPSIS
@@ -232,36 +281,8 @@ Function Get-ADAdminAudit {
 
     #>
 
-    [PSCustomObject]$ADAdminsData = @()
-
-    $ADAdmins = Get-ADAdmins
-    # Loop through each AD Admin User
-    $ADAdminsData = $ADAdmins | ForEach-Object {
-        # unset the $TempAdminData variable
-        Clear-Variable -Name TempAdminData -ErrorAction:SilentlyContinue
-        # Test if $_ is a AD User, Computer, or Group Managed Service Account.
-        if ($_.ObjectClass -eq "user") {
-            # Get the AD User's details
-            $TempAdminData = Get-ADUser -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
-        } elseif ($_.ObjectClass -eq "computer") {
-            # Get the AD Computer's details
-            $TempAdminData = Get-ADComputer -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
-        } elseif ($_.ObjectClass -like '*ManagedServiceAccount') {
-            # Get the AD Group Managed Service Account's details
-            $TempAdminData = Get-ADServiceAccount -Identity $_.DistinguishedName -Properties Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled -ErrorAction:SilentlyContinue
-        }
-        [PSCustomObject]@{
-            Name              = $_.Name
-            SamAccountName    = $_.SamAccountName
-            DistinguishedName = $_.DistinguishedName
-            ObjectClass       = $_.ObjectClass
-            GroupMembership   = $_.GroupMembership
-            LastLogonDate     = $TempAdminData.LastLogonDate
-            Enabled           = $TempAdminData.Enabled
-        }
-    }
-    # Sort the results by the Name property and remove duplicates.
-    # $ADAdminsData | Format-List -Property Name, SamAccountName, DistinguishedName, ObjectClass, LastLogonDate, Enabled, GroupMembership | Write-Host
+    # Gather the high-privilege accounts and expand each object's details.
+    [PSCustomObject]$ADAdminsData = Get-ADAdminAuditData
 
     # Ask the user if they want to export the results to a CSV file.
     Export-AdPowerAdminData -Data $ADAdminsData -ReportName "AD-AdminAudit"
@@ -810,7 +831,7 @@ Function Search-InactiveComputers {
             $ComputerOldOU = $CurrentComputerObject.DistinguishedName
 
             # Get all groups the computer is a member of.
-            $ComputersGroupMemberships = Get-ADPrincipalGroupMembership $CurrentComputerObject.DistinguishedName
+            $ComputersGroupMemberships = Get-AdObjectGroupMembership -Identity $CurrentComputerObject.DistinguishedName
 
             # Foreach group, remove the computer from the group.
             $ComputersGroupMemberships | ForEach-Object {
@@ -996,7 +1017,7 @@ Function Search-InactiveUsers {
             # For each inactive user, display the SamName and last login date.
             $InactiveUserObjects | ForEach-Object {
                 # Display the SamName and last login date.
-                Write-Host SamName: $_.SamAccountName `-`- Last Login: $_.LastLogonDate `-`- Distinguished Name: `'$_.DistinguishedName`'
+                Write-Host "SamName: $($_.SamAccountName) -- Last Login: $($_.LastLogonDate) -- Distinguished Name: '$($_.DistinguishedName)'"
             }
             $InactiveUserObjects
             return
@@ -1013,7 +1034,7 @@ Function Search-InactiveUsers {
                 # Get the old OU location of the user.
                 $UserOldOU = $CurrentUserObject.DistinguishedName
                 # Get all groups the user is a member of.
-                $UsersGroupMemberships = Get-ADPrincipalGroupMembership $CurrentUserObject.DistinguishedName
+                $UsersGroupMemberships = Get-AdObjectGroupMembership -Identity $CurrentUserObject.DistinguishedName
                 # Foreach group, remove the user from the group.
                 $UsersGroupMemberships | ForEach-Object {
                     # If $_.DistinguishedName not equal to "Domain Users" and not equal to "Administrators, then remove the user from the group.
@@ -1148,7 +1169,7 @@ function Search-DisabledADAccountWithGroupMembership {
     foreach ($DisabledADAccount in $SearchResults) {
 
         # Get the disabled AD account's groups.
-        [Object]$DisabledADAccountGroupMemberships = Get-ADPrincipalGroupMembership -Identity $DisabledADAccount.DistinguishedName
+        [Object]$DisabledADAccountGroupMemberships = Get-AdObjectGroupMembership -Identity $DisabledADAccount.DistinguishedName
 
         # Create a list variable to store the disabled AD account's groups.
         [Object]$DisabledADAccountGroupsList = New-Object System.Collections.Generic.List[object]
@@ -1469,6 +1490,8 @@ Function Test-ADSecurityBestPractices {
     This audit will look for many small security and best practices recommendations. Most of the tests are simple but could leave an AD server open to attack.
 
     Test performed include the following
+        - High-privilege account membership (Domain Admins, Enterprise Admins, and other
+          high-value target groups) with each account's enabled state and last logon.
         - AD Password Policy review.
         - Audit AD objects that pose a risk of DCSync attack.
         - Find, w/ option to fix, unprivileged accounts with "adminCount=1" attribute set.
@@ -1496,6 +1519,18 @@ Function Test-ADSecurityBestPractices {
     if ($SaveResults -eq 'Y' -or $SaveResults -eq 'y' -or $SaveResults -eq '') {
         Start-Transcript -Path "$global:ReportsPath\ADSecurityBestPracticesTestResults_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt" -Force
     }
+
+    # Audit high-privilege account membership. Reuses the same in-module data helper as
+    # Get-ADAdminAudit but displays a formatted table instead of prompting for CSV export.
+    Write-Host "Auditing high-privilege account membership (Domain Admins, Enterprise Admins, etc.)" -ForegroundColor Yellow
+    Write-Host "Accounts in these high-value target groups are prime targets for an attacker; review each for necessity and confirm disabled/stale accounts are not still privileged." -ForegroundColor Yellow
+    $AdminAuditData = Get-ADAdminAuditData
+    if ($null -eq $AdminAuditData -or @($AdminAuditData).Count -eq 0) {
+        Write-Host "  [OK] No high-privilege accounts were returned." -ForegroundColor Green
+    } else {
+        $AdminAuditData | Format-Table -Property Name, SamAccountName, ObjectClass, GroupMembership, Enabled, LastLogonDate -AutoSize | Out-String -Width 4096 | Write-Host
+    }
+    Write-Host "======================================================================================" -ForegroundColor White
 
     # Test for the AD Password Policy.
     Write-Host "Testing the AD Password Policy" -ForegroundColor White

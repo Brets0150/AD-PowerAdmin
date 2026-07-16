@@ -216,7 +216,7 @@ Function Unregister-AdUser {
         # Capture group membership objects before removal so they can be preserved in the description.
         # Keeping the full ADGroup objects lets us use DistinguishedName for removal (unambiguous)
         # while using Name only for the human-readable description string.
-        [array]$FormerGroupObjects = $AdUserToDisable | Get-ADPrincipalGroupMembership |
+        [array]$FormerGroupObjects = Get-AdObjectGroupMembership -Identity $AdUserToDisable.DistinguishedName |
             Where-Object { $_.Name -ne "Domain Users" }
         [string]$FormerGroupsString = ($FormerGroupObjects | Select-Object -ExpandProperty Name) -join '; '
 

@@ -1409,6 +1409,103 @@ Function Test-AdContainerPath {
 # End of Test-AdContainerPath function
 }
 
+Function Get-AdObjectGroupMembership {
+    <#
+    .SYNOPSIS
+        Gets the direct group memberships of an AD principal, tolerating objects that
+        Get-ADPrincipalGroupMembership cannot process.
+
+    .DESCRIPTION
+        Get-ADPrincipalGroupMembership asks the DC to resolve every membership SID for a principal.
+        When any one of those SIDs cannot be resolved, the whole call throws:
+
+            "The server was unable to process the request due to an internal error."
+
+        and the caller receives nothing for that account. Common triggers are a membership that
+        references a Foreign Security Principal, an orphaned SID left behind by a deleted or
+        external domain, a group reached through a broken or unavailable trust, or a primaryGroupID
+        that points at an unresolvable group.
+
+        Losing the result entirely is the real problem. In an audit it produces a false negative --
+        a disabled account keeps a privileged group membership and is never reported. In a
+        decommission path it means group removal is silently skipped while the account is still
+        disabled and moved, so the account is "decommissioned" with its access intact.
+
+        This function keeps the native cmdlet as the fast path, then falls back to reading the
+        'memberOf' attribute directly when it fails. 'memberOf' is a plain DN-valued attribute, so
+        it requires no SID resolution and is unaffected by unresolvable or foreign SIDs.
+
+        'memberOf' does not include the account's primary group, so the fallback reconstructs it
+        from primaryGroupID and the account's own domain SID. That also closes a real blind spot:
+        an account's primary group can be set to a privileged group to hide the membership from
+        'memberOf', and the reconstruction surfaces it.
+
+        Groups that cannot be resolved individually are skipped rather than discarding the whole
+        set, so a single bad membership never costs the caller the remaining good ones.
+
+    .PARAMETER Identity
+        The DistinguishedName of the user, computer, or group whose memberships are returned.
+
+    .EXAMPLE
+        $Groups = Get-AdObjectGroupMembership -Identity $AdUser.DistinguishedName
+
+    .OUTPUTS
+        [array] ADGroup objects with Name and DistinguishedName. Empty array if none resolve.
+    #>
+    [CmdletBinding()]
+    [OutputType([array])]
+    param(
+        [Parameter(Mandatory=$true,Position=1)]
+        [string]$Identity
+    )
+
+    # Fast path. Returns full ADGroup objects and already includes the primary group.
+    try {
+        return @(Get-ADPrincipalGroupMembership -Identity $Identity -ErrorAction Stop)
+    } catch {
+        Write-Verbose "Get-ADPrincipalGroupMembership failed for '$Identity'; falling back to memberOf. Reason: $_"
+    }
+
+    try {
+        $AdObject = Get-ADObject -Identity $Identity -Properties memberOf, primaryGroupID, objectSid -ErrorAction Stop
+    } catch {
+        Write-Host "[WARN] Could not read group memberships for '$Identity': $_" -ForegroundColor Yellow
+        Write-Host "       This account was skipped and may still hold group memberships." -ForegroundColor Yellow
+        return @()
+    }
+
+    [System.Collections.Generic.List[object]]$ResolvedGroups = New-Object System.Collections.Generic.List[object]
+
+    # Resolve each direct membership DN. Skip individual failures instead of losing the whole set.
+    foreach ($GroupDn in @($AdObject.memberOf)) {
+        try {
+            $ResolvedGroups.Add((Get-ADGroup -Identity $GroupDn -ErrorAction Stop))
+        } catch {
+            Write-Verbose "Skipping unresolvable group '$GroupDn' for '$Identity': $_"
+        }
+    }
+
+    # Rebuild the primary group, which never appears in memberOf. The primary group SID is the
+    # account's own domain SID with primaryGroupID as the RID.
+    if ($null -ne $AdObject.objectSid -and $null -ne $AdObject.primaryGroupID) {
+        try {
+            $DomainSid = $AdObject.objectSid.AccountDomainSid
+            if ($null -ne $DomainSid) {
+                $PrimaryGroupSid = "$($DomainSid.Value)-$($AdObject.primaryGroupID)"
+                $PrimaryGroup = Get-ADGroup -Identity $PrimaryGroupSid -ErrorAction Stop
+                if ($ResolvedGroups.DistinguishedName -notcontains $PrimaryGroup.DistinguishedName) {
+                    $ResolvedGroups.Add($PrimaryGroup)
+                }
+            }
+        } catch {
+            Write-Verbose "Could not resolve the primary group for '$Identity': $_"
+        }
+    }
+
+    return @($ResolvedGroups)
+# End of Get-AdObjectGroupMembership function
+}
+
 Function Assert-ADPAModuleDependency {
     <#
     .SYNOPSIS
